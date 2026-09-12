@@ -368,14 +368,19 @@ def assess_blur(image: np.ndarray, profile: BlurProfile, cfg: Any) -> BlurAssess
     return BlurAssessment(score, anisotropy, BlurVerdict.CLEAN, 1.0, directional, "")
 
 
-def sharpen(image: np.ndarray, profile: BlurProfile) -> np.ndarray:
+def sharpen(image: np.ndarray, cfg: Any) -> np.ndarray:
     """Conservative unsharp mask for mildly-blurred frames.
 
     Deliberately gentle: aggressive sharpening manufactures edges, and a
-    manufactured edge is a false feature match waiting to happen.
+    manufactured edge is a false feature match waiting to happen. Only frames
+    the gate graded CORRECT reach here — a frame whose detail was physically
+    destroyed is excluded, never sharpened back into plausibility.
     """
-    blurred = cv2.GaussianBlur(image, (0, 0), profile.unsharp_radius)
-    return cv2.addWeighted(image, 1.0 + profile.unsharp_amount, blurred, -profile.unsharp_amount, 0)
+    blur_cfg = cfg.get_path("condition.blur")
+    amount = float(blur_cfg["unsharp_amount"])
+    radius = float(blur_cfg["unsharp_radius"])
+    blurred = cv2.GaussianBlur(image, (0, 0), radius)
+    return cv2.addWeighted(image, 1.0 + amount, blurred, -amount, 0)
 
 
 # --------------------------------------------------------------------------

@@ -82,7 +82,12 @@ class GpsFilterReport:
 # Outlier rejection
 # --------------------------------------------------------------------------
 def envelope_outliers(
-    enu: np.ndarray, times: np.ndarray, max_speed: float, max_accel: float
+    enu: np.ndarray,
+    times: np.ndarray,
+    max_speed: float,
+    max_accel: float,
+    min_baseline_s: float = 0.5,
+    position_quantum_m: float = 0.2,
 ) -> tuple[np.ndarray, float]:
     """Flag fixes implying impossible motion for the platform.
 
@@ -91,6 +96,20 @@ def envelope_outliers(
     the last accepted fix rather than the immediate predecessor matters: a
     single wild fix would otherwise reject its innocent successor too, since
     the return trip looks equally impossible.
+
+    **The comparison needs a time baseline.** Telemetry positions are
+    quantized — six decimal places of latitude is about 0.11 m, and per-frame
+    SRT timestamps are quantized to the millisecond. Differentiating quantized
+    positions over a 1/30 s interval amplifies that quantum enormously:
+    acceleration goes as ``dx / dt^2``, so 0.11 m over 33 ms reads as roughly
+    100 m/s^2 — far outside any airframe's envelope, on perfectly good data.
+    A filter that differentiates adjacent high-rate samples therefore rejects
+    almost everything, and the cleaner the GPS the more confidently it does so.
+
+    So velocity and acceleration are evaluated over at least ``min_baseline_s``
+    of flight, and the acceleration limit additionally carries the quantization
+    noise floor implied by that baseline. Samples between baselines are not
+    skipped — they are simply not used as differentiation endpoints.
     """
     n = len(times)
     flags = np.zeros(n, dtype=bool)
@@ -98,34 +117,52 @@ def envelope_outliers(
         return flags, 0.0
 
     finite = np.isfinite(enu).all(axis=1)
+    flags[~finite] = True
+
     last_good: int | None = None
     last_velocity: np.ndarray | None = None
+    last_velocity_at: int | None = None
     max_observed = 0.0
 
     for i in range(n):
         if not finite[i]:
-            flags[i] = True
             continue
         if last_good is None:
             last_good = i
             continue
+
         dt = float(times[i] - times[last_good])
         if dt <= 0:
             flags[i] = True
             continue
+
         delta = enu[i] - enu[last_good]
-        velocity = delta / dt
-        speed = float(np.linalg.norm(velocity))
+        # A gross outlier is obvious at any baseline, so the speed test still
+        # runs on short intervals — but with the quantization floor added, so
+        # ordinary jitter cannot trip it.
+        speed = float(np.linalg.norm(delta)) / dt
+        speed_allowance = max_speed + position_quantum_m / max(dt, 1e-6)
         max_observed = max(max_observed, speed)
-        if speed > max_speed:
+        if speed > speed_allowance:
             flags[i] = True
             continue
-        if last_velocity is not None:
-            accel = float(np.linalg.norm(velocity - last_velocity) / dt)
-            if accel > max_accel:
+
+        if dt < min_baseline_s:
+            # Accepted, but too close in time to differentiate against: leave
+            # `last_good` where it is so the next sample gets a longer baseline.
+            continue
+
+        velocity = delta / dt
+        if last_velocity is not None and last_velocity_at is not None:
+            accel_dt = max(float(times[i] - times[last_velocity_at]), min_baseline_s)
+            accel = float(np.linalg.norm(velocity - last_velocity)) / accel_dt
+            accel_allowance = max_accel + 2.0 * position_quantum_m / (accel_dt * dt)
+            if accel > accel_allowance:
                 flags[i] = True
                 continue
+
         last_velocity = velocity
+        last_velocity_at = i
         last_good = i
 
     return flags, max_observed
@@ -362,7 +399,12 @@ def filter_telemetry(table: TelemetryTable, cfg: Any) -> tuple[TelemetryTable, G
 
     # 1. Motion-envelope rejection.
     envelope_flags, max_speed = envelope_outliers(
-        enu, times, float(gps_cfg["max_speed_mps"]), float(gps_cfg["max_accel_mps2"])
+        enu,
+        times,
+        float(gps_cfg["max_speed_mps"]),
+        float(gps_cfg["max_accel_mps2"]),
+        min_baseline_s=float(gps_cfg["envelope_min_baseline_s"]),
+        position_quantum_m=float(gps_cfg["position_quantum_m"]),
     )
     report.envelope_outliers = int(envelope_flags.sum())
     report.max_speed_observed = max_speed

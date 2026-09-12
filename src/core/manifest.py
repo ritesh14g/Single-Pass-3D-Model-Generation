@@ -91,6 +91,7 @@ class StageRecord:
     warnings: list[str] = field(default_factory=list)
     degradations: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    skip_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -107,6 +108,8 @@ class StageRecord:
         }
         if self.error:
             data["error"] = self.error
+        if self.skip_reason:
+            data["skip_reason"] = self.skip_reason
         return data
 
     @classmethod
@@ -123,6 +126,7 @@ class StageRecord:
             warnings=list(data.get("warnings", [])),
             degradations=list(data.get("degradations", [])),
             error=data.get("error"),
+            skip_reason=data.get("skip_reason"),
         )
 
 
@@ -359,7 +363,10 @@ class RunManifest:
         """Record a stage that was deliberately not run (mode, or a fallback)."""
         record = self.stages.setdefault(name, StageRecord(name))
         record.status = StageStatus.SKIPPED
-        record.warnings.append(reason)
+        # Not a warning: a stage that was never meant to run in this mode has
+        # nothing wrong with it, and counting it as a warning would bury the
+        # real ones.
+        record.skip_reason = reason
         self.save()
 
     def status_table(self) -> list[dict[str, Any]]:

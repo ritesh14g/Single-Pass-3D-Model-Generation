@@ -33,6 +33,11 @@ from src.core.logging import get_logger, log_degradation, log_event
 log = get_logger(__name__)
 
 
+# Below this fraction of a stage's work, a finish-time projection is dominated
+# by start-up cost and says nothing about the stage's real rate.
+MIN_PROJECTION_PROGRESS = 0.05
+
+
 class BudgetExceeded(RuntimeError):
     """Raised when a stage overruns and the degradation ladder is exhausted."""
 
@@ -109,12 +114,16 @@ class StageBudget:
     def should_degrade(self, progress: float | None = None) -> bool:
         """True when this stage is on track to overrun.
 
-        With ``progress`` (0-1) the decision is a projection; without it, it is
-        the simpler "we are past the warn fraction" test.
+        With enough ``progress`` (0-1) to extrapolate from, the decision is a
+        projection. Below that the projection is meaningless — dividing any
+        elapsed time by a progress of nearly zero predicts an overrun on the
+        very first iteration, which would make every stage degrade immediately
+        and permanently — so the fallback is the simpler question of whether
+        the stage has already burned most of its allowance.
         """
         if not self.enabled or self.allotted_s <= 0:
             return False
-        if progress is None:
+        if progress is None or progress < MIN_PROJECTION_PROGRESS:
             over = self.fraction_used >= self.warn_at_fraction
         else:
             over = self.projected_total_s(progress) > self.allotted_s

@@ -185,6 +185,14 @@ condition:
     # Platform envelope for outlier rejection (§5.6).
     max_speed_mps: 25.0
     max_accel_mps2: 8.0
+    # Minimum time baseline for differentiating positions. Telemetry positions
+    # are quantized (6 decimal places of latitude is ~0.11 m), and acceleration
+    # goes as dx/dt^2, so differentiating adjacent 30 Hz samples turns that
+    # quantum into ~100 m/s^2 of phantom acceleration on perfectly good data.
+    envelope_min_baseline_s: 0.5
+    # Assumed position quantization/noise floor, added to the envelope limits
+    # so ordinary jitter is never mistaken for impossible motion.
+    position_quantum_m: 0.2
     median_window: 5
     kalman:
       process_noise: 0.5

@@ -69,6 +69,9 @@ class SelectedFrame:
     weight: float                 # fusion weight, already reduced for mild blur
     is_keyframe: bool = False
     anisotropy: float = 1.0
+    # Normalised affine from the previously kept frame to this one. Downstream
+    # stages use it to work over the region the two frames genuinely share.
+    transform_prev: tuple[float, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +83,7 @@ class SelectedFrame:
             "weight": round(self.weight, 3),
             "is_keyframe": self.is_keyframe,
             "anisotropy": round(self.anisotropy, 3),
+            "transform_prev": list(self.transform_prev) if self.transform_prev else None,
         }
 
 
@@ -163,6 +167,11 @@ class OverlapEstimate:
     support: int             # correspondences agreeing with the fitted transform
     correlation: float       # NCC of the frames after alignment, -1 to 1
     reliable: bool
+    # 2x3 affine taking anchor-frame pixels to candidate-frame pixels, stored
+    # with translation normalised by frame width/height so it can be re-applied
+    # at any resolution. Downstream stages need this to compare the two frames
+    # over the region they actually share.
+    transform: tuple[float, ...] | None = None
 
     def __bool__(self) -> bool:
         return self.reliable
@@ -252,7 +261,7 @@ def estimate_overlap(
     correlation = _alignment_correlation(anchor_gray, candidate_gray, matrix)
 
     if correlation >= MIN_ALIGNMENT_NCC and support >= MIN_FIT_POINTS:
-        return OverlapEstimate(overlap, support, correlation, True)
+        return OverlapEstimate(overlap, support, correlation, True, normalize_transform(matrix, w, h))
 
     return _phase_correlation_fallback(anchor_gray, candidate_gray, support, correlation)
 
@@ -289,7 +298,29 @@ def _phase_correlation_fallback(
     overlap = _overlap_from_transform(matrix, w, h)
     # Phase correlation has no inlier count; the response peak is its own
     # confidence measure, scaled here to the same "supporting evidence" role.
-    return OverlapEstimate(overlap, max(feature_support, int(response * 100)), correlation, True)
+    return OverlapEstimate(
+        overlap, max(feature_support, int(response * 100)), correlation, True,
+        normalize_transform(matrix, w, h),
+    )
+
+
+def normalize_transform(matrix: np.ndarray, w: int, h: int) -> tuple[float, ...]:
+    """Flatten a 2x3 affine with translation expressed in frame fractions.
+
+    The transform is fitted on downscaled frames but applied later at whatever
+    resolution the conditioning stage works at. Both are the same frame scaled
+    uniformly, so the linear part is resolution-independent and only the
+    translation needs normalising.
+    """
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    return (float(a), float(b), float(tx) / w, float(c), float(d), float(ty) / h)
+
+
+def denormalize_transform(values: Sequence[float], w: int, h: int) -> np.ndarray:
+    """Inverse of :func:`normalize_transform` at a target resolution."""
+    a, b, tx, c, d, ty = values
+    return np.array([[a, b, tx * w], [c, d, ty * h]], dtype=np.float64)
 
 
 def _overlap_from_transform(matrix: np.ndarray, w: int, h: int) -> float:
@@ -450,11 +481,14 @@ def select_frames(
         stride = max(min_stride, min(max_stride, probe_index - anchor.index))
         fallback_stride = stride
 
-        chosen, chosen_assessment, chosen_gray, chosen_overlap, decoded_here = _choose_frame(
+        (
+            chosen, chosen_assessment, chosen_gray, chosen_overlap, decoded_here, chosen_transform
+        ) = _choose_frame(
             reader=reader,
             first=probe_frame,
             first_gray=probe_gray,
             first_overlap=probe.overlap,
+            first_transform=probe.transform,
             anchor_gray=anchor_gray,
             cfg=cfg,
             profile=profile,
@@ -486,6 +520,7 @@ def select_frames(
                 weight=chosen_assessment.weight,
                 is_keyframe=bool(keyframes and chosen.index in keyframes),
                 anisotropy=chosen_assessment.anisotropy,
+                transform_prev=chosen_transform,
             )
         )
         anchor, anchor_gray = chosen, chosen_gray
@@ -618,6 +653,7 @@ def _probe_for_overlap(
         overlap=chosen.estimate.overlap,
         reliable=chosen.estimate.reliable,
         decoded=decoded,
+        transform=chosen.estimate.transform,
     )
 
 
@@ -641,6 +677,7 @@ class ProbeResult:
     overlap: float
     reliable: bool
     decoded: int
+    transform: tuple[float, ...] | None = None
 
 
 def _choose_frame(
@@ -648,6 +685,7 @@ def _choose_frame(
     first: Frame,
     first_gray: np.ndarray,
     first_overlap: float,
+    first_transform: tuple[float, ...] | None,
     anchor_gray: np.ndarray,
     cfg: Any,
     profile: BlurProfile,
@@ -657,7 +695,9 @@ def _choose_frame(
     flow_cfg: Any,
     tracker: RejectionTracker,
     assessments: list[BlurAssessment],
-) -> tuple[Frame | None, BlurAssessment | None, np.ndarray | None, float, int]:
+) -> tuple[
+    Frame | None, BlurAssessment | None, np.ndarray | None, float, int, tuple[float, ...] | None
+]:
     """Pick the frame to keep from a short forward window.
 
     The probe frame is preferred when it is clean. Otherwise the window is
@@ -672,11 +712,12 @@ def _choose_frame(
 
     first_is_keyframe = bool(keyframes and first.index in keyframes)
     if assessment.verdict is BlurVerdict.CLEAN and (first_is_keyframe or keyframes is None):
-        return first, assessment, first_gray, first_overlap, decoded
+        return first, assessment, first_gray, first_overlap, decoded, first_transform
 
-    best: tuple[Frame, BlurAssessment, np.ndarray, float, float] | None = None
+    best: tuple[Frame, BlurAssessment, np.ndarray, float, float, tuple[float, ...] | None] | None = None
     if not assessment.rejected:
-        best = (first, assessment, first_gray, first_overlap, _candidate_score(assessment, first_is_keyframe))
+        best = (first, assessment, first_gray, first_overlap,
+                _candidate_score(assessment, first_is_keyframe), first_transform)
 
     for offset in range(1, search_radius + 1):
         index = first.index + offset
@@ -697,16 +738,17 @@ def _choose_frame(
         # own estimate cannot be verified the probe's measured overlap is a
         # better stand-in than an unverified number.
         overlap = estimate.overlap if estimate.reliable else first_overlap
+        transform = estimate.transform if estimate.reliable else first_transform
         is_keyframe = bool(keyframes and index in keyframes)
         score = _candidate_score(candidate_assessment, is_keyframe)
         if best is None or score > best[4]:
-            best = (frame, candidate_assessment, gray, overlap, score)
+            best = (frame, candidate_assessment, gray, overlap, score, transform)
         if candidate_assessment.verdict is BlurVerdict.CLEAN and is_keyframe:
             break  # Cannot do better than a clean I-frame.
 
     if best is None:
-        return None, None, None, 0.0, decoded
-    return best[0], best[1], best[2], best[3], decoded
+        return None, None, None, 0.0, decoded, None
+    return best[0], best[1], best[2], best[3], decoded, best[5]
 
 
 def _candidate_score(assessment: BlurAssessment, is_keyframe: bool) -> float:
@@ -752,6 +794,11 @@ def load_selection(path: Path | str) -> FrameSelection:
                 weight=float(row["weight"]),
                 is_keyframe=bool(row.get("is_keyframe", False)),
                 anisotropy=float(row.get("anisotropy", 1.0)),
+                transform_prev=(
+                    tuple(float(v) for v in row["transform_prev"])
+                    if row.get("transform_prev") is not None
+                    else None
+                ),
             )
         )
     return selection

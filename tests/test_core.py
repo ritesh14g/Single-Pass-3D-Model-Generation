@@ -69,11 +69,22 @@ class TestBudget:
     def test_projection_predicts_overrun_before_the_deadline(self):
         budget = Budget(total_s=100, stages={"condition": 1.0}, ladder=["reduce_resolution"])
         with budget.stage("condition") as stage:
-            time.sleep(0.05)
-            # 5% of the allowance spent on 1% of the work projects to a 5x overrun,
-            # and must be caught while 95% of the budget is still unspent.
-            assert stage.should_degrade(progress=0.01) is True
+            time.sleep(0.3)
+            # 30% of the allowance spent on 10% of the work projects to a 3x
+            # overrun, and must be caught while most of the budget is unspent.
+            assert stage.should_degrade(progress=0.10) is True
             assert stage.should_degrade(progress=0.99) is False
+
+    def test_no_spurious_degradation_at_the_start_of_a_stage(self):
+        # Dividing elapsed time by a progress of nearly zero predicts an
+        # infinite runtime, which would degrade every stage on its first
+        # iteration and never recover.
+        budget = Budget(total_s=100, stages={"condition": 10.0}, ladder=["reduce_resolution"])
+        with budget.stage("condition") as stage:
+            time.sleep(0.05)
+            assert stage.should_degrade(progress=0.0) is False
+            assert stage.should_degrade(progress=1 / 500) is False
+            assert budget.degradations == []
 
     def test_ladder_is_consumed_in_order_then_exhausts(self):
         budget = Budget(total_s=100, stages={"fusion": 1.0}, ladder=["a", "b"])

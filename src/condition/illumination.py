@@ -45,6 +45,12 @@ _FIT_QUANTILES = np.linspace(0.05, 0.95, 19)
 # Working width for the exposure estimate; this is a global statistic and does
 # not need full resolution.
 _FIT_WIDTH = 320
+# Minimum overlapping pixels for a paired fit to mean anything.
+_MIN_PAIRED_PIXELS = 500
+# Trimmed least squares: discard the worst-fitting tail and refit, so moving
+# objects and parallax cannot tilt the line.
+_TRIM_ITERATIONS = 2
+_TRIM_PERCENTILE = 90.0
 
 
 @dataclass
@@ -97,14 +103,36 @@ class IlluminationResult:
 # --------------------------------------------------------------------------
 # (a) Exposure drift
 # --------------------------------------------------------------------------
-def fit_gain_bias(reference: np.ndarray, target: np.ndarray) -> ExposureTransform:
-    """Fit ``reference ~= gain * target + bias`` from matched luminance quantiles.
+def fit_gain_bias(
+    reference: np.ndarray, target: np.ndarray, transform: Sequence[float] | None = None
+) -> ExposureTransform:
+    """Fit ``reference ~= gain * target + bias`` between two overlapping frames.
 
-    Quantile matching stands in for pixel correspondence: with 70-80% overlap
-    between consecutive frames, the luminance *distributions* correspond even
-    though the pixels have moved, and a least-squares line through matched
-    quantiles recovers the exposure step without any registration.
+    With a ``transform`` — the normalised affine the frame selector already
+    measured between these two frames — the fit uses **real pixel
+    correspondence**: the reference is warped into the target's frame and the
+    two are compared only where they genuinely overlap. That is what spec
+    §5.4(a) asks for, and the distinction is not academic. At 75% overlap a
+    quarter of each frame is content the other never saw, so comparing whole-
+    frame luminance *distributions* charges the exposure estimate for the scene
+    changing: panning from a dark field onto a bright roof reads as the camera
+    brightening, and the chained gain then drifts across the flight correcting
+    an exposure change that never happened.
+
+    Without a transform the function falls back to matching luminance
+    quantiles, which needs no registration and is right in spirit, but carries
+    exactly the content-change bias described above.
+
+    The paired fit is trimmed rather than plain least squares: moving objects,
+    parallax on tall structures, and specular highlights all violate
+    brightness constancy locally, and a handful of such pixels would otherwise
+    tilt the line.
     """
+    if transform is not None:
+        fitted = _fit_paired(reference, target, transform)
+        if fitted is not None:
+            return fitted
+
     ref_luma = _luma_small(reference)
     tgt_luma = _luma_small(target)
     ref_q = np.quantile(ref_luma, _FIT_QUANTILES)
@@ -118,6 +146,53 @@ def fit_gain_bias(reference: np.ndarray, target: np.ndarray) -> ExposureTransfor
     slope, intercept = np.polyfit(tgt_q, ref_q, 1)
     predicted = slope * tgt_q + intercept
     residual = float(np.sqrt(np.mean((ref_q - predicted) ** 2)))
+    quality = float(np.clip(1.0 - residual / max(spread, 1e-6), 0.0, 1.0))
+    return ExposureTransform(gain=float(slope), bias=float(intercept), fit_quality=quality)
+
+
+def _fit_paired(
+    reference: np.ndarray, target: np.ndarray, transform: Sequence[float]
+) -> ExposureTransform | None:
+    """Trimmed least-squares gain/bias over the region two frames share."""
+    from src.ingest.frame_selector import denormalize_transform
+
+    ref_luma = _luma_small(reference)
+    tgt_luma = _luma_small(target)
+    if ref_luma.shape != tgt_luma.shape:
+        return None
+
+    h, w = tgt_luma.shape[:2]
+    matrix = denormalize_transform(transform, w, h)
+    warped = cv2.warpAffine(ref_luma, matrix, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+    coverage = cv2.warpAffine(
+        np.ones((h, w), dtype=np.float32), matrix, (w, h), flags=cv2.INTER_NEAREST, borderValue=0
+    )
+    valid = coverage > 0.99
+    if int(valid.sum()) < _MIN_PAIRED_PIXELS:
+        return None
+
+    x = tgt_luma[valid].astype(np.float64)
+    y = warped[valid].astype(np.float64)
+    # Clipped pixels carry no radiometric information: a blown highlight stays
+    # blown whatever the gain, so including them biases the slope toward 1.
+    unclipped = (x > 2) & (x < 253) & (y > 2) & (y < 253)
+    if int(unclipped.sum()) < _MIN_PAIRED_PIXELS:
+        return None
+    x, y = x[unclipped], y[unclipped]
+
+    spread = float(x.max() - x.min())
+    if spread < 5.0:
+        return ExposureTransform(1.0, 0.0, fit_quality=0.0)
+
+    slope, intercept = np.polyfit(x, y, 1)
+    for _ in range(_TRIM_ITERATIONS):
+        residual = np.abs(slope * x + intercept - y)
+        keep = residual <= max(float(np.percentile(residual, _TRIM_PERCENTILE)), 1.0)
+        if int(keep.sum()) < _MIN_PAIRED_PIXELS:
+            break
+        slope, intercept = np.polyfit(x[keep], y[keep], 1)
+
+    residual = float(np.sqrt(np.mean((slope * x + intercept - y) ** 2)))
     quality = float(np.clip(1.0 - residual / max(spread, 1e-6), 0.0, 1.0))
     return ExposureTransform(gain=float(slope), bias=float(intercept), fit_quality=quality)
 
@@ -147,8 +222,15 @@ class ExposureChain:
         self._previous_key: int | None = None
         self._cumulative = ExposureTransform(1.0, 0.0)
 
-    def push(self, key: int, image: np.ndarray) -> ExposureTransform:
-        """Add the next frame in sequence and return its transform to reference."""
+    def push(
+        self, key: int, image: np.ndarray, geometry: Sequence[float] | None = None
+    ) -> ExposureTransform:
+        """Add the next frame in sequence and return its transform to reference.
+
+        ``geometry`` is the normalised affine from the previous kept frame to
+        this one, as measured during frame selection. When present the fit runs
+        over the frames' shared region rather than their whole extents.
+        """
         if not self.enabled:
             transform = ExposureTransform(1.0, 0.0)
             self.transforms[key] = transform
@@ -157,7 +239,7 @@ class ExposureChain:
         if self._previous is None:
             self._cumulative = ExposureTransform(1.0, 0.0)
         else:
-            step = fit_gain_bias(self._previous, image)
+            step = fit_gain_bias(self._previous, image, geometry)
             if step.fit_quality < 0.5 or not (self.min_gain <= step.gain <= self.max_gain):
                 self.rejected_links += 1
                 log_event(
