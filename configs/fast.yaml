@@ -1,0 +1,74 @@
+# Demo-speed preset. Deep-merges over default.yaml.
+#
+# Use this for live demos (spec §9): "demo with fast, report numbers from
+# accurate, and state which is which." Every concession here is a deliberate
+# accuracy-for-time trade, and each one is listed in the QA report so a fast-run
+# number is never mistaken for a benchmark number.
+
+preset: fast
+
+ingest:
+  video:
+    # Track A and the conditioning pass work at 1080p rather than native 4K.
+    max_width: 1920
+  frame_selection:
+    # Wider spacing: fewer frames, faster everything downstream, thinner Zone 1.
+    target_overlap: 0.68
+    max_frames: 450
+
+condition:
+  illumination:
+    low_light:
+      # Non-local-means denoising is the most expensive per-frame operation in
+      # the stage; the cheaper bilateral path is enough for a demo.
+      denoise_h: 3
+  dynamic:
+    # Nano segmentation model, already the default, at a looser threshold so it
+    # spends less time on marginal detections.
+    conf_threshold: 0.35
+
+recon:
+  track_a:
+    feature_quality: medium
+    pc_quality: low
+    mesh_octree_depth: 9
+    mesh_size: 120000
+    min_num_features: 6000
+    matcher_neighbors: 6
+  track_b:
+    chunk_frames: 96
+    chunk_overlap: 12
+    loop_closure:
+      # Revisit detection costs a global descriptor pass over every frame.
+      enabled: false
+  refine_ba:
+    max_iterations: 40
+    time_budget_s: 90
+
+fusion:
+  zones:
+    voxel_gsd_multiple: 3.0
+  poisson:
+    depth: 9
+  plane_completion:
+    enabled: false
+
+export:
+  # FBX and full-resolution rasters are the slowest writers; a demo does not
+  # need them and the accurate preset still emits all six formats.
+  formats: [obj, ply, las, geotiff, glb]
+  texture_size: 4096
+  raster:
+    dsm_resolution_m: 0.25
+    ortho_resolution_m: 0.15
+
+budget:
+  total_s: 600
+  stages:
+    ingest: 45
+    condition: 75
+    track_b: 90
+    refine_ba: 90
+    track_a_mvs: 150
+    fusion: 90
+    export: 45

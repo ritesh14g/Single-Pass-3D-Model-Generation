@@ -1,0 +1,381 @@
+# SIH26158 / PS-17 — master configuration.
+# Rule 3 of the build spec: no hard-coded parameters anywhere in code.
+# Every number the pipeline depends on lives here. `fast.yaml` and
+# `accurate.yaml` are thin overlays that deep-merge on top of this file.
+
+preset: default
+
+run:
+  # Pipeline mode: "A" (classical only), "B" (feed-forward only),
+  # "hybrid" (both, confidence-gated), "auto" (hybrid with automatic
+  # fallback to A on any Track B failure). See spec §7.4.
+  mode: auto
+  # Root for per-run working directories; each run gets <workdir>/<run_id>/.
+  workdir: data/interim
+  outdir: data/outputs
+  # Resume from an existing run directory instead of starting over (§2.4 rule 1).
+  resume: true
+  seed: 1337
+
+device:
+  # "cuda", "cpu", or "auto" (cuda when available, else cpu with a loud log line).
+  prefer: auto
+  # Total GPU memory the pipeline may assume, in GB. Chunk sizing reads this.
+  gpu_memory_gb: 24
+  # Leave this much GPU memory free for concurrent stages (§7.2).
+  gpu_headroom_gb: 4
+
+# ---------------------------------------------------------------------------
+# Stage 1 — Ingest (§4)
+# ---------------------------------------------------------------------------
+ingest:
+  video:
+    # Try hardware decode first; fall back to software with a logged downgrade.
+    hardware_decode: true
+    # Frames are scored at this width before any expensive operation.
+    scoring_width: 640
+    # Working resolution the rest of the pipeline sees. null = native.
+    max_width: null
+  telemetry:
+    # Search order for telemetry; first source that yields valid rows wins,
+    # later sources fill missing columns only. See spec §4.2.
+    sources: [srt, csv, exif]
+    # Accept a fix only if the reported horizontal accuracy is below this (m).
+    # null disables the check (most DJI SRT variants do not report it).
+    max_hdop: null
+    csv_column_map:
+      # Canonical name -> list of accepted header spellings (case-insensitive,
+      # matched after stripping non-alphanumerics). Extend, never hard-code.
+      t: [time, timestamp, datetime, time_s, elapsed]
+      lat: [lat, latitude, gpslatitude, osd_lat]
+      lon: [lon, long, longitude, gpslongitude, osd_lon]
+      alt_gps: [alt, altitude, gpsaltitude, osd_alt, height]
+      alt_baro: [baroalt, barometricaltitude, relativealtitude, osd_relalt]
+      roll: [roll, gimbalroll, osd_roll]
+      pitch: [pitch, gimbalpitch, osd_pitch]
+      yaw: [yaw, heading, gimbalyaw, osd_yaw]
+      focal_mm: [focallength, focal, focal_mm]
+  frame_selection:
+    # Adaptive overlap targeting (§4.3) — not fixed-interval sampling.
+    target_overlap: 0.75
+    overlap_tolerance: 0.05
+    # Guard rails so a bad flow estimate cannot explode or starve the frame set.
+    min_stride_frames: 2
+    max_stride_frames: 90
+    min_frames: 20
+    max_frames: 1200
+    # Sparse optical flow used for the overlap estimate.
+    # pyramid_levels must be deep enough that the expected displacement at the
+    # coarsest level fits inside win_size/2: at 25% of a 640 px frame that is
+    # 160 px, which needs 5 levels (160/2^5 = 5 px) to stay inside a 21 px
+    # window. Too few levels does not degrade gracefully — LK reports success
+    # on a wrong local minimum instead.
+    flow:
+      max_corners: 400
+      quality_level: 0.01
+      min_distance: 8
+      win_size: 21
+      pyramid_levels: 5
+    # Bias selection toward I-frames when the container exposes frame types (§5.3).
+    prefer_keyframes: true
+    keyframe_search_radius: 3
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Conditioning (§5)
+# ---------------------------------------------------------------------------
+condition:
+  enabled: true
+  blur:
+    # Adaptive threshold, derived from the video's own variance-of-Laplacian
+    # distribution. A frame is rejected when it is a robust outlier below the
+    # typical sharpness of THIS video: below median - robust_sigma * a
+    # MAD-derived sigma, or below the absolute floor.
+    #
+    # Note this is a deliberate refinement of spec §5.2, which specifies a
+    # fixed percentile as the threshold. A fixed percentile rejects that
+    # percentage of frames from every video, including one that is uniformly
+    # sharp — spending coverage to remove frames that were never damaged. The
+    # outlier formulation rejects what is genuinely anomalous instead, so a
+    # clean video loses nothing and a video with a blurred tail loses the tail.
+    robust_sigma: 3.0
+    absolute_floor: 40.0
+    # Coverage guard: never reject more than this fraction of frames, however
+    # bad the footage. Past this point the problem is the whole video, and
+    # reconstructing it badly with a warning beats reconstructing nothing.
+    max_reject_fraction: 0.35
+    # Above this percentile a frame is "clean"; between the reject threshold
+    # and clean it is sharpened conservatively and down-weighted in fusion.
+    clean_percentile: 50
+    unsharp_amount: 0.6
+    unsharp_radius: 1.5
+    degraded_weight: 0.6
+    # Directional (drone-jerk) blur is rejected harder than uniform softness.
+    # Anisotropy above the limit is a positive detection of motion smear, not
+    # merely a hint: a genuinely sharp frame has no preferred direction in its
+    # spectrum. So a frame carrying that signature must be at least as sharp as
+    # this percentile of the video to survive, rather than merely clearing the
+    # outlier test. This matters because blurred and sharp frames can overlap
+    # in sharpness score while being perfectly separated by anisotropy.
+    directional:
+      enabled: true
+      fft_anisotropy_reject: 2.2
+      strict_percentile: 50
+    # Consecutive rejections beyond this raise a coverage warning for the segment.
+    max_consecutive_rejects: 3
+  artifacts:
+    enabled: true
+    block_sizes: [8, 16]
+    # Blockiness score above this triggers correction + keypoint masking.
+    blockiness_threshold: 1.35
+    bilateral:
+      diameter: 5
+      sigma_color: 35
+      sigma_space: 5
+    # Reject keypoints within this many px of a detected block boundary.
+    keypoint_exclusion_px: 2
+  illumination:
+    enabled: true
+    exposure_chain:
+      enabled: true
+      # Gain/bias fitted on the overlapping region of consecutive frames.
+      sample_stride: 4
+      max_gain: 2.5
+      min_gain: 0.4
+    clahe:
+      enabled: true
+      clip_limit: 2.0
+      tile_grid: [8, 8]
+    shadow:
+      enabled: true
+      # Shadow = low luminance AND low saturation AND elevated blue ratio.
+      luminance_percentile: 25
+      max_saturation: 0.45
+      min_blue_ratio: 1.03
+      dilate_px: 5
+      # Photo-consistency weight applied to shadow pixels during MVS.
+      mvs_weight: 0.35
+    low_light:
+      # Mean luminance below this (0-1) marks the frame low-SNR.
+      mean_luma_threshold: 0.22
+      gamma: 0.65
+      denoise_h: 7
+      fusion_weight: 0.5
+  dynamic:
+    enabled: true
+    # Primary: semantic segmentation. Falls back to geometric-only if the
+    # model is unavailable (logged downgrade, never a crash).
+    model: yolov8n-seg.pt
+    classes: [person, bicycle, car, motorcycle, bus, truck, boat, bird, cat, dog, horse, sheep, cow]
+    conf_threshold: 0.25
+    dilate_px: 10
+    geometric:
+      enabled: true
+      # Cross-view depth disagreement (relative) that marks a pixel dynamic.
+      depth_disagreement: 0.12
+      min_neighbour_views: 2
+      # Only trust the geometric test in textured regions.
+      min_texture_variance: 25.0
+    hole_policy:
+      # Masked terrain/road surrounded by confident geometry is filled at the
+      # ground plane; everything else is flagged, not guessed (§5.5).
+      fill_ground_plane: true
+      max_fill_area_m2: 40.0
+  gps:
+    enabled: true
+    # Platform envelope for outlier rejection (§5.6).
+    max_speed_mps: 25.0
+    max_accel_mps2: 8.0
+    median_window: 5
+    kalman:
+      process_noise: 0.5
+      measurement_noise_horizontal: 2.5
+      measurement_noise_vertical: 5.0
+    altitude:
+      # Prefer barometric relative altitude; complementary-filter it against GPS.
+      prefer_baro: true
+      complementary_alpha: 0.97
+    rtk:
+      # When RTK/PPK fixes are detected, tighten GPS weight by this factor.
+      weight_boost: 10.0
+    huber_delta_m: 2.0
+
+# ---------------------------------------------------------------------------
+# Stage 3/4 — Reconstruction tracks (§7)
+# ---------------------------------------------------------------------------
+recon:
+  track_a:
+    # OpenDroneMap is invoked as a subprocess (docker image or native binary).
+    docker_image: opendronemap/odm:gpu
+    runner: auto            # auto | docker | native
+    native_binary: null
+    feature_quality: high
+    pc_quality: medium
+    mesh_octree_depth: 11
+    mesh_size: 300000
+    min_num_features: 10000
+    matcher_neighbors: 8
+    use_gpu: true
+    extra_args: []
+  track_b:
+    model: vggt-omega       # vggt-omega | vggt | depth-anything
+    weights: facebook/VGGT-Omega-1B-512
+    fallback_model: depth-anything
+    input_width: 512
+    # Sized from the official peak-memory table in spec §7.2. Conservative
+    # default; tune upward only after profiling the real instance.
+    chunk_frames: 128
+    chunk_overlap: 16
+    amp_dtype: bf16
+    alignment:
+      # Sim(3) on shared frames, then colored ICP refinement.
+      ransac_iterations: 2000
+      inlier_threshold_m: 0.5
+      icp_max_correspondence_m: 0.3
+      icp_iterations: 50
+    loop_closure:
+      enabled: true
+      descriptor: netvlad
+      min_revisit_gap_frames: 120
+      similarity_threshold: 0.75
+    keep_confidence_maps: true
+  refine_ba:
+    enabled: true
+    max_iterations: 100
+    time_budget_s: 180
+    gps_prior_weight: 1.0
+    huber_delta_px: 2.0
+    # Spec §7.3 step 6: if post-BA reprojection error regresses, keep pre-BA.
+    regression_gate: true
+    regression_tolerance: 1.0
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Occlusion / fusion engine (§6) — core innovation
+# ---------------------------------------------------------------------------
+fusion:
+  zones:
+    # Zone 1: well observed. Zone 2: thinly observed. Zone 3: never observed.
+    zone1_min_views: 4
+    zone1_min_triangulation_deg: 5.0
+    zone2_min_views: 1
+    # Voxel size is derived as this multiple of the ground sample distance.
+    voxel_gsd_multiple: 2.0
+    voxel_size_min_m: 0.02
+    voxel_size_max_m: 1.0
+  mono_depth:
+    model: depth-anything-v2-small
+    # Scale/shift solved on the Zone1 boundary band only, RANSAC-robust.
+    anchor:
+      boundary_band_px: 24
+      ransac_iterations: 500
+      ransac_inlier_threshold_m: 0.25
+      min_inlier_ratio: 0.35
+      # Fit residual above this -> refuse to fuse, reclassify as Zone 3.
+      max_residual_m: 0.6
+    blend_band_voxels: 3
+  tsdf:
+    truncation_voxels: 4.0
+    # Zone 2 integration weight is always strictly below Zone 1's.
+    zone1_weight: 1.0
+    zone2_weight_max: 0.45
+    min_weight_to_surface: 0.15
+  poisson:
+    depth: 10
+    # Trim faces whose supporting sample density is below this quantile —
+    # this is what stops Poisson silently hallucinating closed surfaces (§6.4).
+    density_trim_quantile: 0.08
+  gaps:
+    min_area_m2: 1.0
+    # Generate a clearly-marked inferred surface for Zone 3, or leave the hole.
+    render_inferred: true
+  plane_completion:
+    # Stretch goal (§6.5) — off until the core pipeline is green.
+    enabled: false
+    ransac_distance_m: 0.05
+    min_plane_points: 500
+
+# ---------------------------------------------------------------------------
+# Stage 5 — Geo-anchoring (§8.1)
+# ---------------------------------------------------------------------------
+geo:
+  crs:
+    # "auto" selects the UTM zone from the flight's mean longitude.
+    target: auto
+    geographic: EPSG:4326
+  vertical:
+    # GPS altitude is ellipsoidal; most deliverables want orthometric.
+    geoid_model: EGM96
+    output_datum: orthometric
+  similarity:
+    ransac_iterations: 2000
+    inlier_threshold_m: 3.0
+    min_cameras: 8
+  gcp:
+    # Optional. The system must work with zero GCPs (§8.1).
+    file: null
+    weight: 20.0
+
+# ---------------------------------------------------------------------------
+# Stage 5 — Export (§8.2)
+# ---------------------------------------------------------------------------
+export:
+  formats: [obj, ply, las, geotiff, glb, fbx]
+  # Confidence must survive export in every format that can carry it.
+  carry_confidence: true
+  texture_size: 8192
+  raster:
+    dsm_resolution_m: 0.1
+    ortho_resolution_m: 0.05
+    nodata: -9999.0
+  las:
+    point_format: 3
+    scale: [0.001, 0.001, 0.001]
+  glb:
+    draco_compression: false
+  fbx:
+    # FBX is the most fragile export; OBJ -> headless Blender is the fallback.
+    converter: auto        # auto | blender | fbxsdk
+    blender_binary: null
+  tiling:
+    enabled: true
+    tile_size_m: 100.0
+    max_points_per_tile: 5000000
+
+# ---------------------------------------------------------------------------
+# Stage 6 — QA (§8.5)
+# ---------------------------------------------------------------------------
+qa:
+  metrics:
+    cloud_to_cloud_max_dist_m: 5.0
+    percentiles: [50, 95]
+  degrade:
+    severities: [light, moderate, severe]
+    types: [motion_blur, compression, low_light, shadow, gps_noise, dynamic_objects]
+  report:
+    formats: [json, html]
+
+# ---------------------------------------------------------------------------
+# §9 — Performance budget. Enforced in code, not aspirational.
+# ---------------------------------------------------------------------------
+budget:
+  enabled: true
+  total_s: 900            # 15 minutes for a 10-minute video
+  stages:
+    ingest: 60
+    condition: 120
+    track_b: 120
+    refine_ba: 180
+    track_a_mvs: 240
+    fusion: 120
+    export: 60
+  # On overrun a stage degrades rather than blocking. Every degradation logged.
+  degradation:
+    enabled: true
+    # Ordered ladder of concessions applied as the deadline approaches.
+    ladder: [reduce_resolution, cap_iterations, reduce_frames, skip_optional]
+    warn_at_fraction: 0.8
+
+logging:
+  level: INFO
+  # Structured JSONL alongside human-readable console output.
+  jsonl: true
+  console_color: true

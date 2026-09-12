@@ -1,0 +1,94 @@
+# Accuracy preset. Deep-merges over default.yaml.
+#
+# This is the preset benchmark numbers are reported from (spec §9). It relaxes
+# the wall-clock target rather than the quality settings, so the 15-minute
+# figure quoted in the submission always comes from the default preset and the
+# accuracy figures always come from this one — stated as such, never mixed.
+
+preset: accurate
+
+ingest:
+  video:
+    max_width: null          # native resolution
+  frame_selection:
+    # Tighter spacing: more views per surface, thicker Zone 1, better triangulation.
+    target_overlap: 0.80
+    overlap_tolerance: 0.03
+    max_frames: 2500
+
+condition:
+  blur:
+    # Stricter gate — with more frames available, rejecting marginal ones costs
+    # little coverage and buys cleaner geometry. A smaller sigma multiple moves
+    # the outlier threshold closer to the median, so more of the soft tail goes.
+    robust_sigma: 2.0
+    max_reject_fraction: 0.45
+    clean_percentile: 60
+  artifacts:
+    blockiness_threshold: 1.25
+  dynamic:
+    conf_threshold: 0.2
+    dilate_px: 14
+
+recon:
+  track_a:
+    feature_quality: ultra
+    pc_quality: high
+    mesh_octree_depth: 12
+    mesh_size: 800000
+    min_num_features: 20000
+    matcher_neighbors: 12
+  track_b:
+    chunk_frames: 160
+    chunk_overlap: 24
+    loop_closure:
+      enabled: true
+  refine_ba:
+    max_iterations: 300
+    time_budget_s: 600
+
+fusion:
+  zones:
+    # Stricter Zone 1 admission: a surface has to be genuinely well observed to
+    # become part of the accuracy backbone.
+    zone1_min_views: 5
+    zone1_min_triangulation_deg: 7.0
+    voxel_gsd_multiple: 1.5
+  mono_depth:
+    anchor:
+      # Tighter anchoring: refuse to fuse Zone 2 unless the scale fit is good.
+      ransac_inlier_threshold_m: 0.15
+      min_inlier_ratio: 0.45
+      max_residual_m: 0.4
+  poisson:
+    depth: 11
+  plane_completion:
+    enabled: true
+
+geo:
+  similarity:
+    ransac_iterations: 5000
+    inlier_threshold_m: 2.0
+
+export:
+  texture_size: 16384
+  raster:
+    dsm_resolution_m: 0.05
+    ortho_resolution_m: 0.025
+
+qa:
+  degrade:
+    severities: [light, moderate, severe]
+
+budget:
+  # Benchmark runs are allowed an hour; the submission's speed claim is measured
+  # on the default preset, and this file exists to measure accuracy instead.
+  total_s: 3600
+  stages:
+    ingest: 180
+    condition: 420
+    track_b: 420
+    refine_ba: 900
+    track_a_mvs: 1200
+    fusion: 300
+    export: 180

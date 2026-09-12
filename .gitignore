@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# run data — never commit payloads
+data/raw/*
+data/interim/*
+data/outputs/*
+!data/**/.gitkeep
+
+# model weights
+weights/
+*.pth
+*.pt
+*.onnx
+
+*.log
+.DS_Store
