@@ -55,6 +55,24 @@ ingest:
       pitch: [pitch, gimbalpitch, osd_pitch]
       yaw: [yaw, heading, gimbalyaw, osd_yaw]
       focal_mm: [focallength, focal, focal_mm]
+    # A flight-log CSV/TXT with no header row (a bare numeric GPS dump) has
+    # its columns assigned positionally in this order instead of guessed.
+    headerless_column_order: [lat, lon, alt_gps]
+    # Binary DJI flight records (DJIFlightRecord_*.txt from DJI GO / Pilot) are
+    # accepted wherever a flight-log CSV/TXT is. Their clock is flight time, so
+    # rows are re-based onto the recording that matches the video.
+    flight_record:
+      # "auto" = the recording whose duration matches the video; an integer
+      # picks a recording by order in the log (0 = first).
+      segment: auto
+      # Flight time (s) at which the video starts; overrides `segment` when set.
+      # Use it for clips that were trimmed after recording.
+      offset_s: null
+      # Largest |recording duration - video duration| accepted as a match (s).
+      # Recording on/off is logged at 1 Hz, so each edge is known to ~1 s.
+      duration_tolerance_s: 3.0
+      # Telemetry kept either side of the recording, for interpolation (s).
+      segment_padding_s: 2.0
   frame_selection:
     # Adaptive overlap targeting (§4.3) — not fixed-interval sampling.
     target_overlap: 0.75
@@ -62,6 +80,17 @@ ingest:
     # Guard rails so a bad flow estimate cannot explode or starve the frame set.
     min_stride_frames: 2
     max_stride_frames: 90
+    # A frame count means different things at different frame rates: 90 frames
+    # is 1.5 s at 60 fps but 3 s at 30 fps, so one cap cannot be right for both.
+    # When set, these express the same guard rails in seconds and win over the
+    # frame counts above (converted with the clip's own fps, then re-clamped to
+    # at least min_stride_frames). Measured on a 1080p60 forward-oblique
+    # inspection clip: at the 90-frame cap consecutive kept frames still
+    # overlapped 0.997, because 90 frames is 1.5 s of a scene that barely moves
+    # — the cap, not the estimator, was holding overlap above the §4.3 band.
+    # null on either = fall back to the frame count.
+    min_stride_seconds: null
+    max_stride_seconds: 10.0
     min_frames: 20
     max_frames: 1200
     # Sparse optical flow used for the overlap estimate.
@@ -76,6 +105,26 @@ ingest:
       min_distance: 8
       win_size: 21
       pyramid_levels: 5
+      # Photometric verification of the fitted inter-frame transform.
+      # min_alignment_ncc: frames must actually match after alignment.
+      min_alignment_ncc: 0.35
+      # Aperture-problem guard: shifting the fitted transform by peak_probe_px
+      # (at 640 px working width, scaled with frame width) along EACH axis must
+      # lower the correlation by at least min_peak_drop. Content that is
+      # invariant along the flight direction (a road or river the drone follows)
+      # correlates equally well at any along-track offset, so its overlap cannot
+      # be measured; measured on synthetic flights, true pairs drop >= 0.09 and
+      # such false matches drop ~0.00.
+      peak_probe_px: 4
+      min_peak_drop: 0.03
+      # Verification (NCC + peak test) runs on frames downscaled to this width.
+      # Correlation is a global statistic; 320 px is ample and ~4x cheaper than
+      # 640 px, which profiling showed was 43% of selection time.
+      verify_width: 320
+    # A stride may grow by at most this factor per stride search. Motion is
+    # continuous, so a sudden 10x jump in stride is an estimator failure, not
+    # the drone accelerating; this caps the damage if one slips through.
+    max_stride_growth: 2.0
     # Bias selection toward I-frames when the container exposes frame types (§5.3).
     prefer_keyframes: true
     keyframe_search_radius: 3
@@ -99,6 +148,39 @@ condition:
     # clean video loses nothing and a video with a blurred tail loses the tail.
     robust_sigma: 3.0
     absolute_floor: 40.0
+    # Sharpness is a property of the scene as much as of the camera: a stretch
+    # of plain farmland scores lower than a built-up block while being perfectly
+    # in focus. One whole-video threshold therefore reads a *content* change as
+    # blur — measured on LineVision-VideoGeoTagging.mp4 it rejected 450
+    # consecutive sharp frames over a pasture (issue S1-7, 63-72 s, score
+    # median 1410 vs 2823 earlier in the same clip, anisotropy ~1.4 so not
+    # motion smear). With this enabled each frame is compared with the frames
+    # around it instead, so only a *local* dip counts as blur.
+    #
+    # What stops a genuinely blurred stretch from normalising itself: the
+    # window adapts, but (a) `hard_floor_fraction` keeps an absolute line under
+    # the whole-video median, and (b) real motion blur is caught by the
+    # directional test below, which is a detection rather than a threshold and
+    # is unaffected by the local baseline.
+    rolling_baseline:
+      enabled: true
+      # Most recent evaluated frames the local level is measured over. Shorter
+      # follows a change of scene sooner; longer is steadier against noise.
+      window: 30
+      # Below this many samples the whole-video profile is used as-is. Kept
+      # small: until the window fills, a clip that *opens* on low-texture ground
+      # is judged by the whole-video line, which is the S1-7 failure. A 40% ratio
+      # test is stable on a median of a handful of frames.
+      min_samples: 5
+      # Reject a frame more than this fraction softer than the median of its
+      # window. A ratio, because sharpness scales with scene texture: the S1-7
+      # pasture stretch was 13% below the preceding frames and in focus, while
+      # blur that destroys matching is a far larger drop (and motion smear is
+      # caught by anisotropy regardless).
+      max_local_drop: 0.4
+      # A frame below this fraction of the whole-video median is unusable
+      # however its neighbours score. 0.25 = four times softer than typical.
+      hard_floor_fraction: 0.25
     # Coverage guard: never reject more than this fraction of frames, however
     # bad the footage. Past this point the problem is the whole video, and
     # reconstructing it badly with a warning beats reconstructing nothing.

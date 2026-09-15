@@ -35,7 +35,9 @@ the corresponding region rather than to silent gaps.
 
 from __future__ import annotations
 
+import functools
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Sequence
@@ -99,6 +101,7 @@ class BlurProfile:
     directional_reject_threshold: float
     anisotropy_limit: float
     samples: np.ndarray = field(repr=False, default_factory=lambda: np.array([]))
+    absolute_floor: float = 0.0
     degraded_weight: float = 0.6
     unsharp_amount: float = 0.6
     unsharp_radius: float = 1.5
@@ -134,6 +137,7 @@ class BlurProfile:
                 directional_reject_threshold=floor,
                 anisotropy_limit=float(directional_cfg["fft_anisotropy_reject"]),
                 samples=values,
+                absolute_floor=floor,
                 degraded_weight=float(blur_cfg["degraded_weight"]),
                 unsharp_amount=float(blur_cfg["unsharp_amount"]),
                 unsharp_radius=float(blur_cfg["unsharp_radius"]),
@@ -171,6 +175,7 @@ class BlurProfile:
             directional_reject_threshold=directional_reject,
             anisotropy_limit=float(directional_cfg["fft_anisotropy_reject"]),
             samples=values,
+            absolute_floor=floor,
             degraded_weight=float(blur_cfg["degraded_weight"]),
             unsharp_amount=float(blur_cfg["unsharp_amount"]),
             unsharp_radius=float(blur_cfg["unsharp_radius"]),
@@ -235,6 +240,103 @@ def _robust_low_threshold(values: np.ndarray, sigma_multiple: float) -> float:
     return median - sigma_multiple * 1.4826 * scale
 
 
+@dataclass
+class RollingBaseline:
+    """A sliding sharpness baseline, so scene changes don't read as blur.
+
+    The whole-video profile answers "is this frame soft for this video?". Over
+    a long clip that is the wrong question: sharpness depends on what is in
+    frame, so a stretch of low-texture ground scores below the video median
+    while being perfectly in focus, and a single video-wide line rejects all of
+    it (issue S1-7: 450 consecutive sharp frames). The question that survives
+    real footage is "is this frame soft for *here*?" — asked against the frames
+    immediately around it, which share its content.
+
+    Two things keep an adaptive threshold from adapting to genuine blur:
+
+    * ``hard_floor`` — a fixed fraction of the whole-video median, below which
+      a frame is unusable no matter what its neighbours look like. A long
+      blurred run drags the local baseline down but cannot drag this line.
+    * The directional test, which is unchanged and sits outside this class.
+      Motion smear is identified by spectral anisotropy, not by sharpness, so
+      the arm of the gate that catches drone jerk does not move with the scene.
+
+    Every evaluated score is admitted, including rejected ones. Excluding them
+    would pin the baseline at its pre-transition level and re-create exactly
+    the failure this class exists to fix, the moment the transition is a
+    content change rather than blur.
+    """
+
+    window: int
+    min_samples: int
+    hard_floor: float
+    max_local_drop: float
+    clean_percentile: float
+    scores: deque = field(default_factory=lambda: deque(), repr=False)
+
+    @classmethod
+    def from_config(cls, profile: "BlurProfile", cfg: Any) -> "RollingBaseline | None":
+        """Build the baseline for a run, or ``None`` when it is switched off."""
+        blur_cfg = cfg.get_path("condition.blur")
+        rolling = blur_cfg.get("rolling_baseline") if hasattr(blur_cfg, "get") else None
+        if rolling is None or not bool(rolling["enabled"]):
+            return None
+        median = float(np.median(profile.samples)) if profile.samples.size else 0.0
+        hard_floor = max(median * float(rolling["hard_floor_fraction"]), profile.absolute_floor)
+        window = int(rolling["window"])
+        baseline = cls(
+            window=window,
+            min_samples=int(rolling["min_samples"]),
+            hard_floor=hard_floor,
+            max_local_drop=float(rolling["max_local_drop"]),
+            clean_percentile=float(blur_cfg["clean_percentile"]),
+            scores=deque(maxlen=window),
+        )
+        log_event(
+            log,
+            logging.INFO,
+            "blur gate using a rolling baseline; thresholds follow the scene",
+            window=window,
+            min_samples=baseline.min_samples,
+            max_local_drop=baseline.max_local_drop,
+            hard_floor=round(hard_floor, 2),
+            video_median=round(median, 2),
+        )
+        return baseline
+
+    def observe(self, score: float) -> None:
+        if np.isfinite(score):
+            self.scores.append(float(score))
+
+    def thresholds(self, profile: "BlurProfile") -> tuple[float, float, float]:
+        """``(reject, directional_reject, clean)`` thresholds for the next frame.
+
+        ``reject`` and ``clean`` are local. ``directional_reject`` is not: a
+        frame whose spectrum already identified it as motion-smeared is held to
+        the whole-video line. Letting that line follow the window lowered the
+        bar exactly where it matters — on the blurry synthetic flight a soft
+        stretch dragged the local strict line to ~150, and frame 45 (anisotropy
+        9.07, score 147) passed it against a whole-video line of 188.7.
+
+        Falls back to the whole-video profile until the window has filled to
+        ``min_samples``, which is what covers the opening of the clip.
+        """
+        if len(self.scores) < self.min_samples:
+            return (profile.reject_threshold, profile.directional_reject_threshold,
+                    profile.clean_threshold)
+        values = np.asarray(self.scores, dtype=float)
+        # A ratio to the local level, not an outlier test on the local spread.
+        # Sharpness scales multiplicatively with scene texture, and the one-sided
+        # spread of a tight local population is tiny: while the ground cover
+        # changes, every new frame sits below the lagging window median by more
+        # than a few of those sigmas, so the outlier form rejected a smooth
+        # 2800 -> 1400 transition frame after frame. Measured with window 30:
+        # outlier test 15 false rejects on a 60-frame ramp, ratio test 0.
+        reject = max(float(np.median(values)) * (1.0 - self.max_local_drop), self.hard_floor)
+        clean = float(np.percentile(values, self.clean_percentile))
+        return reject, max(profile.directional_reject_threshold, reject), max(clean, reject)
+
+
 # --------------------------------------------------------------------------
 # Metrics
 # --------------------------------------------------------------------------
@@ -255,6 +357,25 @@ def variance_of_laplacian(gray: np.ndarray) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
+@functools.lru_cache(maxsize=8)
+def _anisotropy_grids(h: int, w: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Window and frequency-band coordinates for a frame shape, built once.
+
+    Rebuilding these per call (an outer-product window and an ``mgrid`` over the
+    whole frame) was a measurable share of selection time; every frame of a
+    video has the same shape, so they are cached. Returned arrays are shared —
+    never mutate them.
+    """
+    window = np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
+    cy, cx = h / 2.0, w / 2.0
+    yy, xx = np.mgrid[0:h, 0:w]
+    v = (yy - cy) / cy
+    u = (xx - cx) / cx
+    radius = np.sqrt(u**2 + v**2)
+    band = (radius >= _ANISO_INNER) & (radius <= _ANISO_OUTER)
+    return window, u[band].astype(np.float64), v[band].astype(np.float64), band
+
+
 def spectral_anisotropy(gray: np.ndarray) -> float:
     """Directionality of the frequency spectrum; 1.0 means isotropic.
 
@@ -262,31 +383,25 @@ def spectral_anisotropy(gray: np.ndarray) -> float:
     that zeroes energy *along* the blur direction. The resulting spectrum is
     elongated perpendicular to the motion, so the ratio of the second moment's
     eigenvalues measures how directional the degradation is.
+
+    Computed with a float32 ``cv2.dft`` and cached grids; mathematically the
+    same power spectrum as ``numpy.fft.fft2`` (profiling showed the numpy path,
+    complex128 plus per-call grids, was a quarter of selection time).
     """
-    gray = gray.astype(np.float32)
     h, w = gray.shape[:2]
     if h < 16 or w < 16:
         return 1.0
     # Window first: the FFT of a non-periodic image has a bright cross at the
     # axes from edge discontinuity, which would read as strong anisotropy.
-    window = np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
-    spectrum = np.fft.fftshift(np.abs(np.fft.fft2(gray * window)))
+    window, ub, vb, band = _anisotropy_grids(h, w)
+    transform = cv2.dft(gray.astype(np.float32) * window, flags=cv2.DFT_COMPLEX_OUTPUT)
+    power = np.fft.fftshift(transform[:, :, 0] ** 2 + transform[:, :, 1] ** 2)
 
-    cy, cx = h / 2.0, w / 2.0
-    yy, xx = np.mgrid[0:h, 0:w]
-    v = (yy - cy) / cy
-    u = (xx - cx) / cx
-    radius = np.sqrt(u**2 + v**2)
-    band = (radius >= _ANISO_INNER) & (radius <= _ANISO_OUTER)
-    if not band.any():
-        return 1.0
-
-    energy = (spectrum[band] ** 2).astype(np.float64)
+    energy = power[band].astype(np.float64)
     total = energy.sum()
     if total <= 0:
         return 1.0
     weights = energy / total
-    ub, vb = u[band], v[band]
     cov = np.array(
         [
             [float((weights * ub * ub).sum()), float((weights * ub * vb).sum())],
@@ -332,20 +447,41 @@ def profile_video_blur(
     return profile
 
 
-def assess_blur(image: np.ndarray, profile: BlurProfile, cfg: Any) -> BlurAssessment:
-    """Classify one frame against the video's blur profile."""
+def assess_blur(
+    image: np.ndarray,
+    profile: BlurProfile,
+    cfg: Any,
+    baseline: RollingBaseline | None = None,
+) -> BlurAssessment:
+    """Classify one frame against the video's blur profile.
+
+    With a ``baseline`` the sharpness thresholds come from the frames around
+    this one rather than from the whole video, so a change of ground cover is
+    not mistaken for blur; without one the whole-video thresholds are used and
+    the behaviour is unchanged. The anisotropy test is identical either way.
+    """
     gray = to_profile_gray(image)
     score = variance_of_laplacian(gray)
     directional_cfg = cfg.get_path("condition.blur.directional")
 
+    reject_threshold, directional_threshold, clean_threshold = (
+        baseline.thresholds(profile)
+        if baseline is not None
+        else (profile.reject_threshold, profile.directional_reject_threshold, profile.clean_threshold)
+    )
+    # Observed after the thresholds are read: a frame is judged against its
+    # neighbours, not against a window it has already joined.
+    if baseline is not None:
+        baseline.observe(score)
+
     anisotropy = 1.0
     directional = False
-    threshold = profile.reject_threshold
+    threshold = reject_threshold
     if directional_cfg["enabled"]:
         anisotropy = spectral_anisotropy(gray)
         directional = anisotropy >= profile.anisotropy_limit
         if directional:
-            threshold = profile.directional_reject_threshold
+            threshold = directional_threshold
 
     if score < threshold:
         reason = (
@@ -355,14 +491,14 @@ def assess_blur(image: np.ndarray, profile: BlurProfile, cfg: Any) -> BlurAssess
         )
         return BlurAssessment(score, anisotropy, BlurVerdict.REJECT, 0.0, directional, reason)
 
-    if score < profile.clean_threshold:
+    if score < clean_threshold:
         return BlurAssessment(
             score,
             anisotropy,
             BlurVerdict.CORRECT,
             profile.degraded_weight,
             directional,
-            f"mild blur: {score:.1f} below clean threshold {profile.clean_threshold:.1f}",
+            f"mild blur: {score:.1f} below clean threshold {clean_threshold:.1f}",
         )
 
     return BlurAssessment(score, anisotropy, BlurVerdict.CLEAN, 1.0, directional, "")

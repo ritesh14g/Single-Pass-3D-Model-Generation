@@ -34,6 +34,7 @@ from src.condition.blur import (
     BlurProfile,
     BlurVerdict,
     RejectionTracker,
+    RollingBaseline,
     assess_blur,
     to_profile_gray,
     summarize_assessments,
@@ -49,9 +50,8 @@ MAX_STRIDE_PROBES = 4
 MIN_FIT_POINTS = 3
 # Maximum round-trip error, in pixels, for a forward-backward flow check.
 FB_ERROR_PX = 1.5
-# Minimum normalised cross-correlation between the aligned frames for the
-# fitted transform to be believed.
-MIN_ALIGNMENT_NCC = 0.35
+# Reference working width the flow config's pixel values are expressed at.
+FLOW_REFERENCE_WIDTH = 640
 # Below this warped-area fraction the frames barely intersect, and the
 # transform is extrapolation rather than measurement.
 MIN_VALID_AREA_FRACTION = 0.05
@@ -97,6 +97,16 @@ class FrameSelection:
     profile: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     decoded_frames: int = 0
+    decode_s: float = 0.0   # time inside VideoCapture read/grab/seek during selection
+    # One record per frame the blur gate evaluated (kept or not). Diagnostic
+    # only: it is what lets the Stage Lab plot scores against thresholds.
+    evaluations: list[dict[str, Any]] = field(default_factory=list)
+
+    def evaluations_frame(self) -> pd.DataFrame:
+        frame = pd.DataFrame(self.evaluations)
+        if not frame.empty:
+            frame["selected"] = frame["index"].isin(self.indices)
+        return frame
 
     def __len__(self) -> int:
         return len(self.frames)
@@ -140,6 +150,7 @@ class FrameSelection:
         return {
             "selected_frames": len(self.frames),
             "decoded_frames": self.decoded_frames,
+            "decode_s": round(self.decode_s, 3),
             "overlap": self.overlap_stats(),
             "blur": self.blur_summary,
             "blur_profile": self.profile,
@@ -167,6 +178,9 @@ class OverlapEstimate:
     support: int             # correspondences agreeing with the fitted transform
     correlation: float       # NCC of the frames after alignment, -1 to 1
     reliable: bool
+    # Smallest correlation drop when the fitted shift is perturbed along either
+    # axis. Near zero means the match is a ridge, not a peak (aperture problem).
+    peak_drop: float = 0.0
     # 2x3 affine taking anchor-frame pixels to candidate-frame pixels, stored
     # with translation normalised by frame width/height so it can be re-applied
     # at any resolution. Downstream stages need this to compare the two frames
@@ -222,7 +236,7 @@ def estimate_overlap(
         minDistance=float(flow_cfg["min_distance"]),
     )
     if corners is None or len(corners) < MIN_FIT_POINTS:
-        return _phase_correlation_fallback(anchor_gray, candidate_gray, 0, 0.0)
+        return _phase_correlation_fallback(anchor_gray, candidate_gray, 0, 0.0, flow_cfg)
 
     win = int(flow_cfg["win_size"])
     lk_args = {
@@ -237,7 +251,7 @@ def estimate_overlap(
             candidate_gray, anchor_gray, forward, None, **lk_args
         )
     if forward is None or status is None or backward is None or back_status is None:
-        return _phase_correlation_fallback(anchor_gray, candidate_gray, 0, 0.0)
+        return _phase_correlation_fallback(anchor_gray, candidate_gray, 0, 0.0, flow_cfg)
 
     round_trip = np.linalg.norm(corners.reshape(-1, 2) - backward.reshape(-1, 2), axis=1)
     keep = (
@@ -248,26 +262,31 @@ def estimate_overlap(
     source = corners.reshape(-1, 2)[keep]
     target = forward.reshape(-1, 2)[keep]
     if len(source) < MIN_FIT_POINTS:
-        return _phase_correlation_fallback(anchor_gray, candidate_gray, int(len(source)), 0.0)
+        return _phase_correlation_fallback(anchor_gray, candidate_gray, int(len(source)), 0.0, flow_cfg)
 
     matrix, inliers = cv2.estimateAffinePartial2D(
         source, target, method=cv2.RANSAC, ransacReprojThreshold=3.0, maxIters=500
     )
     if matrix is None:
-        return _phase_correlation_fallback(anchor_gray, candidate_gray, int(len(source)), 0.0)
+        return _phase_correlation_fallback(anchor_gray, candidate_gray, int(len(source)), 0.0, flow_cfg)
 
     support = int(inliers.sum()) if inliers is not None else len(source)
     overlap = _overlap_from_transform(matrix, w, h)
-    correlation = _alignment_correlation(anchor_gray, candidate_gray, matrix)
+    correlation, peak_drop = _verify_alignment(anchor_gray, candidate_gray, matrix, flow_cfg)
 
-    if correlation >= MIN_ALIGNMENT_NCC and support >= MIN_FIT_POINTS:
-        return OverlapEstimate(overlap, support, correlation, True, normalize_transform(matrix, w, h))
+    if _verified(correlation, peak_drop, flow_cfg) and support >= MIN_FIT_POINTS:
+        return OverlapEstimate(overlap, support, correlation, True, peak_drop,
+                               normalize_transform(matrix, w, h))
 
-    return _phase_correlation_fallback(anchor_gray, candidate_gray, support, correlation)
+    return _phase_correlation_fallback(anchor_gray, candidate_gray, support, correlation, flow_cfg)
 
 
 def _phase_correlation_fallback(
-    anchor_gray: np.ndarray, candidate_gray: np.ndarray, feature_support: int, feature_correlation: float
+    anchor_gray: np.ndarray,
+    candidate_gray: np.ndarray,
+    feature_support: int,
+    feature_correlation: float,
+    flow_cfg: Any,
 ) -> OverlapEstimate:
     """Estimate overlap from whole-image phase correlation.
 
@@ -288,18 +307,18 @@ def _phase_correlation_fallback(
         anchor_gray.astype(np.float32), candidate_gray.astype(np.float32), window
     )
     matrix = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float64)
-    correlation = _alignment_correlation(anchor_gray, candidate_gray, matrix)
+    correlation, peak_drop = _verify_alignment(anchor_gray, candidate_gray, matrix, flow_cfg)
 
-    if correlation < MIN_ALIGNMENT_NCC:
-        # Neither model aligns the frames. Report the better of the two
-        # correlations so the log shows how far off we were.
-        return OverlapEstimate(0.0, feature_support, max(correlation, feature_correlation), False)
+    if not _verified(correlation, peak_drop, flow_cfg):
+        # Neither model aligns the frames verifiably. Report the better of the
+        # two correlations so the log shows how far off we were.
+        return OverlapEstimate(0.0, feature_support, max(correlation, feature_correlation), False, peak_drop)
 
     overlap = _overlap_from_transform(matrix, w, h)
     # Phase correlation has no inlier count; the response peak is its own
     # confidence measure, scaled here to the same "supporting evidence" role.
     return OverlapEstimate(
-        overlap, max(feature_support, int(response * 100)), correlation, True,
+        overlap, max(feature_support, int(response * 100)), correlation, True, peak_drop,
         normalize_transform(matrix, w, h),
     )
 
@@ -331,34 +350,107 @@ def _overlap_from_transform(matrix: np.ndarray, w: int, h: int) -> float:
     return float(np.clip(float(area) / float(w * h), 0.0, 1.0))
 
 
-def _alignment_correlation(anchor_gray: np.ndarray, candidate_gray: np.ndarray, matrix: np.ndarray) -> float:
-    """Zero-mean normalised cross-correlation of two frames after alignment.
+def _verified(correlation: float, peak_drop: float, flow_cfg: Any) -> bool:
+    return correlation >= float(flow_cfg["min_alignment_ncc"]) and peak_drop >= float(flow_cfg["min_peak_drop"])
 
-    Returns 0.0 when the frames barely intersect under the transform, since a
-    correlation computed over a sliver of pixels is not evidence of anything.
+
+def _verify_alignment(
+    anchor_gray: np.ndarray, candidate_gray: np.ndarray, matrix: np.ndarray, flow_cfg: Any
+) -> tuple[float, float]:
+    """Photometric verification of a fitted transform: ``(correlation, peak_drop)``.
+
+    ``correlation`` is the zero-mean NCC of the frames after alignment; a
+    transform that doesn't actually align the images is not believed, however
+    many feature correspondences agreed on it.
+
+    ``peak_drop`` guards against the aperture problem. When content is
+    invariant along one axis (a road, river or crop row running with the flight
+    line) the frames correlate just as well at *any* along-track offset, so the
+    fitted shift along that axis is arbitrary and the reported overlap is
+    fiction. The fit is perturbed by a few pixels along each axis in both
+    directions; a genuine peak drops on both axes, a ridge stays flat on one.
+    ``peak_drop`` is the smaller of the two axis drops.
+
+    All five correlations run on frames downscaled to ``verify_width`` and over
+    one shared support (the valid region eroded by the probe distance), so they
+    are directly comparable and cheap — profiling showed full-resolution
+    verification was 43% of selection time.
     """
     h, w = anchor_gray.shape[:2]
-    warped = cv2.warpAffine(anchor_gray, matrix, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
-    coverage = cv2.warpAffine(
-        np.ones((h, w), dtype=np.float32), matrix, (w, h), flags=cv2.INTER_NEAREST, borderValue=0
-    )
-    valid = coverage > 0.99
-    if valid.sum() < MIN_VALID_AREA_FRACTION * w * h:
-        return 0.0
+    scale = min(1.0, float(flow_cfg["verify_width"]) / w)
+    fitted = matrix.astype(np.float64).copy()
+    if scale < 1.0:
+        size = (max(int(round(w * scale)), 1), max(int(round(h * scale)), 1))
+        a = cv2.resize(anchor_gray, size, interpolation=cv2.INTER_AREA)
+        b = cv2.resize(candidate_gray, size, interpolation=cv2.INTER_AREA)
+        fitted[:, 2] *= scale  # uniform scaling leaves the linear part unchanged
+    else:
+        a, b = anchor_gray, candidate_gray
+    hs, ws = a.shape[:2]
+    probe = max(1, int(round(float(flow_cfg["peak_probe_px"]) * ws / FLOW_REFERENCE_WIDTH)))
 
-    a = warped[valid].astype(np.float64)
-    b = candidate_gray[valid].astype(np.float64)
-    a -= a.mean()
-    b -= b.mean()
-    denominator = float(np.sqrt((a * a).sum() * (b * b).sum()))
-    if denominator <= 1e-9:
-        return 0.0
-    return float(np.dot(a, b) / denominator)
+    support = cv2.warpAffine(np.full((hs, ws), 255, np.uint8), fitted, (ws, hs),
+                             flags=cv2.INTER_NEAREST, borderValue=0)
+    support = cv2.erode(support, np.ones((2 * probe + 1, 2 * probe + 1), np.uint8)) > 0
+    if support.sum() < MIN_VALID_AREA_FRACTION * ws * hs:
+        return 0.0, 0.0
+
+    target = b[support].astype(np.float32)
+    target -= target.mean()
+    target_norm = float(np.sqrt(np.dot(target, target)))
+    if target_norm <= 1e-6:
+        return 0.0, 0.0
+
+    def correlate(m: np.ndarray) -> float:
+        warped = cv2.warpAffine(a, m, (ws, hs), flags=cv2.INTER_LINEAR, borderValue=0)
+        values = warped[support].astype(np.float32)
+        values -= values.mean()
+        norm = float(np.sqrt(np.dot(values, values)))
+        return 0.0 if norm <= 1e-6 else float(np.dot(values, target) / (norm * target_norm))
+
+    correlation = correlate(fitted)
+    drops = []
+    for axis in (0, 1):
+        neighbour = -1.0
+        for sign in (1, -1):
+            shifted = fitted.copy()
+            shifted[axis, 2] += sign * probe
+            neighbour = max(neighbour, correlate(shifted))
+        drops.append(correlation - neighbour)
+    return correlation, float(min(drops))
 
 
 # --------------------------------------------------------------------------
 # Selection
 # --------------------------------------------------------------------------
+def _stride_bounds(sel_cfg: Any, fps: float) -> tuple[int, int]:
+    """Resolve the stride guard rails to frame counts for this clip's fps.
+
+    The guard rails exist to stop a bad flow estimate from starving or
+    exploding the frame set, but stating them in frames ties them to a frame
+    rate. Measured on a 1080p60 forward-oblique clip, the 90-frame cap is 1.5 s
+    of a scene whose content barely changes in that time: every kept pair came
+    out at 0.997 overlap against a 0.70-0.80 target, and selection spent its
+    budget re-verifying near-duplicates. The same cap on 30 fps survey footage
+    is 3 s and reasonable. So when a seconds form is configured it wins, and
+    the frame count remains the fallback for a clip whose fps is unknown.
+    """
+    min_frames_cap = int(sel_cfg["min_stride_frames"])
+    max_frames_cap = int(sel_cfg["max_stride_frames"])
+    min_seconds = sel_cfg.get("min_stride_seconds") if hasattr(sel_cfg, "get") else None
+    max_seconds = sel_cfg.get("max_stride_seconds") if hasattr(sel_cfg, "get") else None
+
+    if fps and fps > 0:
+        if min_seconds is not None:
+            min_frames_cap = int(round(float(min_seconds) * fps))
+        if max_seconds is not None:
+            max_frames_cap = int(round(float(max_seconds) * fps))
+
+    min_stride = max(1, min_frames_cap)
+    max_stride = max(min_stride + 1, max_frames_cap)
+    return min_stride, max_stride
+
+
 def select_frames(
     reader: VideoReader,
     cfg: Any,
@@ -371,18 +463,23 @@ def select_frames(
     flow_cfg = sel_cfg["flow"]
     target = float(sel_cfg["target_overlap"])
     tolerance = float(sel_cfg["overlap_tolerance"])
-    min_stride = int(sel_cfg["min_stride_frames"])
-    max_stride = int(sel_cfg["max_stride_frames"])
+    min_stride, max_stride = _stride_bounds(sel_cfg, reader.metadata.fps)
     min_frames = int(sel_cfg["min_frames"])
     max_frames = int(sel_cfg["max_frames"])
     prefer_keyframes = bool(sel_cfg["prefer_keyframes"]) and bool(keyframes)
     search_radius = int(sel_cfg["keyframe_search_radius"])
     max_consecutive = int(cfg.get_path("condition.blur.max_consecutive_rejects"))
+    # Sharpness is scene-dependent, so the gate compares each frame with the
+    # frames around it rather than with the whole clip (issue S1-7). None when
+    # the rolling baseline is switched off, which restores whole-video thresholds.
+    baseline = RollingBaseline.from_config(profile, cfg)
 
     total_frames = reader.metadata.frame_count
     selection = FrameSelection(profile=profile.to_dict())
+    decode_started = reader.decode_s
     tracker = RejectionTracker(max_consecutive)
-    assessments: list[BlurAssessment] = []
+    # (frame index, timestamp, assessment) for every frame the gate evaluated.
+    assessments: list[tuple[int, float, BlurAssessment]] = []
     decoded = 0
 
     # -- Seed: the first frame that survives the blur gate -------------------
@@ -390,8 +487,8 @@ def select_frames(
     anchor_gray: np.ndarray | None = None
     for candidate in reader.stream(step=1, max_frames=search_radius * 4 + 1):
         decoded += 1
-        assessment = assess_blur(candidate.image, profile, cfg)
-        assessments.append(assessment)
+        assessment = assess_blur(candidate.image, profile, cfg, baseline)
+        assessments.append((candidate.index, candidate.timestamp_s, assessment))
         tracker.record(candidate.index, candidate.timestamp_s, assessment.rejected)
         if not assessment.rejected:
             anchor = candidate
@@ -414,7 +511,9 @@ def select_frames(
         selection.notes.append("no frame in the opening window passed the blur gate")
         log_event(log, logging.ERROR, "frame selection found no usable opening frame")
         selection.decoded_frames = decoded
-        selection.blur_summary = summarize_assessments(assessments)
+        selection.decode_s = reader.decode_s - decode_started
+        selection.blur_summary = summarize_assessments([a for _, _, a in assessments])
+        selection.evaluations = _evaluation_records(assessments)
         selection.rejection_runs = [r.to_dict() for r in tracker.finish()]
         return selection
 
@@ -458,6 +557,7 @@ def select_frames(
             total_frames=total_frames,
             flow_cfg=flow_cfg,
             min_index=scan_floor,
+            max_stride_growth=float(sel_cfg["max_stride_growth"]),
         )
         decoded += probe.decoded
         probe_index, probe_frame, probe_gray = probe.index, probe.frame, probe.gray
@@ -489,6 +589,7 @@ def select_frames(
             first_gray=probe_gray,
             first_overlap=probe.overlap,
             first_transform=probe.transform,
+            min_overlap=target - tolerance,
             anchor_gray=anchor_gray,
             cfg=cfg,
             profile=profile,
@@ -498,6 +599,7 @@ def select_frames(
             flow_cfg=flow_cfg,
             tracker=tracker,
             assessments=assessments,
+            baseline=baseline,
         )
         decoded += decoded_here
 
@@ -527,7 +629,9 @@ def select_frames(
         scan_floor = anchor.index + min_stride
 
     selection.decoded_frames = decoded
-    selection.blur_summary = summarize_assessments(assessments)
+    selection.decode_s = reader.decode_s - decode_started
+    selection.blur_summary = summarize_assessments([a for _, _, a in assessments])
+    selection.evaluations = _evaluation_records(assessments)
     selection.rejection_runs = [r.to_dict() for r in tracker.finish()]
 
     if len(selection.frames) < min_frames:
@@ -564,6 +668,7 @@ def _probe_for_overlap(
     total_frames: int,
     flow_cfg: Any,
     min_index: int = 0,
+    max_stride_growth: float = 2.0,
 ) -> "ProbeResult":
     """Find a frame whose overlap with the anchor is near the target.
 
@@ -630,7 +735,10 @@ def _probe_for_overlap(
 
         remaining = max(1.0 - overlap, 1e-3)
         scaled = current_stride * (1.0 - target) / remaining
-        next_stride = int(round(np.clip(scaled, min_stride, max_stride)))
+        # Motion is continuous: cap growth relative to the last accepted stride
+        # so one bad estimate cannot fling the search far past the overlap region.
+        growth_cap = max(int(stride * max_stride_growth), stride + 1)
+        next_stride = int(round(np.clip(scaled, min_stride, min(max_stride, growth_cap))))
         if next_stride == current_stride:
             break
         current_stride = next_stride
@@ -694,7 +802,9 @@ def _choose_frame(
     total_frames: int,
     flow_cfg: Any,
     tracker: RejectionTracker,
-    assessments: list[BlurAssessment],
+    assessments: list[tuple[int, float, BlurAssessment]],
+    min_overlap: float = 0.0,
+    baseline: RollingBaseline | None = None,
 ) -> tuple[
     Frame | None, BlurAssessment | None, np.ndarray | None, float, int, tuple[float, ...] | None
 ]:
@@ -703,19 +813,31 @@ def _choose_frame(
     The probe frame is preferred when it is clean. Otherwise the window is
     scanned forward — never backward, since a backward seek on long-GOP video
     costs far more than the few frames it would save — looking for a frame that
-    is both sharper and, where the container told us frame types, an I-frame.
+    is sharper and, where the container told us frame types, an I-frame.
+
+    **A replacement may not trade away the overlap target.** Each frame forward
+    loses overlap with the anchor, so ranking the window by sharpness alone
+    systematically picks the last frame in it: measured on a synthetic flight,
+    probes that landed at 0.76 overlap were swapped for sharper frames at 0.52,
+    dragging the median out of the §4.3 band. When the probe is usable, a
+    candidate must have a *verified* overlap of at least ``min_overlap`` to
+    replace it, and scanning stops once overlap falls below that line. Only
+    when the probe itself is rejected may the window fall back to the
+    best-overlapping usable frame below the line.
     """
     decoded = 0
-    assessment = assess_blur(first.image, profile, cfg)
-    assessments.append(assessment)
+    assessment = assess_blur(first.image, profile, cfg, baseline)
+    assessments.append((first.index, first.timestamp_s, assessment))
     tracker.record(first.index, first.timestamp_s, assessment.rejected)
 
     first_is_keyframe = bool(keyframes and first.index in keyframes)
     if assessment.verdict is BlurVerdict.CLEAN and (first_is_keyframe or keyframes is None):
         return first, assessment, first_gray, first_overlap, decoded, first_transform
 
+    probe_usable = not assessment.rejected
     best: tuple[Frame, BlurAssessment, np.ndarray, float, float, tuple[float, ...] | None] | None = None
-    if not assessment.rejected:
+    fallback: tuple[Frame, BlurAssessment, np.ndarray, float, float, tuple[float, ...] | None] | None = None
+    if probe_usable:
         best = (first, assessment, first_gray, first_overlap,
                 _candidate_score(assessment, first_is_keyframe), first_transform)
 
@@ -727,8 +849,8 @@ def _choose_frame(
         if frame is None:
             break
         decoded += 1
-        candidate_assessment = assess_blur(frame.image, profile, cfg)
-        assessments.append(candidate_assessment)
+        candidate_assessment = assess_blur(frame.image, profile, cfg, baseline)
+        assessments.append((frame.index, frame.timestamp_s, candidate_assessment))
         tracker.record(frame.index, frame.timestamp_s, candidate_assessment.rejected)
         if candidate_assessment.rejected:
             continue
@@ -737,18 +859,46 @@ def _choose_frame(
         # A window candidate sits within a few frames of the probe, so when its
         # own estimate cannot be verified the probe's measured overlap is a
         # better stand-in than an unverified number.
-        overlap = estimate.overlap if estimate.reliable else first_overlap
-        transform = estimate.transform if estimate.reliable else first_transform
         is_keyframe = bool(keyframes and index in keyframes)
         score = _candidate_score(candidate_assessment, is_keyframe)
-        if best is None or score > best[4]:
-            best = (frame, candidate_assessment, gray, overlap, score, transform)
-        if candidate_assessment.verdict is BlurVerdict.CLEAN and is_keyframe:
-            break  # Cannot do better than a clean I-frame.
 
-    if best is None:
+        if estimate.reliable and estimate.overlap >= min_overlap:
+            if best is None or score > best[4]:
+                best = (frame, candidate_assessment, gray, estimate.overlap, score, estimate.transform)
+            if candidate_assessment.verdict is BlurVerdict.CLEAN and is_keyframe:
+                break  # Cannot do better than a clean I-frame.
+            continue
+
+        if probe_usable:
+            if estimate.reliable:
+                break  # Verified below the band; frames further on only lose more overlap.
+            continue   # Unverifiable (e.g. smeared) — never a replacement for a usable probe.
+
+        # Probe rejected: remember the best-overlapping usable frame as a last resort.
+        overlap = estimate.overlap if estimate.reliable else first_overlap
+        transform = estimate.transform if estimate.reliable else first_transform
+        if fallback is None or (estimate.reliable and overlap > fallback[3]):
+            fallback = (frame, candidate_assessment, gray, overlap, score, transform)
+
+    chosen = best or fallback
+    if chosen is None:
         return None, None, None, 0.0, decoded, None
-    return best[0], best[1], best[2], best[3], decoded, best[5]
+    return chosen[0], chosen[1], chosen[2], chosen[3], decoded, chosen[5]
+
+
+def _evaluation_records(assessments: list[tuple[int, float, BlurAssessment]]) -> list[dict[str, Any]]:
+    """Flatten gate evaluations, keeping the last verdict if a frame was seen twice."""
+    by_index: dict[int, dict[str, Any]] = {}
+    for index, timestamp, assessment in assessments:
+        by_index[index] = {
+            "index": index,
+            "timestamp_s": round(timestamp, 4),
+            "blur_score": round(assessment.score, 3),
+            "anisotropy": round(assessment.anisotropy, 3),
+            "verdict": assessment.verdict.value,
+            "directional": assessment.directional,
+        }
+    return [by_index[i] for i in sorted(by_index)]
 
 
 def _candidate_score(assessment: BlurAssessment, is_keyframe: bool) -> float:

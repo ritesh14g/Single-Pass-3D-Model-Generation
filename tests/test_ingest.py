@@ -253,3 +253,158 @@ class TestChunking:
 
         sel = FrameSelection(frames=[SelectedFrame(i, 0.0, 0.75, 1.0, "clean", 1.0) for i in range(10)])
         assert frames_per_chunk(sel, chunk_frames=128, overlap=16) == [list(range(10))]
+
+
+def test_content_invariant_along_the_flight_line_is_not_believed(cfg):
+    # The aperture problem: a road or river running with the flight line looks
+    # the same at any along-track offset, so along-track overlap cannot be
+    # measured from it. Found by the Stage Lab ground-truth scorecard, where it
+    # let the selector skip 92 frames on a "0.87 overlap" between disjoint views.
+    rng = np.random.default_rng(4)
+    rows = rng.integers(40, 220, size=(240, 1), dtype=np.uint8)
+    stripes = np.repeat(rows, 320, axis=1)          # constant along x
+    shifted = np.roll(stripes, 60, axis=1)          # identical after any x-shift
+    estimate = estimate_overlap(stripes, shifted, cfg.get_path("ingest.frame_selection.flow"))
+    assert not estimate.reliable
+
+
+def test_selection_tracks_ground_truth_on_road_aligned_synthetic_flight(tmp_path, cfg):
+    from src.qa.synthetic import generate_synthetic_flight, load_ground_truth, true_pair_overlap
+
+    video, _, _ = generate_synthetic_flight(tmp_path, frames=150, blur_every=11)
+    truth = load_ground_truth(video)
+    with VideoReader(video) as reader:
+        profile = profile_video_blur(reader, cfg)
+        selection = select_frames(reader, cfg, profile)
+    idx = selection.indices
+    errors = [abs(f.overlap_prev - true_pair_overlap(truth, a, b))
+              for f, a, b in zip(selection.frames[1:], idx[:-1], idx[1:])]
+    assert max(errors) < 0.1, f"worst overlap error {max(errors):.3f}"
+    assert max(np.diff(idx)) <= 30, "selector skipped far past the overlap region"
+
+
+class TestStrideBoundsFollowFrameRate:
+    """The guard rails are a duration, not a frame count (see `_stride_bounds`).
+
+    A cap stated in frames means 1.5 s at 60 fps and 3 s at 30 fps. On a real
+    1080p60 clip that turned the cap into the binding constraint on overlap:
+    every kept pair came out at 0.997 against a 0.70-0.80 target because 90
+    frames of that scene is not a meaningful step.
+    """
+
+    def test_the_cap_converts_to_the_same_duration_at_any_frame_rate(self, cfg):
+        from src.ingest.frame_selector import _stride_bounds
+
+        sel = cfg.get_path("ingest.frame_selection")
+        seconds = float(sel["max_stride_seconds"])
+        _, cap_30 = _stride_bounds(sel, fps=30.0)
+        _, cap_60 = _stride_bounds(sel, fps=59.94)
+        assert cap_30 == pytest.approx(seconds * 30.0, abs=1)
+        assert cap_60 == pytest.approx(seconds * 59.94, abs=1)
+        assert cap_60 > cap_30
+
+    def test_frame_counts_are_the_fallback_when_seconds_are_unset(self, cfg):
+        from src.ingest.frame_selector import _stride_bounds
+
+        plain = cfg.merged({"ingest": {"frame_selection": {
+            "min_stride_seconds": None, "max_stride_seconds": None}}})
+        sel = plain.get_path("ingest.frame_selection")
+        assert _stride_bounds(sel, fps=59.94) == (int(sel["min_stride_frames"]),
+                                                  int(sel["max_stride_frames"]))
+
+    def test_unknown_frame_rate_falls_back_to_frame_counts(self, cfg):
+        from src.ingest.frame_selector import _stride_bounds
+
+        sel = cfg.get_path("ingest.frame_selection")
+        assert _stride_bounds(sel, fps=0.0) == (int(sel["min_stride_frames"]),
+                                                int(sel["max_stride_frames"]))
+
+
+class TestRollingBlurBaseline:
+    """Issue S1-7: a change of ground cover must not read as blur.
+
+    Sharpness is scene-dependent, so a whole-video threshold rejected 450
+    consecutive in-focus frames where a real clip flew over pasture. The
+    baseline follows the scene; what must survive that is the ability to still
+    reject frames that are soft *for where they are*.
+    """
+
+    def _baseline(self, cfg, video_scores):
+        from src.condition.blur import BlurProfile, RollingBaseline
+
+        profile = BlurProfile.from_samples(video_scores, cfg)
+        baseline = RollingBaseline.from_config(profile, cfg)
+        assert baseline is not None, "rolling baseline is enabled in the default config"
+        return profile, baseline
+
+    def _run(self, profile, baseline, scores):
+        rejected = []
+        for i, score in enumerate(scores):
+            reject, _, _ = baseline.thresholds(profile)
+            baseline.observe(score)
+            if score < reject:
+                rejected.append(i)
+        return rejected
+
+    def _flight(self):
+        # A clip that flies from textured ground (~2800) onto plain pasture
+        # (~1400). Proportions matter: the real clip was ~2/3 textured, which
+        # puts the whole-video outlier line above the pasture population.
+        rng = np.random.default_rng(7)
+        return rng, list(rng.normal(2800, 60, 200)), list(rng.normal(1400, 40, 100))
+
+    def test_the_whole_video_threshold_reproduces_the_bug(self, cfg):
+        _, textured, pasture = self._flight()
+        profile, _ = self._baseline(cfg, textured + pasture)
+        assert profile.reject_threshold > max(pasture)
+
+    def test_a_gradual_change_of_ground_cover_is_not_rejected(self, cfg):
+        # What a drone actually sees: content changes over a second or two.
+        rng, textured, pasture = self._flight()
+        ramp = list(np.linspace(2800, 1400, 60) + rng.normal(0, 50, 60))
+        profile, baseline = self._baseline(cfg, textured + pasture)
+        rejected = self._run(profile, baseline, textured + ramp + pasture)
+        assert rejected == [], f"{len(rejected)} in-focus frames rejected across the transition"
+
+    def test_a_hard_cut_costs_at_most_half_a_window(self, cfg):
+        # The worst case for any trailing baseline: an instant 50% step. It
+        # rejects until the window's median crosses over, and no longer.
+        _, textured, pasture = self._flight()
+        profile, baseline = self._baseline(cfg, textured + pasture)
+        rejected = self._run(profile, baseline, textured + pasture)
+        assert len(rejected) <= baseline.window // 2 + 1, f"{len(rejected)} frames lost to one scene cut"
+        assert all(i >= len(textured) for i in rejected), "textured frames rejected before the cut"
+
+    def test_genuine_dips_inside_a_low_texture_stretch_are_rejected(self, cfg):
+        _, textured, pasture = self._flight()
+        profile, baseline = self._baseline(cfg, textured + pasture)
+        dips = [0.4 * 1400.0] * 5
+        scores = pasture[:50] + dips + pasture[50:]
+        rejected = self._run(profile, baseline, scores)
+        assert set(range(50, 55)) <= set(rejected), "blurred frames survived the local test"
+        warmup = [i for i in rejected if i < 50]
+        assert len(warmup) <= baseline.min_samples, f"{len(warmup)} warm-up frames rejected"
+
+    def test_the_hard_floor_survives_a_long_blurred_run(self, cfg):
+        # The failure mode of any adaptive threshold: feed it nothing but blur
+        # and it normalises the blur. The floor is a fraction of the whole-video
+        # median, so the window cannot argue its way below it.
+        rng = np.random.default_rng(7)
+        profile, baseline = self._baseline(cfg, list(rng.normal(2000, 80, 300)))
+        for _ in range(baseline.window * 2):
+            baseline.observe(30.0)
+        reject, _, _ = baseline.thresholds(profile)
+        assert reject == pytest.approx(baseline.hard_floor)
+        assert 30.0 < baseline.hard_floor, "a wholly blurred window must still reject"
+
+    def test_detected_motion_smear_is_held_to_the_whole_video_line(self, cfg):
+        # Anisotropy is a detection. A window diluted by a nearby soft stretch
+        # must not lower the bar for a frame already identified as smeared —
+        # found on the blurry synthetic flight, where frame 45 (anisotropy 9.07,
+        # score 147) passed a local line of ~150 against a whole-video 188.7.
+        rng = np.random.default_rng(7)
+        profile, baseline = self._baseline(cfg, list(rng.normal(250, 20, 200)))
+        for score in rng.normal(110, 5, baseline.window):
+            baseline.observe(score)
+        _, directional, _ = baseline.thresholds(profile)
+        assert directional >= profile.directional_reject_threshold
