@@ -46,6 +46,7 @@ from src.core.config import Config
 from src.core.device import chunk_frames_for_memory, device_info
 from src.core.logging import get_logger, log_event, setup_logging
 from src.core.manifest import RunManifest, StageStatus
+from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
 from src.ingest.telemetry import TelemetryTable, load_telemetry
 from src.ingest.video_reader import VideoReader
@@ -94,12 +95,18 @@ class RunResult:
 def run_ingest(
     inputs: RunInputs, cfg: Config, out_dir: Path, budget_stage: Any = None
 ) -> dict[str, Any]:
-    """Decode, profile, select frames, and resolve telemetry (spec §4).
+    """Decode, profile, select frames, and parse telemetry (spec §4).
+
+    Telemetry is written *as parsed*. GPS outlier rejection and smoothing are
+    §5.6 — Stage 2 — and run in the conditioning stage, so Stage 1 output is a
+    faithful record of the input that Stage 2 improvements can be measured
+    against.
 
     Returns a dict of artifact paths and metrics for the caller to register.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     ingest_cfg = cfg.get_path("ingest")
+    timing: dict[str, float] = {}
 
     with VideoReader(
         inputs.video,
@@ -112,44 +119,54 @@ def run_ingest(
         if bool(ingest_cfg["frame_selection"]["prefer_keyframes"]):
             keyframes = reader.keyframe_indices()
 
+        started = time.monotonic()
         profile = profile_video_blur(reader, cfg)
+        timing["profile_s"] = time.monotonic() - started
+        started = time.monotonic()
         selection = select_frames(reader, cfg, profile, keyframes=keyframes, budget=budget_stage)
+        timing["select_s"] = time.monotonic() - started
+        # Seconds inside VideoCapture during profiling + selection (a subset of the two above).
+        timing["decode_s"] = reader.decode_s
 
     selection_path = selection.save(out_dir / "frames.parquet")
+    evaluations_path = out_dir / "blur_evaluations.parquet"
+    selection.evaluations_frame().to_parquet(evaluations_path, index=False)
 
     # Telemetry comes after selection so EXIF, the lowest-priority source, can
     # be read from the frames that were actually kept.
+    started = time.monotonic()
     telemetry = load_telemetry(
         inputs.video, cfg, srt_path=inputs.srt, csv_path=inputs.csv,
-        frame_timestamps=selection.timestamps,
+        frame_timestamps=selection.timestamps, video_duration_s=metadata.duration_s,
     )
-    filtered, gps_report = filter_telemetry(telemetry, cfg)
-    telemetry_path = filtered.to_parquet(out_dir / "telemetry.parquet")
+    telemetry_path = telemetry.to_parquet(out_dir / "telemetry.parquet")
 
     # Telemetry resampled onto the kept frames — this is what every later stage
     # actually consumes, so it is materialised once here.
-    per_frame = filtered.at_times(selection.timestamps)
+    per_frame = telemetry.at_times(selection.timestamps)
     per_frame.insert(0, "frame_index", selection.indices)
     per_frame_path = out_dir / "frame_telemetry.parquet"
     per_frame.to_parquet(per_frame_path, index=False)
+    timing["telemetry_s"] = time.monotonic() - started
 
     metrics = {
         "video": metadata.to_dict(),
         "selection": selection.summary(),
-        "telemetry": filtered.summary(),
-        "gps_filter": gps_report.to_dict(),
-        "track_length_m": round(track_length_m(filtered), 1),
-        "scale_free": filtered.scale_free,
+        "telemetry": telemetry.summary(),
+        "track_length_m": round(track_length_m(telemetry), 1),
+        "scale_free": telemetry.scale_free,
+        "timing": {k: round(v, 3) for k, v in timing.items()},
     }
     return {
         "artifacts": {
             "frames": selection_path,
+            "blur_evaluations": evaluations_path,
             "telemetry": telemetry_path,
             "frame_telemetry": per_frame_path,
         },
         "metrics": metrics,
         "selection": selection,
-        "telemetry_table": filtered,
+        "telemetry_table": telemetry,
     }
 
 
@@ -161,7 +178,7 @@ def run_condition(
     cfg: Config,
     out_dir: Path,
     selection: FrameSelection,
-    per_frame_telemetry: pd.DataFrame,
+    telemetry: TelemetryTable,
     budget_stage: Any = None,
 ) -> dict[str, Any]:
     """Apply the §5 conditioning layer to the selected frames.
@@ -183,6 +200,12 @@ def run_condition(
 
     enabled = bool(cfg.get_path("condition.enabled"))
     ingest_cfg = cfg.get_path("ingest")
+
+    # §5.6 GPS conditioning on the raw telemetry Stage 1 parsed.
+    filtered, gps_report = filter_telemetry(telemetry, cfg)
+    filtered_path = filtered.to_parquet(out_dir / "telemetry_filtered.parquet")
+    per_frame_telemetry = filtered.at_times(selection.timestamps)
+    per_frame_telemetry.insert(0, "frame_index", selection.indices)
     exposure_chain = ExposureChain(cfg)
     masker = DynamicMasker(cfg)
 
@@ -287,8 +310,12 @@ def run_condition(
         "dynamic_unavailable_reason": masker.unavailable_reason,
         "blockiness_mean": round(float(np.mean(blockiness_scores)), 3) if blockiness_scores else None,
         "mean_weight": round(float(frame_table["weight"].mean()), 3) if len(frame_table) else None,
+        "gps_filter": gps_report.to_dict(),
     }
-    artifacts = {"images": image_dir, "masks": mask_dir, "conditioned": table_path}
+    artifacts = {
+        "images": image_dir, "masks": mask_dir, "conditioned": table_path,
+        "telemetry_filtered": filtered_path,
+    }
     if geo_path is not None:
         artifacts["geo"] = geo_path
     return {"artifacts": artifacts, "metrics": metrics}
@@ -388,7 +415,9 @@ def run_pipeline(
         device=manifest.environment.get("device"),
     )
 
-    wanted = set(stages) if stages else None
+    # Without an explicit request, run only what the stage registry marks as
+    # built, so half-finished stages never contaminate a run.
+    wanted = set(stages) if stages else set(built_manifest_stages())
 
     def should(name: str) -> bool:
         if wanted is not None and name not in wanted:
@@ -420,10 +449,10 @@ def run_pipeline(
             raise RuntimeError("conditioning needs a completed ingest stage")
         if selection is None:
             selection = load_selection(manifest.artifact("ingest", "frames"))
-        per_frame = pd.read_parquet(manifest.artifact("ingest", "frame_telemetry"))
+        raw_telemetry = TelemetryTable.from_parquet(manifest.artifact("ingest", "telemetry"))
 
         with budget.stage("condition") as sb, manifest.stage("condition") as st:
-            outcome = run_condition(inputs, cfg, st.dir, selection, per_frame, budget_stage=sb)
+            outcome = run_condition(inputs, cfg, st.dir, selection, raw_telemetry, budget_stage=sb)
             for key, path in outcome["artifacts"].items():
                 st.add_artifact(key, path)
             st.add_metrics(outcome["metrics"])
@@ -440,22 +469,21 @@ def run_pipeline(
     # These stages are wired but not yet implemented; each records why it did
     # not run so the manifest and QA report stay truthful about what produced
     # the outputs rather than silently showing fewer stages.
-    pending = {
-        "track_b": "Track B feed-forward reconstruction is not yet implemented",
-        "refine_ba": "the refinement bridge is not yet implemented",
-        "track_a": "Track A (OpenDroneMap) integration is not yet implemented",
-        "fusion": "the occlusion engine is not yet implemented",
-        "geo": "georeferencing is not yet implemented",
-        "export": "the export layer is not yet implemented",
-        "qa": "the QA harness is not yet implemented",
-    }
-    for name, reason in pending.items():
-        if wanted is not None and name not in wanted:
-            continue
-        if manifest.stages[name].status is StageStatus.DONE:
-            continue
-        manifest.mark_skipped(name, reason)
-        result.skipped_stages[name] = reason
+    implemented = {"ingest", "condition"}
+    for spec in STAGES:
+        for name in spec.manifest_stages:
+            if name in result.completed_stages or manifest.stages[name].status is StageStatus.DONE:
+                continue
+            if name in wanted and name in implemented:
+                continue
+            reason = (
+                f"Stage {spec.number} ({spec.title}, {spec.spec_ref}) is {spec.status.value}"
+                + ("" if name in implemented else "; not implemented yet")
+            )
+            if not spec.is_built and name in implemented:
+                reason += " — not run by default; request it with --stage"
+            manifest.mark_skipped(name, reason)
+            result.skipped_stages[name] = reason
 
     manifest.summary = {
         "budget": budget.summary(),

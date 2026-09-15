@@ -15,6 +15,7 @@ kernel or a known GPS perturbation to a known-clean input is what turns
 from __future__ import annotations
 
 import math
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -278,3 +279,148 @@ def write_flight_csv(
         rows.append(f"{t:.3f},{lat0:.6f},{lon:.6f},{920.0:.2f},{60.0:.2f},{12.3:.1f}")
     path.write_text("\n".join(rows), encoding="utf-8")
     return path
+
+
+def write_dji_flight_record(
+    path: Path | str,
+    samples: int = 300,
+    rate_hz: float = 10.0,
+    recordings: tuple[tuple[float, float], ...] = ((5.0, 15.0),),
+    lat0: float = 12.9716,
+    lon0: float = 77.5946,
+    speed_mps: float = 5.0,
+    height_m: float = 60.0,
+    gimbal_pitch: float = -90.0,
+    version: int = 8,
+) -> Path:
+    """A binary DJIFlightRecord in the v8 layout: scrambled OSD/gimbal records at
+    ``rate_hz`` and a camera record once per second whose flag marks ``recordings``."""
+    from src.ingest.dji_flight_record import RECORD_CAMERA, RECORD_GIMBAL, RECORD_OSD, scramble
+
+    path = Path(path)
+    metres_per_degree = 111320.0
+    body = bytearray()
+
+    def record(record_type: int, plain: bytes, index: int) -> None:
+        payload = scramble(plain, record_type, key_byte=(index * 37 + record_type) & 0xFF)
+        body.extend(bytes([record_type, len(payload)]) + payload + b"\xff")
+
+    per_second = max(1, int(round(rate_hz)))
+    for i in range(samples):
+        fly = i / rate_hz
+        if i % per_second == 0:
+            camera = bytearray(27)
+            camera[0] = 0xC0 if any(s <= fly < e for s, e in recordings) else 0x00
+            record(RECORD_CAMERA, bytes(camera), i)
+        record(RECORD_GIMBAL, struct.pack("<hhh", int(round(gimbal_pitch * 10)), 0, 0) + bytes(6), i)
+        osd = bytearray(53)
+        lon = lon0 + (speed_mps * fly) / (metres_per_degree * math.cos(math.radians(lat0)))
+        struct.pack_into("<dd", osd, 0, math.radians(lon), math.radians(lat0))
+        struct.pack_into("<h", osd, 16, int(round(height_m * 10)))
+        osd[33], osd[34], osd[36] = 0x80, 5 << 2, 17
+        struct.pack_into("<H", osd, 42, int(round(fly * 10)))
+        record(RECORD_OSD, bytes(osd), i)
+
+    prefix = bytearray(100)
+    struct.pack_into("<QHB", prefix, 0, 100 + len(body), 400, version)
+    path.write_bytes(bytes(prefix) + bytes(body) + bytes(400))
+    return path
+
+
+# --------------------------------------------------------------------------
+# Ground truth — lets the Stage Lab score a stage against known answers
+# --------------------------------------------------------------------------
+METRES_PER_DEGREE_LAT = 111320.0
+SRT_DIALECTS = ("modern", "legacy", "bare", "csv", "none")
+
+
+def truth_path_for(video_path: Path | str) -> Path:
+    """Ground truth lives next to the video as ``<stem>.truth.json``."""
+    video_path = Path(video_path)
+    return video_path.with_name(video_path.stem + ".truth.json")
+
+
+def load_ground_truth(video_path: Path | str) -> dict | None:
+    """Return the ground truth for a generated video, or None for real footage."""
+    import json
+
+    path = truth_path_for(video_path)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def true_lonlat(truth: dict, t: float, lat0: float | None = None) -> tuple[float, float]:
+    """Exact lon/lat the telemetry generator wrote for time ``t`` (seconds)."""
+    lat0 = truth["lat0"] if lat0 is None else lat0
+    lon = truth["lon0"] + (truth["speed_mps"] * t) / (METRES_PER_DEGREE_LAT * math.cos(math.radians(lat0)))
+    return lon, lat0
+
+
+def true_pair_overlap(truth: dict, index_a: int, index_b: int) -> float:
+    """True overlap between two frames of a constant-velocity synthetic pan."""
+    shift = abs(index_b - index_a) * truth["step_px"]
+    return max(0.0, 1.0 - shift / truth["width"])
+
+
+def generate_synthetic_flight(
+    out_dir: Path | str,
+    name: str = "synthetic_flight",
+    frames: int = 150,
+    width: int = 640,
+    height: int = 480,
+    fps: float = 30.0,
+    overlap: float = 0.92,
+    blur_every: int | None = 11,
+    blur_length: int = 25,
+    seed: int = 5,
+    telemetry: str = "modern",
+    speed_mps: float = 6.0,
+) -> tuple[Path, Path | None, Path]:
+    """Render a flight, its telemetry sidecar, and a ground-truth JSON.
+
+    Returns ``(video_path, sidecar_path_or_None, truth_path)``. ``telemetry`` is
+    one of :data:`SRT_DIALECTS`; "none" exercises the scale-free path.
+    """
+    import json
+
+    if telemetry not in SRT_DIALECTS:
+        raise ValueError(f"telemetry must be one of {SRT_DIALECTS}")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    flight = make_flight_video(
+        out_dir / f"{name}.mp4", frames=frames, width=width, height=height, fps=fps,
+        overlap=overlap, blur_every=blur_every, blur_length=blur_length, seed=seed,
+    )
+
+    sidecar: Path | None = None
+    if telemetry == "modern":
+        sidecar = write_srt_modern(out_dir / f"{name}.SRT", frames, fps, flight.lat0, flight.lon0, speed_mps)
+    elif telemetry == "legacy":
+        sidecar = write_srt_legacy(out_dir / f"{name}.SRT", frames, fps, flight.lat0, flight.lon0, speed_mps)
+    elif telemetry == "bare":
+        # The bare OSD dialect in this module flies at a fixed 4 m/s.
+        speed_mps = 4.0
+        sidecar = write_srt_bare(out_dir / f"{name}.SRT", frames, fps, flight.lat0, flight.lon0)
+    elif telemetry == "csv":
+        speed_mps = 5.0
+        sidecar = write_flight_csv(out_dir / f"{name}.csv", frames, fps, flight.lat0, flight.lon0)
+
+    truth = {
+        "kind": "synthetic_flight",
+        "frame_count": frames,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "step_px": flight.step_px,
+        "true_overlap_per_frame": overlap,
+        "blurred_indices": flight.blurred_indices,
+        "lat0": flight.lat0,
+        "lon0": flight.lon0,
+        "speed_mps": speed_mps if telemetry != "none" else None,
+        "telemetry": telemetry,
+        "seed": seed,
+    }
+    truth_file = truth_path_for(flight.video_path)
+    truth_file.write_text(json.dumps(truth, indent=2), encoding="utf-8")
+    return flight.video_path, sidecar, truth_file

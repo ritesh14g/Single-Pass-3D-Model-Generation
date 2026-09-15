@@ -23,6 +23,7 @@ Two access patterns are supported, because frame selection needs both:
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -105,6 +106,11 @@ class VideoReader:
         self._position = 0
         self._hardware_requested = hardware_decode
         self._hardware_active = False
+        # Cumulative seconds spent inside VideoCapture read/grab/seek. Survives
+        # close() so a profiling pass and a selection pass on one reader add up.
+        # This is what separates decode cost from analysis cost in the Stage 1
+        # speed KPI — on 4K footage they scale very differently.
+        self.decode_s = 0.0
         self.metadata = self._probe()
 
     # -- Lifecycle ----------------------------------------------------------
@@ -196,6 +202,13 @@ class VideoReader:
         return meta
 
     # -- Frame access -------------------------------------------------------
+    def _timed(self, call, *args):
+        started = time.perf_counter()
+        try:
+            return call(*args)
+        finally:
+            self.decode_s += time.perf_counter() - started
+
     def _postprocess(self, image: np.ndarray) -> np.ndarray:
         if self.max_width and image.shape[1] > self.max_width:
             scale = self.max_width / image.shape[1]
@@ -228,7 +241,7 @@ class VideoReader:
         index = max(start, self._position)
         yielded = 0
         while True:
-            ok, image = cap.read()
+            ok, image = self._timed(cap.read)
             if not ok:
                 break
             timestamp = self._timestamp(index)
@@ -238,7 +251,7 @@ class VideoReader:
             if max_frames is not None and yielded >= max_frames:
                 return
             for _ in range(step - 1):
-                if not cap.grab():
+                if not self._timed(cap.grab):
                     return
                 index += 1
                 self._position = index
@@ -249,11 +262,11 @@ class VideoReader:
         cap = self.cap
         gap = target - self._position
         if gap < 0 or gap > SEEK_THRESHOLD_FRAMES:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, float(target))
+            self._timed(cap.set, cv2.CAP_PROP_POS_FRAMES, float(target))
             self._position = target
             return
         for _ in range(gap):
-            if not cap.grab():
+            if not self._timed(cap.grab):
                 break
             self._position += 1
 
@@ -273,7 +286,7 @@ class VideoReader:
                           index=index, frame_count=self.metadata.frame_count)
                 continue
             self._skip_to(index)
-            ok, image = cap.read()
+            ok, image = self._timed(cap.read)
             if not ok:
                 log_event(log, logging.WARNING, "decode failed; skipping frame", index=index)
                 continue

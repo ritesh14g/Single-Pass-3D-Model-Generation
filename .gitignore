@@ -19,3 +19,6 @@ weights/
 
 *.log
 .DS_Store
+
+# Stage Lab runs, synthetic inputs, uploads, history
+data/lab/
