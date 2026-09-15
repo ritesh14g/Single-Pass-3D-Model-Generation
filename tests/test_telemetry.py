@@ -110,6 +110,42 @@ class TestCsv:
         assert table.is_empty
 
 
+class TestTxt:
+    def test_whitespace_delimited_txt_with_header(self, tmp_path, cfg):
+        path = tmp_path / "log.txt"
+        path.write_text("time lat lon\n0.0 12.9716 77.5946\n1.0 12.9717 77.5947\n", encoding="utf-8")
+        column_map = cfg.get_path("ingest.telemetry.csv_column_map").to_dict()
+        table = parse_flight_csv(path, column_map)
+
+        assert len(table) == 2
+        assert table.has_gps
+        assert table.frame["lat"].iloc[0] == pytest.approx(12.9716)
+
+    def test_headerless_txt_gps_dump_uses_positional_order(self, tmp_path, cfg):
+        path = tmp_path / "gps.txt"
+        path.write_text("12.9716,77.5946,920.0\n12.9717,77.5947,921.0\n12.9718,77.5948,922.0\n",
+                         encoding="utf-8")
+        column_map = cfg.get_path("ingest.telemetry.csv_column_map").to_dict()
+        headerless_order = cfg.get_path("ingest.telemetry.headerless_column_order")
+        table = parse_flight_csv(path, column_map, headerless_order=headerless_order)
+
+        assert len(table) == 3
+        assert table.has_gps
+        assert table.frame["lat"].iloc[0] == pytest.approx(12.9716)
+        assert table.frame["lon"].iloc[0] == pytest.approx(77.5946)
+        assert table.frame["alt_gps"].iloc[0] == pytest.approx(920.0)
+        assert any("positionally" in note for note in table.notes)
+
+    def test_load_telemetry_finds_a_txt_sidecar(self, tmp_path, cfg):
+        video = tmp_path / "DJI_0030.MP4"
+        video.write_bytes(b"x")
+        (tmp_path / "DJI_0030.txt").write_text(
+            "12.9716,77.5946\n12.9717,77.5947\n12.9718,77.5948\n", encoding="utf-8"
+        )
+        table = load_telemetry(video, cfg)
+        assert table.has_gps
+
+
 class TestLoadTelemetry:
     def test_finds_the_sidecar_next_to_the_video(self, tmp_path, cfg):
         video = tmp_path / "DJI_0010.MP4"

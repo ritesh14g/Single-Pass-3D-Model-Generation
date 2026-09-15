@@ -3,7 +3,8 @@
 Priority order, each level degrading into the next without crashing:
 
   1. DJI ``.SRT`` sidecar — per-frame GPS, altitude, gimbal attitude, focal length.
-  2. Separate flight-log CSV — column auto-detection driven by config.
+  2. Separate flight-log CSV/TXT — delimiter and column auto-detection, with a
+     positional fallback for headerless numeric files (bare "lat, lon" dumps).
   3. EXIF GPS on extracted frames.
   4. Nothing at all — the pipeline still runs and produces a **scale-free**
      model, and says so loudly in the QA report. This path must not crash.
@@ -423,22 +424,48 @@ def _normalize_units(table: TelemetryTable) -> TelemetryTable:
 
 
 # --------------------------------------------------------------------------
-# Flight-log CSV
+# Flight-log CSV / TXT
 # --------------------------------------------------------------------------
-def parse_flight_csv(path: Path | str, column_map: Mapping[str, Sequence[str]]) -> TelemetryTable:
-    """Parse a flight-log CSV, auto-detecting columns from the config map."""
+_CANONICAL_LOG_FIELDS = ("t", "lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm")
+
+
+def parse_flight_csv(
+    path: Path | str,
+    column_map: Mapping[str, Sequence[str]],
+    headerless_order: Sequence[str] = ("lat", "lon", "alt_gps"),
+) -> TelemetryTable:
+    """Parse a flight-log CSV/TXT, auto-detecting delimiter and columns.
+
+    Covers the three shapes a flight-log sidecar shows up in: a comma header
+    row (the common ground-station export), the same with a different
+    delimiter (tab/space/semicolon, as hand-exported ``.txt`` GPS dumps often
+    use), and a bare numeric file with no header at all — whose columns are
+    then assigned positionally from ``headerless_order`` rather than guessed.
+    """
     path = Path(path)
     try:
-        frame = pd.read_csv(path)
-    except Exception as exc:  # noqa: BLE001 - a malformed CSV is a downgrade, not a crash
-        log_downgrade(log, f"flight CSV {path.name}", "next telemetry source", f"{type(exc).__name__}: {exc}")
+        frame = pd.read_csv(path, sep=None, engine="python")
+    except Exception as exc:  # noqa: BLE001 - a malformed log is a downgrade, not a crash
+        log_downgrade(log, f"flight log {path.name}", "next telemetry source", f"{type(exc).__name__}: {exc}")
         return TelemetryTable.empty(f"could not read {path.name}: {exc}")
 
-    resolved = resolve_csv_columns(frame.columns, column_map)
+    headerless = _looks_headerless(frame.columns)
+    if headerless:
+        try:
+            frame = pd.read_csv(path, sep=None, engine="python", header=None)
+        except Exception as exc:  # noqa: BLE001
+            log_downgrade(log, f"flight log {path.name}", "next telemetry source", f"{type(exc).__name__}: {exc}")
+            return TelemetryTable.empty(f"could not read {path.name}: {exc}")
+        frame.columns = [
+            headerless_order[i] if i < len(headerless_order) else f"col{i}" for i in range(frame.shape[1])
+        ]
+        resolved = {c: c for c in frame.columns if c in _CANONICAL_LOG_FIELDS}
+    else:
+        resolved = resolve_csv_columns(frame.columns, column_map)
 
     if "lat" not in resolved or "lon" not in resolved:
         note = f"{path.name} has no recognisable latitude/longitude columns (saw {list(frame.columns)[:12]})"
-        log_downgrade(log, f"flight CSV {path.name}", "next telemetry source", note)
+        log_downgrade(log, f"flight log {path.name}", "next telemetry source", note)
         return TelemetryTable.empty(note)
 
     out = pd.DataFrame()
@@ -449,10 +476,27 @@ def parse_flight_csv(path: Path | str, column_map: Mapping[str, Sequence[str]]) 
 
     records = out.to_dict("records")
     table = TelemetryTable.from_records(records, source=f"csv:{path.name}")
-    table.notes.append(f"columns resolved: {resolved}")
+    if headerless:
+        table.notes.append(f"no header row detected; columns assigned positionally as {list(resolved)}")
+    else:
+        table.notes.append(f"columns resolved: {resolved}")
     log_event(log, logging.INFO, f"parsed {len(table)} telemetry rows from {path.name}",
-              source="csv", rows=len(table), resolved=resolved)
+              source="csv", rows=len(table), resolved=resolved, headerless=headerless)
     return table
+
+
+def _looks_headerless(columns: Iterable[Any]) -> bool:
+    """True when the "header" row is actually numeric data, not field names.
+
+    A bare GPS dump (``12.9716,77.5946`` per line, no column names) parses its
+    first row as a header of two floats; treat a majority-numeric header as a
+    sign there is no header at all, so it can be re-read positionally.
+    """
+    values = list(columns)
+    if not values:
+        return False
+    numeric = sum(1 for v in values if _to_float(str(v)) is not None)
+    return numeric / len(values) >= 0.6
 
 
 def _csv_time_column(frame: pd.DataFrame, column: str | None, path: Path) -> pd.Series:
@@ -643,6 +687,7 @@ def load_telemetry(
     csv_path: Path | str | None = None,
     frame_paths: Sequence[Path] | None = None,
     frame_timestamps: Sequence[float] | None = None,
+    video_duration_s: float | None = None,
 ) -> TelemetryTable:
     """Load telemetry by the §4.2 priority order, filling gaps from lower tiers.
 
@@ -656,6 +701,7 @@ def load_telemetry(
     column_map = cfg.get_path("ingest.telemetry.csv_column_map", {})
     if hasattr(column_map, "to_dict"):
         column_map = column_map.to_dict()
+    headerless_order = list(cfg.get_path("ingest.telemetry.headerless_column_order", ["lat", "lon", "alt_gps"]))
 
     primary: TelemetryTable | None = None
     for source in sources:
@@ -667,11 +713,19 @@ def load_telemetry(
             else:
                 table = parse_dji_srt(path)
         elif source == "csv":
-            path = Path(csv_path) if csv_path else find_sidecar(video_path, [".csv"])
+            path = Path(csv_path) if csv_path else find_sidecar(video_path, [".csv", ".txt"])
             if path is None:
-                log_event(log, logging.INFO, "no flight-log CSV found", video=video_path.name)
+                log_event(log, logging.INFO, "no flight-log CSV/TXT found", video=video_path.name)
             else:
-                table = parse_flight_csv(path, column_map)
+                # Imported here: dji_flight_record builds on TelemetryTable from this module.
+                from src.ingest.dji_flight_record import is_dji_flight_record, parse_dji_flight_record
+
+                if is_dji_flight_record(path):
+                    settings = cfg.get_path("ingest.telemetry.flight_record")
+                    settings = settings.to_dict() if hasattr(settings, "to_dict") else dict(settings)
+                    table = parse_dji_flight_record(path, video_duration_s=video_duration_s, **settings)
+                else:
+                    table = parse_flight_csv(path, column_map, headerless_order=headerless_order)
         elif source == "exif":
             if frame_paths:
                 table = parse_exif(frame_paths, frame_timestamps)
