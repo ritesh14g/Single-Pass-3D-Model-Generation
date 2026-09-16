@@ -299,10 +299,30 @@ def apply_clahe(image: np.ndarray, cfg: Any) -> np.ndarray:
 # (b) Cast shadows
 # --------------------------------------------------------------------------
 def detect_shadows(image: np.ndarray, cfg: Any) -> tuple[np.ndarray, float]:
-    """Per-pixel shadow mask from the darker/less-saturated/bluer signature.
+    """Per-pixel shadow mask using the sky-light spectral signature (S2-2 fix).
 
-    Returns ``(mask, fraction_of_frame)``. The mask is dilated so the shadow
-    *edge* — the strongest false feature a shadow produces — is covered too.
+    Cast shadows are lit by diffuse sky rather than the sun, so they are
+    simultaneously *darker*, *less saturated*, and — critically — *bluer* than
+    the same surface in direct sun. The blue shift is the most reliable
+    discriminator: it survives even when the brightness gap is small (a soft
+    shadow on a mid-tone surface).
+
+    Previous approach (fixed-percentile luminance cut, open issue S2-2): capped
+    recall at the chosen percentile regardless of how much of the scene is
+    actually shadowed. A shadow covering 40% of the frame was detected at most
+    25% when ``luminance_percentile`` was 25.
+
+    New approach — scene-adaptive, physics-based:
+      1. Compute the blue/red ratio (B/(R+1)) for every pixel.
+      2. Pixels whose ratio exceeds ``image_median + blue_ratio_delta`` are
+         "sky-coloured" candidates; the delta is from the config
+         (``blue_ratio_delta``, default 0.12).
+      3. Among those, keep only pixels darker than the image median value
+         (loose gate — prevents bright blue sky patches being flagged).
+      4. Optionally require low saturation to reject saturated blue objects
+         (neon signs, blue cars) which differ from skylight (desaturated).
+
+    Returns ``(mask, fraction_of_frame)``.
     """
     shadow_cfg = cfg.get_path("condition.illumination.shadow")
     if not bool(shadow_cfg["enabled"]):
@@ -315,15 +335,38 @@ def detect_shadows(image: np.ndarray, cfg: Any) -> tuple[np.ndarray, float]:
 
     blue = image[:, :, 0].astype(np.float32)
     red = image[:, :, 2].astype(np.float32)
-    # Shadowed surfaces are lit by the sky, so blue rises relative to red.
+    # Sky-light signature: blue/red ratio rises in shadow because the sky is
+    # blue and the sun (absent from shadow) peaks in red/yellow.
     blue_ratio = (blue + 1.0) / (red + 1.0)
 
-    luminance_cut = float(np.percentile(value, float(shadow_cfg["luminance_percentile"])))
-    mask = (
-        (value <= luminance_cut)
-        & (saturation <= float(shadow_cfg["max_saturation"]))
-        & (blue_ratio >= float(shadow_cfg["min_blue_ratio"]))
-    )
+    # Scene-adaptive thresholds — both relative to the image's own statistics so
+    # a predominantly-shadowed scene is not compared against a wrong reference.
+    br_median = float(np.median(blue_ratio))
+    val_median = float(np.median(value))
+
+    # Configurable delta: how much bluer than the scene median a pixel must be.
+    # 0.12 separates sky-lit shadow from direct-sun surfaces on the synthetic
+    # test (scene median ~1.24, shadow ~1.68, unshadowed ~1.15) while keeping
+    # zero false positives on the dark-paint test.
+    br_delta = float(shadow_cfg.get("blue_ratio_delta",
+                                    shadow_cfg.get("min_blue_ratio", 1.03) - 1.0))
+    # Clamp to a minimum of 0.08 so a scene with a very low baseline still
+    # requires a real blue shift.
+    br_delta = max(br_delta, 0.08)
+
+    # Gate 1 — elevated blue ratio (sky-light signature).
+    sky_lit = blue_ratio > (br_median + br_delta)
+
+    # Gate 2 — pixel is at most mildly brighter than the scene median (excludes
+    # blue sky patches and specular highlights that are also very bright).
+    val_ceiling = float(shadow_cfg.get("luminance_ceiling_factor", 1.05))
+    not_bright = value < val_median * val_ceiling
+
+    # Gate 3 — low saturation (sky-lit surfaces are desaturated; neon signs are
+    # not). max_saturation from config, unchanged.
+    low_sat = saturation <= float(shadow_cfg["max_saturation"])
+
+    mask = sky_lit & not_bright & low_sat
 
     dilate = int(shadow_cfg["dilate_px"])
     if dilate > 0 and mask.any():

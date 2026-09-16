@@ -102,7 +102,6 @@ class TestArtifacts:
         assert assessment.needs_correction
         assert assessment.dominant_block_size in (8, 16)
 
-    @pytest.mark.xfail(reason="Stage 2 open issue S2-1 (DEVLOG): bilateral params do not reduce strong synthetic blocking", strict=False)
     def test_suppression_reduces_blockiness(self, scene, cfg):
         blocked = self._blocked(scene, 8)
         before = blockiness_score(blocked, 8)
@@ -210,7 +209,6 @@ class TestShadows:
         mask[region] = True
         return np.clip(out, 0, 255).astype(np.uint8), mask
 
-    @pytest.mark.xfail(reason="Stage 2 open issue S2-2 (DEVLOG): fixed-percentile luminance cut caps shadow recall", strict=False)
     def test_finds_a_synthetic_shadow(self, scene, cfg):
         shadowed, truth = self._shadowed(scene)
         detected, fraction = detect_shadows(shadowed, cfg)

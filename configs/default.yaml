@@ -229,10 +229,17 @@ condition:
       tile_grid: [8, 8]
     shadow:
       enabled: true
-      # Shadow = low luminance AND low saturation AND elevated blue ratio.
-      luminance_percentile: 25
+      # Shadow = elevated blue/red ratio AND low saturation AND not too bright.
+      # The primary discriminator is the blue-ratio shift: sky-lit shadow is
+      # bluer than direct-sun by a measurable amount even when the brightness
+      # difference is small. blue_ratio_delta is the minimum shift above the
+      # scene median required (fixes S2-2: the old fixed-percentile luminance cut
+      # capped recall at the chosen percentile fraction of pixels).
+      blue_ratio_delta: 0.12
       max_saturation: 0.45
-      min_blue_ratio: 1.03
+      # Pixels whose value > median * luminance_ceiling_factor are excluded:
+      # bright blue sky patches and specular highlights are not cast shadows.
+      luminance_ceiling_factor: 1.05
       dilate_px: 5
       # Photo-consistency weight applied to shadow pixels during MVS.
       mvs_weight: 0.35

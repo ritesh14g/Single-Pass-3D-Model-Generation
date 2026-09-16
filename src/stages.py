@@ -58,7 +58,7 @@ STAGES: tuple[StageSpec, ...] = (
     StageSpec(
         number=2, key="condition", title="Conditioning", spec_ref="§5",
         summary="Blur correction, compression artifacts, exposure/shadows/low light, dynamic objects, GPS noise.",
-        status=StageStatus.IN_PROGRESS, execution_order=2,
+        status=StageStatus.BUILT, execution_order=2,
         manifest_stages=("condition",), budget_keys=("condition",),
     ),
     StageSpec(

@@ -41,9 +41,10 @@ def good_run(tmp_path_factory):
 
 
 class TestRegistry:
-    def test_stage_one_is_the_only_built_stage(self):
-        assert built_manifest_stages() == ["ingest"]
+    def test_built_stages(self):
+        assert built_manifest_stages() == ["ingest", "condition"]
         assert get_stage("ingest").status is BuildStatus.BUILT
+        assert get_stage("condition").status is BuildStatus.BUILT
 
     def test_every_manifest_stage_belongs_to_exactly_one_spec_stage(self):
         from src.core.manifest import STAGE_ORDER
@@ -56,8 +57,9 @@ class TestStageOneRun:
     def test_only_built_stages_run_by_default(self, good_run):
         manifest, *_ = good_run
         assert manifest.stages["ingest"].status is StageStatus.DONE
-        assert manifest.stages["condition"].status is StageStatus.SKIPPED
-        assert "in_progress" in manifest.stages["condition"].skip_reason
+        assert manifest.stages["condition"].status is StageStatus.DONE
+        assert manifest.stages["fusion"].status is StageStatus.SKIPPED
+        assert "planned" in manifest.stages["fusion"].skip_reason
 
     def test_telemetry_is_written_unfiltered(self, good_run):
         # GPS filtering is §5.6 (Stage 2); Stage 1 must record the input as parsed.

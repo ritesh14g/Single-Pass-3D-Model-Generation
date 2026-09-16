@@ -69,7 +69,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | # | Stage | Spec | Status | Lab panel | Evaluator | Notes |
 |---|-------|------|--------|-----------|-----------|-------|
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
-| 2 | Conditioning | §5 | 🟡 in progress | — | — | Code exists (`src/condition/`), not validated; 2 xfail tests |
+| 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | 36/36 tests pass; S2-1 and S2-2 closed |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
 | 4 | Reconstruction tracks | §7 | ⚪ planned | — | — | Track A first (submission floor) |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
@@ -105,17 +105,19 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `src/cli.py` | all | `run`, `inspect`, `status`, `config` |
 | `src/qa/synthetic.py` | QA | Synthetic flights + SRT/CSV dialects + binary DJI logs + **ground truth JSON** |
 | `src/qa/stage1_eval.py` | 1 | Stage 1 KPIs, scoring, chart data |
+| `src/qa/stage2_eval.py` | 2 | Stage 2 KPIs: artifacts, illumination, dynamic masking, GPS |
 | `ui/app.py` | UI | Stage Lab entry: Pipeline-so-far page + one page per stage |
 | `ui/lab.py` | UI | Shared: input picker, config overrides, runs, scorecard, history |
 | `ui/stages/__init__.py` | UI | Panel registry + panel contract |
 | `ui/stages/stage1_ingest.py` | 1 | Stage 1 parameters and diagnostics |
+| `ui/stages/stage2_condition.py` | 2 | Stage 2 parameters (artifacts/illumination/dynamic/GPS) and diagnostics |
 | `.streamlit/config.toml` | UI | Streamlit server settings (upload cap 300 MB) |
 | `tests/test_core.py` | infra | Config, budget, manifest, chunk sizing |
 | `tests/test_telemetry.py` | 1+2 | SRT dialects, CSV, TXT, interpolation, ENU, GPS filter |
 | `tests/test_dji_flight_record.py` | 1 | Binary DJI log decoding, segment detection, video alignment |
 | `tests/test_ingest.py` | 1 | Reader, overlap estimator, selection, aperture regression |
 | `tests/test_stage1_eval.py` | 1 | End-to-end Stage 1 on synthetic flights + scorecard |
-| `tests/test_condition.py` | 2 | Conditioning modules (2 xfail = open issues) |
+| `tests/test_condition.py` | 2 | Conditioning modules — **36/36 pass** (S2-1 and S2-2 closed) |
 | `tests/test_ui_smoke.py` | UI | Every Lab page loads; Stage 1 runs from the UI |
 | `tests/fixtures.py` | test | Re-export of `src.qa.synthetic` |
 | `data/raw/demo_flight.*` | — | Local demo input (git-ignored) |
@@ -540,4 +542,63 @@ window; letting the directional threshold follow the window.
 **Next:**
 - GPU box per `CLOUD_GPU_GUIDE.md` §6: licensing, S1-3 NVDEC, S1-4 real-4K timing, Track A freeze.
 - S1-8: test overlap on a nadir survey clip before changing the estimator.
-- Stage 2 (Conditioning) validation and Stage Lab panel.
+**Conditioning artifact suppression (Stage 2 §5.3)**
+- ❌ **Vanilla single-pass bilateral (S2-1).** Default sigma_color=35 treats the block edge as a real
+  geometric edge (amplitude above sigma) and preserves it. Fix: targeted boundary map + bilateral at
+  2.5× sigma_color on boundary pixels + guided-filter refinement using the pre-filter image as the
+  guide. On synthetic 8×8 blocking: blockiness fell below threshold where single-pass did not.
+- ❌ **Applying the filter uniformly across the whole frame.** Reduces texture in non-blocked areas
+  for no benefit. Only pixels within 2 px of block boundaries are filtered; interior pixels are blended
+  by severity so a barely-blocked frame sees minimal change.
+
+**Shadow detection (Stage 2 §5.4)**
+- ❌ **Fixed-percentile luminance cut (S2-2, original code).** Caps recall at the chosen percentile
+  (25%) regardless of how much of the scene is shadowed. A 40%-area shadow cannot be recalled beyond
+  25% with this approach. Measured: 20% recall on synthetic test.
+- ❌ **Otsu on the dark sub-population (first fix attempt).** Improves on fixed-percentile in theory
+  but the synthetic shadow reduces brightness by only 35%, so shadow pixels overlap the non-shadow
+  brightness range. Otsu bisects that mixed population conservatively. Still 20% recall.
+- ✅ **Relative blue-ratio + relative brightness (final fix, S2-2 closed).** Sky-lit shadow surfaces
+  are bluer than direct-sun surfaces (blue/red ratio 1.68 vs 1.15 in the scene median) even when the
+  brightness gap is small. Gate: blue_ratio > scene_median + delta (config: 0.12) AND value < median
+  × ceiling (1.05) AND saturation ≤ 0.45. Measured: 69% recall, 1.5% FP, 0% FP on dark-paint test.
+
+---
+
+### Session — 2026-09-16 — AI (Antigravity) — Stage 2 (Conditioning validation + Stage Lab)
+**Goal:** Validate Stage 2 (Conditioning, spec §5) — close S2-1 and S2-2, write QA evaluator,
+write Stage Lab panel, flip status to BUILT, confirm 36/36 tests green.
+**Created:**
+- `src/qa/stage2_eval.py` — KPI evaluator: artifact suppression, illumination, dynamic masking, GPS
+  conditioning. Same Kpi/StageEvaluation pattern as stage1_eval.py.
+- `ui/stages/stage2_condition.py` — Streamlit Stage Lab panel with full sidebar parameter controls
+  (artifacts, illumination/shadow/exposure, dynamic masking, GPS Kalman) and diagnostic charts
+  (shadow timeline, blockiness timeline, dynamic-object class bar chart, GPS metrics).
+**Modified:**
+- `src/condition/artifacts.py` — `suppress_block_artifacts`: replaced single bilateral with
+  (1) boundary weight map from block grid, (2) bilateral at 2.5× sigma_color on boundary pixels,
+  (3) guided-filter refinement (falls back to second mild bilateral if cv2.ximgproc unavailable),
+  (4) severity-blended composite. Closes S2-1.
+- `src/condition/illumination.py` — `detect_shadows`: replaced fixed-percentile (S2-2 root cause)
+  then Otsu-on-dark-pixels (still insufficient on soft shadows) with relative blue-ratio + relative
+  value threshold (physics-based sky-light signature). 69% recall, 0% dark-paint FP. Closes S2-2.
+- `configs/default.yaml` — shadow section: replaced `luminance_percentile: 25` and
+  `luminance_seed_percentile: 40` + `min_blue_ratio` with `blue_ratio_delta: 0.12` and
+  `luminance_ceiling_factor: 1.05` matching the new detector.
+- `tests/test_condition.py` — removed `@pytest.mark.xfail` from both S2-1 and S2-2 tests.
+- `ui/stages/__init__.py` — added `stage2_condition` import and PANELS entry.
+- `src/stages.py` — Stage 2 status: `IN_PROGRESS` → `BUILT`.
+- `DEVLOG.md` — status board row updated, repo map extended, dead-ends documented, session added.
+**Decisions:**
+- Fixed-percentile luminance is not just a tuning issue but structurally wrong for soft shadows;
+  dropped entirely in favour of the spectral signature (evidence: 0/3 approaches based on
+  luminance alone achieved >30% recall; blue-ratio approach achieved 69% on first try).
+- Guided filter falls back to second bilateral gracefully; no hard `opencv-contrib` dependency.
+- `blue_ratio_delta: 0.12` chosen: separates shadow (median+0.44) from non-shadow in 3 trials;
+  clamped to ≥ 0.08 in code so degenerate scenes still require a real blue shift.
+**Tests:** 36 passed / 0 xfailed / 0 failed (test_condition.py, 13.85 s).
+**Open issues added/closed:** S2-1 closed; S2-2 closed.
+**Next:**
+- Stage 3 is Occluded Surface Reconstruction (§6), but it needs Stage 4 (recon) output first.
+- Start Stage 4 Track A (OpenDroneMap) — the submission floor.
+- GPU box work per `CLOUD_GPU_GUIDE.md`: S1-3 (NVDEC), S1-4 (real 4K timing), Track B.

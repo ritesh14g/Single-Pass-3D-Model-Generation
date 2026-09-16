@@ -111,10 +111,27 @@ def assess_artifacts(image: np.ndarray, cfg: Any) -> ArtifactAssessment:
 
 
 def suppress_block_artifacts(image: np.ndarray, cfg: Any, assessment: ArtifactAssessment | None = None) -> np.ndarray:
-    """Edge-preserving suppression of block edges.
+    """Edge-preserving suppression of block edges (fixes S2-1).
 
     Returns the input unchanged when blockiness is below threshold: filtering a
     clean frame costs texture detail for no benefit.
+
+    Previous implementation (single bilateral pass) was not strong enough to
+    smooth *strong* synthetic blocking because the block-edge amplitude exceeded
+    the sigma_color and the filter preserved it as if it were a real edge.
+
+    New pipeline (S2-1 fix):
+    1. **Targeted bilateral** — run a small bilateral at *high* sigma_color only
+       on the pixels within a few px of the detected block boundary, so the
+       block step is treated as noise; pixels far from any boundary are untouched.
+    2. **Guided-filter refinement** — use the pre-filter image (which still
+       carries real edge positions) as the guide to recover cross-block texture
+       without re-introducing block edges. Falls back to a second mild bilateral
+       pass if cv2.ximgproc is unavailable (rare, since it ships with
+       opencv-contrib, but we must not crash).
+    3. **Blend** — mix the result with the original by the block severity, so a
+       barely-blocked frame sees little change and a heavily-blocked frame sees
+       the full correction.
     """
     artifact_cfg = cfg.get_path("condition.artifacts")
     if not bool(artifact_cfg["enabled"]):
@@ -125,15 +142,55 @@ def suppress_block_artifacts(image: np.ndarray, cfg: Any, assessment: ArtifactAs
         return image
 
     bilateral = artifact_cfg["bilateral"]
-    # Bilateral, never Gaussian: the block edge is a low-amplitude step that
-    # the range kernel treats as noise, while a real geometric edge exceeds the
-    # range sigma and survives.
-    return cv2.bilateralFilter(
-        image,
-        d=int(bilateral["diameter"]),
-        sigmaColor=float(bilateral["sigma_color"]),
-        sigmaSpace=float(bilateral["sigma_space"]),
+    block_size = assessment.dominant_block_size
+
+    # Step 1: build a boundary weight map (1 near block edges, 0 elsewhere).
+    h, w = image.shape[:2]
+    boundary = np.zeros((h, w), dtype=np.float32)
+    for bx in range(block_size, w, block_size):
+        lo = max(bx - 2, 0)
+        hi = min(bx + 3, w)
+        boundary[:, lo:hi] = 1.0
+    for by in range(block_size, h, block_size):
+        lo = max(by - 2, 0)
+        hi = min(by + 3, h)
+        boundary[lo:hi, :] = 1.0
+
+    # Step 2: bilateral at higher sigma_color so block edges read as noise.
+    sigma_color_strong = float(bilateral["sigma_color"]) * 2.5
+    sigma_space = float(bilateral["sigma_space"])
+    diameter = int(bilateral["diameter"]) + 2   # slightly wider for strong blocks
+    filtered = cv2.bilateralFilter(
+        image, d=diameter,
+        sigmaColor=sigma_color_strong,
+        sigmaSpace=sigma_space,
     )
+
+    # Step 3: guided-filter refinement, with the *pre*-filter image as guide.
+    try:
+        import cv2.ximgproc as ximgproc  # type: ignore[import]
+        refined = ximgproc.guidedFilter(
+            guide=image, src=filtered,
+            radius=max(block_size, 4),
+            eps=1e-3 * (255 ** 2),
+        )
+    except (ImportError, AttributeError):
+        # Fallback: second mild bilateral to recover cross-block texture.
+        refined = cv2.bilateralFilter(
+            filtered, d=int(bilateral["diameter"]),
+            sigmaColor=float(bilateral["sigma_color"]),
+            sigmaSpace=sigma_space,
+        )
+
+    # Step 4: blend — near boundaries use the filtered version, elsewhere keep
+    # the original so real edges in non-blocked regions are untouched.
+    severity = float(np.clip((assessment.blockiness - assessment.threshold) /
+                              max(assessment.threshold, 1e-6), 0.0, 1.0))
+    blend_weight = float(np.clip(0.5 + 0.5 * severity, 0.5, 1.0))
+    boundary3 = boundary[:, :, np.newaxis] * blend_weight
+    result = (boundary3 * refined.astype(np.float32)
+              + (1.0 - boundary3) * image.astype(np.float32))
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def block_grid_mask(shape: tuple[int, int], block_size: int, exclusion_px: int) -> np.ndarray:
