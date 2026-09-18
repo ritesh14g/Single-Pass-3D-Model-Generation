@@ -189,6 +189,46 @@ class TestExposure:
         after = chain.push(2, scene)
         assert 0.5 < after.gain < 2.0, "one uninformative frame must not derail the chain"
 
+    def test_bias_is_bounded_so_a_drifting_chain_cannot_blow_a_frame(self, scene, cfg):
+        """S2-10: gain was clamped and bias was not.
+
+        convertScaleAbs computes gain*pixel + bias, so an unbounded bias
+        saturates a frame to solid white however tightly the gain is pinned.
+        On a real ISR clip that blew 20 of 53 conditioned frames to 255.
+        """
+        import cv2
+
+        limit = float(cfg.get_path("condition.illumination.exposure_chain.max_bias"))
+        chain = ExposureChain(cfg)
+        chain.push(0, scene)
+        # A long sequence that keeps lifting the black level: each frame is the
+        # previous one plus an offset, which is what drives bias upward.
+        current = scene
+        for index in range(1, 40):
+            current = cv2.convertScaleAbs(current, alpha=1.0, beta=6.0)
+            transform = chain.push(index, current)
+            assert abs(transform.bias) <= limit + 1e-6, f"bias escaped at frame {index}"
+
+            # Only assert on inputs that are clearly still well exposed. Once
+            # the source is near its own ceiling no transform can recover it,
+            # and the interesting claim is that a good frame survives.
+            source_gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+            if (source_gray >= 250).mean() < 0.01:
+                out_gray = cv2.cvtColor(transform.apply(current), cv2.COLOR_BGR2GRAY)
+                assert (out_gray >= 250).mean() < 0.10, (
+                    f"frame {index} was blown out by the transform, not by its input")
+
+        summary = chain.summary()
+        assert summary["bias_max_abs"] <= limit + 1e-6
+        assert summary["bias_clamped_frames"] > 0, "this sequence should have hit the bound"
+
+    def test_the_summary_reports_which_fit_produced_each_link(self, scene, cfg):
+        """A quantile fallback carries a content-change bias; count them."""
+        chain = ExposureChain(cfg)
+        chain.push(0, scene)
+        chain.push(1, scene)
+        assert "quantile_fallbacks" in chain.summary()
+
     def test_disabled_chain_is_the_identity(self, scene, cfg):
         disabled = cfg.merged({"condition": {"illumination": {"exposure_chain": {"enabled": False}}}})
         chain = ExposureChain(disabled)

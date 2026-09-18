@@ -239,7 +239,9 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S1-8 | 1 | Overlap stays 0.998 on the forward-oblique LineVision clip; selector cannot reach the §4.3 band | Not the stride cap: with `max_stride_seconds: 10` (600 frames) strides go 15→30→60→120 then fall back to 60 and repeat (max 123). The ~240-frame probe fails verification and `_probe_for_overlap` halves it silently. 120-frame pairs (~26 m of travel at 12.9 m/s) still measure 0.998, so the affine area-overlap estimate is likely invalid for oblique/zooming views. Next: check overlap on a nadir survey clip; consider feature-track survival as the overlap measure for oblique footage |
 | ~~S2-1~~ | 2 | ~~Bilateral suppression doesn't reduce strong synthetic blocking (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: boundary-weighted bilateral + guided refinement. Measured reduction ratio **0.233** on the repo test scene (KPI target > 0.10) |
 | ~~S2-2~~ | 2 | ~~Shadow detector: fixed 25th-percentile luminance cut caps recall at 25% of frame (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: relative blue-ratio + value threshold. Measured on the repo test scene: recall **0.521** (KPI target > 0.50 — passes by 0.021, not the 0.69 the session entry claimed), precision **0.321**, frame fraction **0.317**. Margin is thin and precision is poor — see S2-3 |
-| S2-9 | 2 | **The exposure chain diverges: 46 of 53 frames clamped on real ISR footage.** Per-link fitted gains are systematically below 1 (1.0 → 0.94 → 0.889 → 0.817 → 0.659 → 0.506 → 0.442 → 0.383, floor at frame 7). Composed over 53 frames the unbounded gain reaches **0.0004** — a 2500× brightness change no scene produces, so this is per-link error compounding, not auto-exposure drift | Not an overlap problem: median overlap on this clip is 0.845. `rejected_links` is 0, so every link passed the quality gate and the fit is biased rather than noisy. Next: check whether `fit_gain_bias` is symmetric (A→B vs B→A) on a static pair; then re-anchor the chain to an absolute target luminance every N frames, or damp each composition toward an absolute estimate, instead of pure chaining. Raising `min_gain` only moves the wall |
+| ~~S2-10~~ | 2 | ~~Unbounded composed bias blew 20 of 53 conditioned frames to solid white~~ | **Closed 2026-09-18**: `max_gain`/`min_gain` bounded the gain but nothing bounded the bias, and `convertScaleAbs` computes `gain*pixel + bias`, so a diverging bias saturates a frame however tightly the gain is pinned. Frames 30+ were mean 255 with 100% of pixels at ceiling — the images Stage 4 would have consumed. Added `condition.illumination.exposure_chain.max_bias` (32 counts, symmetric). Re-run: **0 of 53 blown**, brightness stable at 97-99 instead of marching to 255. 49 frames now report `bias_clamped`, so the divergence is real and the bound is load-bearing |
+| S2-11 | 2 | No KPI looked at the conditioned **output pixels** — S2-10 destroyed 38% of every clip and the scorecard stayed green | **Closed 2026-09-18**: `saturated_fraction` KPI, measured on the frame as written, with `qa.stage2.saturated_fraction_warn/fail` and a `blown_frames` count. Fourth defect in a row where an input-side proxy was scored and the outcome was not; when Stage 4 starts, review the whole Stage 2 KPI set with that lens |
+| S2-9 | 2 | **The exposure chain diverges: 46 of 53 frames clamped on real ISR footage.** Per-link fitted gains are systematically below 1 (1.0 → 0.94 → 0.889 → 0.817 → 0.659 → 0.506 → 0.442 → 0.383, floor at frame 7). Composed over 53 frames the unbounded gain reaches **0.0004** — a 2500× brightness change no scene produces, so this is per-link error compounding, not auto-exposure drift | Not an overlap problem: median overlap on this clip is 0.845. `rejected_links` is 0, so every link passed the quality gate and the fit is biased rather than noisy. **`quantile_fallbacks` is 0**, so every link used the registered paired fit — the documented content-change bias of the quantile fallback is ruled out and the bias is in `_fit_paired` itself. Next: check whether `fit_gain_bias` is symmetric (A→B vs B→A) on a static pair; then re-anchor the chain to an absolute target luminance every N frames, or damp each composition toward an absolute estimate, instead of pure chaining. Raising `min_gain` only moves the wall |
 | S2-3 | 2 | 45% shadow fraction on demo synthetic flight (false positives on dark blue-ish blocks) | Still open. Corroborated 2026-09-18: on the repo test scene the detector flags 31.7% of the frame at precision 0.321 — ~3× over-detection. Check on real footage |
 | ~~S2-5~~ | 2 | ~~Stage 2 Lab panel crashed on Run: `RuntimeError: conditioning needs a completed ingest stage`~~ | **Closed 2026-09-18**: `manifest_stages` is ownership, not dependency, so the Lab ran `condition` alone into an empty run dir. Added `manifest_stages_through()` in `src/stages.py`; `ui/app.py` now runs the prerequisite chain. Regression test added and confirmed to fail without the fix |
 | ~~S2-6~~ | 2 | ~~Stage 2 scores 0/100 on real pipeline output; the condition stage writes none of the six artifacts the evaluator reads~~ | **Closed 2026-09-18**: `_write_condition_reports()` in `src/pipeline.py` now emits the four report JSONs and two per-frame parquets, registered as manifest artifacts. `demo_flight.mp4` rescored 0/100 → **100/100** (12 KPIs live, was 4). Also fixed a key mismatch: `GpsReport.to_dict()` writes `max_speed_observed_mps`, the evaluator read `max_speed_observed`, so that KPI never fired. Guarded by `tests/test_stage2_eval.py` (16 of 18 fail without the fix) |
@@ -1113,3 +1115,57 @@ re-scored it; the fix is still open).
 - Then re-anchor: an absolute luminance target every N frames, or damping toward one, so error
   decays rather than compounds.
 - Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (S2-10: unbounded bias was destroying frames)
+**Goal:** Decide whether S2-9 (exposure divergence) could wait for Stage 4. It could not: checking
+what reached the conditioned images found something worse than the gain drift.
+
+**Created:** (none)
+
+**Modified:**
+- `src/condition/illumination.py` — `max_bias` bound on the composed bias, mirroring the existing
+  gain bounds; `bias_clamped` per transform and `bias_clamped_frames`/`bias_max_abs` in the
+  summary. Added `saturated_fraction()`, measured on the conditioned frame. `ExposureTransform`
+  now records `paired_fit`, and the chain counts `quantile_fallbacks`.
+- `src/pipeline.py` — per-frame `saturated_fraction` recorded and summarised into
+  `illumination_report.json` with a `blown_frames` count.
+- `src/qa/stage2_eval.py` — new scored KPI `saturated_fraction`; the clamp KPI's detail now names
+  any quantile fallbacks.
+- `configs/default.yaml` — `exposure_chain.max_bias`, `qa.stage2.saturated_fraction_warn/fail`.
+- `tests/test_condition.py`, `tests/test_stage2_eval.py` — bias-bound and saturation coverage.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Fixed now rather than during Stage 4.** 20 of 53 conditioned images were solid 255 — not
+  degraded, destroyed — and those JPEGs are exactly what Track A would read. ODM would have
+  dropped a third of the frames and it would have looked like a reconstruction problem, which is
+  the scenario the Stage Lab exists to prevent.
+- **Bounded the bias rather than reworking the chain.** The bound stops the destruction; the
+  underlying drift is still S2-9 and still open. Brightness is stable now but sits at ~97 against
+  a reference of 123, so the frames are usable, not correct.
+- **Scored the output, not another transform.** `saturated_fraction` is measured on the image as
+  written. Every other illumination KPI describes the input or the transform, which is why a
+  catastrophic failure scored green.
+
+**Dead ends (also add to §4):**
+- **The quantile fallback is not the cause of S2-9.** `fit_gain_bias`'s docstring warns that the
+  unregistered path "carries exactly the content-change bias" that makes a chained gain drift, and
+  that was the obvious suspect. `quantile_fallbacks` is **0** on the real clip: `transform_prev` is
+  present on 52 of 53 frames and `_fit_paired` succeeded every time. The bias is inside the paired
+  fit. Do not re-investigate the fallback path.
+
+**Tests:** 309 passed / 0 xfailed / 0 failed (was 298; +11). Verified the bias-bound test is a real
+guard by removing the clamp: it fails, and nothing else does.
+
+**Measured on `Esri_multiplexer_1.mp4`** — before: 20 of 53 frames mean 255, 100% of pixels at
+ceiling from frame 40. After: 0 blown, saturated fraction 0.0001, brightness 97-99 across the clip.
+`bias_clamped_frames` 49, `bias_max_abs` pinned at 32. Stage 2 scores 77.3.
+
+**Open issues added/closed:** S2-10 and S2-11 added and closed. S2-9 narrowed — the fallback path
+is ruled out, so the bias is in `_fit_paired`.
+
+**Next:**
+- **S2-9 remains the real fix.** Symmetry test on `_fit_paired` (A→B vs B→A on one pair), then
+  re-anchor to an absolute luminance target instead of pure chaining.
+- Stage 4 Track A is now safe to start: no conditioned frame is destroyed.

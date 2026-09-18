@@ -244,6 +244,12 @@ condition:
       sample_stride: 4
       max_gain: 2.5
       min_gain: 0.4
+      # Bias bound, in 8-bit luminance counts, applied symmetrically. The
+      # transform is gain*pixel + bias, so an unbounded bias saturates a frame
+      # to solid white however tightly the gain is clamped — which is exactly
+      # what happened before this existed (S2-10). A genuine exposure offset
+      # between adjacent frames is a few counts; 32 is generous.
+      max_bias: 32.0
     clahe:
       enabled: true
       clip_limit: 2.0
@@ -481,6 +487,12 @@ qa:
     # datum unknown, which breaks absolute georeferencing downstream silently.
     altitude_source_pass: [baro+gps_complementary]
     altitude_source_warn: [gps]
+    # Fraction of the frame at or above 250/255, averaged over the run, and the
+    # count of frames more than half blown. Measured on the conditioned image
+    # that reconstruction reads, so unlike every other illumination band this
+    # one asks whether the output survived the transforms at all.
+    saturated_fraction_warn: 0.02
+    saturated_fraction_fail: 0.10
     # Fraction of frames whose exposure transform hit a gain bound. A clamped
     # frame is one the chain could not correct, so this is the outcome measure;
     # gain_span saturates at the clamp width and reports the same number however

@@ -65,6 +65,12 @@ class ExposureTransform:
     # bound rather than a measurement, and this is what the chain actually
     # asked for — the difference is how far the correction fell short.
     requested_gain: float = 1.0
+    bias_clamped: bool = False
+    # True when the registered paired fit produced this step. False means
+    # `_fit_paired` bailed and the quantile fallback ran, which the docstring
+    # on fit_gain_bias warns carries a content-change bias — the exact thing
+    # that makes a chained gain drift.
+    paired_fit: bool = False
 
     def apply(self, image: np.ndarray) -> np.ndarray:
         if abs(self.gain - 1.0) < 1e-3 and abs(self.bias) < 0.5:
@@ -78,6 +84,8 @@ class ExposureTransform:
             "fit_quality": round(self.fit_quality, 3),
             "clamped": self.clamped,
             "requested_gain": round(self.requested_gain, 4),
+            "bias_clamped": self.bias_clamped,
+            "paired_fit": self.paired_fit,
         }
 
 
@@ -187,7 +195,7 @@ def _fit_paired(
 
     spread = float(x.max() - x.min())
     if spread < 5.0:
-        return ExposureTransform(1.0, 0.0, fit_quality=0.0)
+        return ExposureTransform(1.0, 0.0, fit_quality=0.0, paired_fit=True)
 
     slope, intercept = np.polyfit(x, y, 1)
     for _ in range(_TRIM_ITERATIONS):
@@ -199,7 +207,9 @@ def _fit_paired(
 
     residual = float(np.sqrt(np.mean((slope * x + intercept - y) ** 2)))
     quality = float(np.clip(1.0 - residual / max(spread, 1e-6), 0.0, 1.0))
-    return ExposureTransform(gain=float(slope), bias=float(intercept), fit_quality=quality)
+    return ExposureTransform(
+        paired_fit=True,
+        gain=float(slope), bias=float(intercept), fit_quality=quality)
 
 
 class ExposureChain:
@@ -221,11 +231,18 @@ class ExposureChain:
         self.enabled = bool(chain_cfg["enabled"])
         self.max_gain = float(chain_cfg["max_gain"])
         self.min_gain = float(chain_cfg["min_gain"])
+        # Gain was bounded and bias was not, so a composed bias could grow
+        # without limit while the gain sat pinned at its floor. convertScaleAbs
+        # computes gain*pixel + bias, so an unbounded bias saturates the frame
+        # to solid white: 20 of 53 conditioned images were pure 255 (S2-10).
+        self.max_bias = abs(float(chain_cfg["max_bias"]))
         self.transforms: dict[int, ExposureTransform] = {}
         # The gain the chain would have reached with no bounds, per frame. Only
         # a diagnostic: never applied to an image.
         self.unclamped_gains: dict[int, float] = {}
         self.rejected_links = 0
+        self.bias_clamped_frames = 0
+        self.quantile_fallbacks = 0
         self._previous: np.ndarray | None = None
         self._previous_key: int | None = None
         self._cumulative = ExposureTransform(1.0, 0.0)
@@ -274,9 +291,17 @@ class ExposureChain:
             if not (self.min_gain <= composed_gain <= self.max_gain):
                 composed_gain = float(np.clip(composed_gain, self.min_gain, self.max_gain))
                 clamped = True
+            bias_clamped = False
+            if abs(composed_bias) > self.max_bias:
+                composed_bias = float(np.clip(composed_bias, -self.max_bias, self.max_bias))
+                bias_clamped = True
+                self.bias_clamped_frames += 1
+            if not step.paired_fit:
+                self.quantile_fallbacks += 1
             self._cumulative = ExposureTransform(
                 gain=composed_gain, bias=composed_bias, fit_quality=step.fit_quality,
                 clamped=clamped, requested_gain=requested_gain,
+                bias_clamped=bias_clamped, paired_fit=step.paired_fit,
             )
 
         self._previous = image
@@ -305,6 +330,13 @@ class ExposureChain:
             "requested_gain_max": round(float(requested.max()), 4),
             "requested_gain_span": round(float(requested.max() - requested.min()), 4),
             "rejected_links": self.rejected_links,
+            "bias_clamped_frames": self.bias_clamped_frames,
+            "bias_max_abs": round(float(np.abs([t.bias for t in self.transforms.values()]).max()), 3),
+            # Links that fell back to quantile matching because the registered
+            # fit bailed. That fallback is documented as carrying a
+            # content-change bias, so a non-zero count here is a prime suspect
+            # whenever the chain drifts.
+            "quantile_fallbacks": self.quantile_fallbacks,
             "clamped_frames": clamped_frames,
             "clamped_fraction": round(clamped_frames / len(self.transforms), 4),
             # The unbounded trajectory. A monotonic march away from 1.0 means
@@ -488,6 +520,19 @@ def condition_illumination(
         exposure=exposure,
         mean_luma=mean_luma,
     )
+
+
+def saturated_fraction(image: np.ndarray, level: int = 250) -> float:
+    """Fraction of pixels at or above ``level`` in the conditioned frame.
+
+    Measured on the image that is written to disk, which is what the
+    reconstruction stages actually read. Every other illumination KPI describes
+    the input or the transform; this one asks whether the output is still an
+    image. It is the check that would have caught a runaway bias blowing 20 of
+    53 frames to solid white (S2-10).
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    return float((gray >= level).mean())
 
 
 def summarize_illumination(results: Sequence[IlluminationResult]) -> dict[str, Any]:

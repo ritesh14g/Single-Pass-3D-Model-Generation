@@ -186,6 +186,24 @@ def _illumination_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: An
         "High coverage means either a genuinely shadowed scene or an over-firing "
         "detector; separating the two needs ground truth (S2-3).",
     ))
+    # Output-side: a blown frame carries no recoverable detail, so this is the
+    # one illumination KPI that fails on the pixels rather than on a transform.
+    if "saturated_fraction_mean" in illum:
+        sat_mean = float(illum["saturated_fraction_mean"])
+        blown = int(illum.get("blown_frames", 0))
+        warn = _band(cfg, "saturated_fraction_warn", 0.02)
+        fail = _band(cfg, "saturated_fraction_fail", 0.10)
+        detail = ("Peak per-frame saturation: "
+                  + str(round(float(illum.get("saturated_fraction_max", 0.0)) * 100, 1)) + "%.")
+        if blown:
+            detail += (" " + str(blown) + " frame(s) are more than half blown out and carry "
+                       "no recoverable detail for reconstruction.")
+        ev.kpis.append(Kpi(
+            "saturated_fraction", "Illumination",
+            "Blown-out pixels in conditioned frames", round(sat_mean, 4),
+            "< " + str(warn), _threshold_status(sat_mean, warn, fail), detail,
+        ))
+
     chain = illum.get("exposure_chain", {})
     if chain:
         gain_span = float(chain.get("gain_span", 0.0))
@@ -202,6 +220,7 @@ def _illumination_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: An
             warn = _band(cfg, "exposure_clamped_fraction_warn", 0.10)
             fail = _band(cfg, "exposure_clamped_fraction_fail", 0.30)
             unclamped_final = chain.get("unclamped_gain_final")
+            fallbacks = int(chain.get("quantile_fallbacks", 0))
             detail = (str(int(chain.get("clamped_frames", 0))) + " of " + str(chain_frames)
                       + " frames hit a gain bound; their exposure was not fully normalised.")
             if unclamped_final is not None:
@@ -209,6 +228,9 @@ def _illumination_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: An
                            + str(round(float(unclamped_final), 4))
                            + " — far from 1.0 means per-link error is compounding, "
                            "not that the scene changed.")
+            if fallbacks:
+                detail += (" " + str(fallbacks) + " link(s) fell back to quantile matching, "
+                           "which carries a content-change bias (see fit_gain_bias).")
             ev.kpis.append(Kpi(
                 "exposure_clamped_fraction", "Illumination",
                 "Frames with exposure clamped", round(clamped_frac, 3),

@@ -40,7 +40,12 @@ from src.condition.artifacts import assess_artifacts, blockiness_score, suppress
 from src.condition.blur import profile_video_blur, sharpen
 from src.condition.dynamic_mask import DynamicMasker, summarize_masks
 from src.condition.gps_filter import filter_telemetry, track_length_m
-from src.condition.illumination import ExposureChain, condition_illumination, summarize_illumination
+from src.condition.illumination import (
+    ExposureChain,
+    condition_illumination,
+    saturated_fraction,
+    summarize_illumination,
+)
 from src.core.budget import Budget
 from src.core.config import Config
 from src.core.device import chunk_frames_for_memory, device_info
@@ -271,7 +276,9 @@ def run_condition(
                 low_light = illumination.low_light
                 exposure_gain = exposure.gain
                 exposure_requested = exposure.requested_gain
-                exposure_clamped = exposure.clamped
+                exposure_clamped = exposure.clamped or exposure.bias_clamped
+                # Measured on the frame as it will be written, not on the input.
+                saturated = saturated_fraction(image)
                 blockiness = artifact_assessment.blockiness
                 masked_fraction = mask.fraction
             else:
@@ -279,6 +286,7 @@ def run_condition(
                 shadow_fraction, low_light, blockiness, masked_fraction = 0.0, False, 1.0, 0.0
                 exposure_gain = exposure_requested = 1.0
                 exposure_clamped = False
+                saturated = saturated_fraction(image)
                 mask = _empty_mask(image)
                 illumination = None
 
@@ -309,6 +317,7 @@ def run_condition(
                     "exposure_gain": float(exposure_gain),
                     "exposure_gain_requested": float(exposure_requested),
                     "exposure_clamped": bool(exposure_clamped),
+                    "saturated_fraction": float(saturated),
                     "dynamic_fraction": float(masked_fraction),
                     "conditioning_degraded": degraded,
                 }
@@ -407,6 +416,14 @@ def _write_condition_reports(
 
     illumination_report = dict(illumination_summary)
     illumination_report["exposure_chain"] = exposure_summary
+    # Output-side check: is the conditioned frame still an image? Summarised
+    # here rather than in summarize_illumination because it is measured on the
+    # written frame, after every transform has been applied.
+    if not frame_table.empty and "saturated_fraction" in frame_table:
+        sat = frame_table["saturated_fraction"].astype(float)
+        illumination_report["saturated_fraction_mean"] = round(float(sat.mean()), 4)
+        illumination_report["saturated_fraction_max"] = round(float(sat.max()), 4)
+        illumination_report["blown_frames"] = int((sat > 0.50).sum())
 
     reports: dict[str, dict[str, Any]] = {
         "artifacts_report": artifacts_report,
@@ -437,6 +454,7 @@ def _write_condition_reports(
             "exposure_gain": frame_table["exposure_gain"],
             "exposure_gain_requested": frame_table["exposure_gain_requested"],
             "exposure_clamped": frame_table["exposure_clamped"],
+            "saturated_fraction": frame_table["saturated_fraction"],
         })
         for name, table in (("frame_artifacts", frame_artifacts),
                             ("frame_illumination", frame_illumination)):

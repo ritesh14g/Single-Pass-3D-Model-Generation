@@ -441,3 +441,44 @@ class TestTheCardCanFail:
         info = {k.key for k in ev.kpis if k.status == INFO}
         assert info <= {"keypoints_vetoed", "gps_rtk_detected",
                         "dynamic_frames_with_movers", "exposure_gain_span", "gps_note"}
+
+
+class TestSaturationIsScored:
+    """S2-10: the only illumination KPI measured on the output pixels.
+
+    Every other one describes the input or the transform. A runaway bias blew
+    20 of 53 conditioned frames to solid white and no KPI noticed, because none
+    of them asked whether the image was still there.
+    """
+
+    @pytest.mark.parametrize("mean,expected", [
+        (0.001, PASS), (0.02, PASS), (0.03, WARN), (0.10, WARN), (0.11, FAIL), (0.80, FAIL),
+    ])
+    def test_bands(self, cfg, mean, expected):
+        ev = evaluate_condition(_outputs(illumination={
+            "frames": 53, "saturated_fraction_mean": mean, "saturated_fraction_max": mean,
+        }), cfg)
+        assert _status(ev, "saturated_fraction") == expected
+
+    def test_blown_frames_are_named_in_the_detail(self, cfg):
+        ev = evaluate_condition(_outputs(illumination={
+            "frames": 53, "saturated_fraction_mean": 0.38,
+            "saturated_fraction_max": 1.0, "blown_frames": 20,
+        }), cfg)
+        kpi = next(k for k in ev.kpis if k.key == "saturated_fraction")
+        assert kpi.status == FAIL
+        assert "20 frame(s)" in kpi.detail and "no recoverable detail" in kpi.detail
+
+    def test_absent_on_a_run_that_never_measured_it(self, cfg):
+        ev = evaluate_condition(_outputs(illumination={"frames": 10}), cfg)
+        assert _status(ev, "saturated_fraction") is None
+
+    def test_quantile_fallbacks_are_surfaced_on_the_clamp_kpi(self, cfg):
+        """Points at fit_gain_bias's documented content-change bias."""
+        ev = evaluate_condition(_outputs(illumination={
+            "frames": 10, "exposure_chain": {"frames": 10, "gain_span": 0.6,
+                                             "clamped_frames": 9, "rejected_links": 0,
+                                             "quantile_fallbacks": 7},
+        }), cfg)
+        detail = next(k for k in ev.kpis if k.key == "exposure_clamped_fraction").detail
+        assert "7 link(s) fell back to quantile matching" in detail
