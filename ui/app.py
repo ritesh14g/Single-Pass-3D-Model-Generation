@@ -26,7 +26,9 @@ import streamlit as st  # noqa: E402
 
 from src.core.config import load_config  # noqa: E402
 from src.core.manifest import RunManifest  # noqa: E402
-from src.stages import STAGES, StageStatus, built_stages, get_stage  # noqa: E402
+from src.stages import (  # noqa: E402
+    STAGES, StageStatus, built_stages, get_stage, manifest_stages_through,
+)
 from ui import lab  # noqa: E402
 from ui.stages import PANELS  # noqa: E402
 
@@ -56,7 +58,7 @@ def stage_page(key: str) -> None:
         cfg = lab.build_config(preset, overrides)
         started = time.monotonic()
         with st.spinner(f"Running Stage {spec.number}…"):
-            run_dir = lab.execute(lab_input, cfg, list(spec.manifest_stages), tag=key)
+            run_dir = lab.execute(lab_input, cfg, manifest_stages_through(spec), tag=key)
         elapsed = time.monotonic() - started
         evaluation = panel.evaluate(run_dir, lab_input.truth)
         lab.record_history(key, lab_input, preset, overrides, evaluation, run_dir, round(elapsed, 2))
@@ -76,6 +78,7 @@ def stage_page(key: str) -> None:
     st.subheader("Scorecard")
     st.caption(f"Run directory: `{run_dir.relative_to(ROOT) if run_dir.is_relative_to(ROOT) else run_dir}`")
     lab.render_scorecard(evaluation)
+    lab.render_optional_inputs(run_dir)
     st.divider()
     st.subheader("Diagnostics")
     panel.render_results(run_dir, truth, evaluation)
@@ -141,6 +144,8 @@ def pipeline_page() -> None:
     budget_total = float(run_cfg["budget"]["total_s"])
     allotted = float(table["allotment_s"].sum())
     cols[3].metric("§9 allotment for these stages", f"{allotted:.0f} s of {budget_total:.0f} s")
+
+    lab.render_optional_inputs(run_dir)
 
     st.subheader("Stage scores and time vs. budget")
     st.dataframe(table, hide_index=True, use_container_width=True)

@@ -107,3 +107,20 @@ def built_manifest_stages() -> list[str]:
 def last_built_stage() -> StageSpec | None:
     stages = built_stages()
     return stages[-1] if stages else None
+
+
+def manifest_stages_through(stage: StageSpec) -> list[str]:
+    """Manifest stages needed to produce ``stage``'s output, in execution order.
+
+    A stage's ``manifest_stages`` is what it *owns*, not what it *needs*: Stage 2
+    owns ``condition`` alone, but conditioning reads the frames Stage 1 selected,
+    so running ``condition`` into an empty directory raises "conditioning needs a
+    completed ingest stage". The Stage Lab therefore runs every BUILT stage that
+    executes at or before the requested one, then the stage itself.
+
+    The stage is included whatever its status, so a panel for an IN_PROGRESS
+    stage can still be exercised before it is flipped to BUILT.
+    """
+    upstream = [s for s in built_stages() if s.execution_order < stage.execution_order]
+    chain = upstream + [stage] if stage not in upstream else upstream
+    return [name for s in chain for name in s.manifest_stages]

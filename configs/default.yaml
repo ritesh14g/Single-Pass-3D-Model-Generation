@@ -462,6 +462,29 @@ export:
 # Stage 6 — QA (§8.5)
 # ---------------------------------------------------------------------------
 qa:
+  # Stage 2 (Conditioning) scorecard bands. A KPI that can only ever report
+  # "info" cannot fail, and a scorecard that cannot fail cannot localise a
+  # fault — these are the thresholds that let the Stage 2 card go amber or red.
+  stage2:
+    # Mean per-frame shadow coverage. A genuinely shadowed scene (late light,
+    # urban canyon) can reach 0.3; past half the frame the likelier explanation
+    # is the detector over-firing, and either way the illumination weights are
+    # not trustworthy. Note this measures *coverage*, not correctness: telling
+    # an over-detecting detector from a dark scene needs ground truth (S2-3).
+    shadow_fraction_warn: 0.30
+    shadow_fraction_fail: 0.50
+    # Fraction of frames that took the low-light path. §5.4 records an accuracy
+    # cost there, so a mostly-low-light clip is a degraded reconstruction.
+    low_light_fraction_warn: 0.20
+    low_light_fraction_fail: 0.50
+    # Altitude provenance (§5.6). Relative-only altitude leaves the vertical
+    # datum unknown, which breaks absolute georeferencing downstream silently.
+    altitude_source_pass: [baro+gps_complementary]
+    altitude_source_warn: [gps]
+    # Bands that used to be hard-coded in src/qa/stage2_eval.py.
+    gain_span_warn: 0.40
+    gps_outlier_fraction_warn: 0.10
+    gps_outlier_fraction_fail: 0.30
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]

@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core.config import Config
+from src.core.manifest import RunManifest
 from src.qa.stage2_eval import (
     ConditionOutputs,
     StageEvaluation,
@@ -131,10 +132,19 @@ def render_params(cfg: Config) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
+def _load(run_dir: Path) -> tuple[ConditionOutputs, Config]:
+    """Stage 2 artifacts plus the config the run actually used.
+
+    ``run_dir`` is the run root; conditioning writes under ``condition/``. The
+    config comes from the manifest, not ``load_config()``, so a Lab run scores
+    against the parameters it was given rather than the defaults.
+    """
+    manifest = RunManifest.load(run_dir)
+    return ConditionOutputs.load(run_dir / "condition"), Config(manifest.config)
+
+
 def evaluate(run_dir: Path, truth: dict | None) -> StageEvaluation:
-    outputs = ConditionOutputs.load(run_dir)
-    from src.core.config import Config
-    cfg = Config.default()
+    outputs, cfg = _load(run_dir)
     return evaluate_condition(outputs, cfg, truth)
 
 
@@ -142,7 +152,7 @@ def evaluate(run_dir: Path, truth: dict | None) -> StageEvaluation:
 # Headline numbers (shown in the pipeline overview)
 # ---------------------------------------------------------------------------
 def headline(run_dir: Path) -> dict[str, Any]:
-    outputs = ConditionOutputs.load(run_dir)
+    outputs, _ = _load(run_dir)
     illum = outputs.illumination_report
     art = outputs.artifacts_report
     gps = outputs.gps_report
@@ -161,7 +171,7 @@ def render_results(
     run_dir: Path, truth: dict | None, evaluation: StageEvaluation
 ) -> None:
     """Render the Stage 2 diagnostics panel."""
-    outputs = ConditionOutputs.load(run_dir)
+    outputs, _ = _load(run_dir)
 
     # ── Scorecard ─────────────────────────────────────────────────────────
     st.subheader("Scorecard")
@@ -178,11 +188,22 @@ def render_results(
     if not df.empty:
         styled = df[["group", "label", "value", "target", "status", "detail"]].copy()
         styled["status"] = styled["status"].str.upper()
+        # KPI values are deliberately heterogeneous (floats, counts, bools and
+        # strings like "baro+gps_complementary"). Arrow infers a numeric column
+        # from the leading rows and then fails on the first string, so render
+        # them all as text.
+        styled["value"] = styled["value"].map(lambda v: "—" if v is None else str(v))
         def _row_color(row):
-            s = row["status"].lower()
-            colors = {"pass": "#e6ffed", "warn": "#fff8c5", "fail": "#ffebe9", "info": "#f6f8fa"}
-            c = colors.get(s, "")
-            return ["background-color: " + c] * len(row)
+            # Translucent tints, not opaque pastels: the fill sits over whatever
+            # ground the viewer's theme paints, so the text keeps its contrast in
+            # both. Opaque light fills made every row unreadable in dark mode.
+            tints = {
+                "pass": "rgba(31, 136, 61, 0.22)",
+                "warn": "rgba(191, 135, 0, 0.26)",
+                "fail": "rgba(207, 34, 46, 0.24)",
+                "info": "rgba(110, 118, 129, 0.16)",
+            }
+            return ["background-color: " + tints.get(row["status"].lower(), "")] * len(row)
         st.dataframe(
             styled.style.apply(_row_color, axis=1),
             use_container_width=True, hide_index=True,

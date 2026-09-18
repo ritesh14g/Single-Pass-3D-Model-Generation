@@ -143,6 +143,63 @@ def execute(lab_input: LabInput, cfg: Config, manifest_stages: list[str], tag: s
 
 
 # --------------------------------------------------------------------------
+# Optional inputs
+# --------------------------------------------------------------------------
+INPUT_ICONS = {"present": "✅", "absent": "➖", "unknown": "❔"}
+
+
+def render_optional_inputs(run_dir: "Path | str") -> None:
+    """What this run had to work with, and what ran in place of what it lacked.
+
+    Absent is not an error — every one of these has a working fallback. It is
+    shown next to the scorecard because a KPI that looks wrong is very often a
+    missing input rather than a broken stage, and that connection is invisible
+    when the fallback is only a warning line in run.jsonl.
+    """
+    path = Path(run_dir) / "optional_inputs.json"
+    if not path.is_file():
+        return
+    try:
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not ledger:
+        return
+
+    counts = {s: sum(1 for r in ledger if r["status"] == s) for s in INPUT_ICONS}
+    label = f"Optional inputs — {counts['present']} present, {counts['absent']} absent"
+    if counts["unknown"]:
+        label += f", {counts['unknown']} not determined"
+
+    with st.expander(label, expanded=bool(counts["absent"])):
+        st.caption(
+            "Absent inputs are not failures: each one has a fallback and the run "
+            "continues. They are listed because a surprising KPI is often a missing "
+            "input rather than a broken stage."
+        )
+        frame = pd.DataFrame([
+            {
+                "": INPUT_ICONS.get(row["status"], ""),
+                "input": row["label"],
+                "spec": row["spec_ref"],
+                "status": row["status"],
+                "detail": row["detail"],
+                "running instead": row["fallback"] if row["status"] == "absent" else "—",
+                "cost": row["impact"] if row["status"] == "absent" else "—",
+            }
+            for row in ledger
+        ])
+        st.dataframe(
+            frame, hide_index=True, use_container_width=True,
+            column_config={
+                "": st.column_config.TextColumn(width="small"),
+                "detail": st.column_config.TextColumn(width="medium"),
+                "cost": st.column_config.TextColumn(width="large"),
+            },
+        )
+
+
+# --------------------------------------------------------------------------
 # Scorecards
 # --------------------------------------------------------------------------
 def render_scorecard(evaluation: StageEvaluation, title: str | None = None) -> None:

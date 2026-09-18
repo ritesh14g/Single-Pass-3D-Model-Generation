@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from src import __version__
-from src.condition.artifacts import assess_artifacts, suppress_block_artifacts
+from src.condition.artifacts import assess_artifacts, blockiness_score, suppress_block_artifacts
 from src.condition.blur import profile_video_blur, sharpen
 from src.condition.dynamic_mask import DynamicMasker, summarize_masks
 from src.condition.gps_filter import filter_telemetry, track_length_m
@@ -45,6 +45,7 @@ from src.core.budget import Budget
 from src.core.config import Config
 from src.core.device import chunk_frames_for_memory, device_info
 from src.core.logging import get_logger, log_event, setup_logging
+from src.core.inputs import describe_optional_inputs, missing_inputs, summarize
 from src.core.manifest import RunManifest, StageStatus
 from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
@@ -213,6 +214,8 @@ def run_condition(
     illumination_results = []
     mask_results = []
     blockiness_scores: list[float] = []
+    artifact_assessments: list[Any] = []
+    blockiness_after: list[float] = []
     wanted = selection.indices
     total = max(len(wanted), 1)
 
@@ -243,7 +246,16 @@ def run_condition(
 
                 artifact_assessment = assess_artifacts(image, cfg)
                 blockiness_scores.append(artifact_assessment.blockiness)
+                artifact_assessments.append(artifact_assessment)
                 image = suppress_block_artifacts(image, cfg, artifact_assessment)
+                if artifact_assessment.needs_correction:
+                    # Re-score the frame we just corrected. Measuring the same
+                    # frame before and after says whether suppression actually
+                    # worked, which the "frames requiring correction" KPI cannot:
+                    # that one counts how many frames *needed* help, a property
+                    # of the input. No ground truth is involved.
+                    blockiness_after.append(
+                        blockiness_score(image, artifact_assessment.dominant_block_size))
 
                 exposure = exposure_chain.push(
                     frame.index, image, selected.transform_prev if selected else None
@@ -300,12 +312,25 @@ def run_condition(
 
     geo_path = _write_geo_txt(out_dir / "geo.txt", frame_table, per_frame_telemetry)
 
+    illumination_summary = summarize_illumination(illumination_results)
+    dynamic_summary = summarize_masks(mask_results)
+    report_paths = _write_condition_reports(
+        out_dir,
+        frame_table=frame_table,
+        assessments=artifact_assessments,
+        blockiness_after=blockiness_after,
+        illumination_summary=illumination_summary,
+        exposure_summary=exposure_chain.summary(),
+        dynamic_summary=dynamic_summary,
+        gps_summary=gps_report.to_dict(),
+    )
+
     metrics = {
         "frames_conditioned": len(records),
         "enabled": enabled,
         "exposure": exposure_chain.summary(),
-        "illumination": summarize_illumination(illumination_results),
-        "dynamic": summarize_masks(mask_results),
+        "illumination": illumination_summary,
+        "dynamic": dynamic_summary,
         "dynamic_model_available": masker.available,
         "dynamic_unavailable_reason": masker.unavailable_reason,
         "blockiness_mean": round(float(np.mean(blockiness_scores)), 3) if blockiness_scores else None,
@@ -316,9 +341,96 @@ def run_condition(
         "images": image_dir, "masks": mask_dir, "conditioned": table_path,
         "telemetry_filtered": filtered_path,
     }
+    artifacts.update(report_paths)
     if geo_path is not None:
         artifacts["geo"] = geo_path
     return {"artifacts": artifacts, "metrics": metrics}
+
+
+def _write_condition_reports(
+    out_dir: Path,
+    frame_table: pd.DataFrame,
+    assessments: list[Any],
+    blockiness_after: list[float],
+    illumination_summary: dict[str, Any],
+    exposure_summary: dict[str, Any],
+    dynamic_summary: dict[str, Any],
+    gps_summary: dict[str, Any],
+) -> dict[str, Path]:
+    """Write the four QA reports and two per-frame tables ``src.qa.stage2_eval`` reads.
+
+    The manifest already carries these numbers as stage metrics, but the Stage 2
+    scorecard is a standalone reader: it takes a run directory and nothing else,
+    so the Stage Lab can score a run it did not launch. Without these files the
+    evaluator sees an empty run and reports 0/100 (DEVLOG S2-6).
+
+    Ground-truth KPIs (``blockiness_before``/``after``, ``shadow_recall``,
+    ``shadow_false_positive``) are deliberately absent: they need per-pixel truth
+    for real frames, which the synthetic flight generator does not produce. The
+    evaluator skips any key that is missing, so those KPIs stay dormant rather
+    than being filled with numbers nothing measured.
+    """
+    frames_evaluated = len(assessments)
+    corrected = [a for a in assessments if a.needs_correction]
+    frames_corrected = len(corrected)
+    thresholds = {a.threshold for a in assessments}
+
+    artifacts_report = {
+        "frames_evaluated": frames_evaluated,
+        "frames_corrected": frames_corrected,
+        # Grid-keypoint vetoing (`filter_grid_keypoints`) happens at feature
+        # extraction in Stage 4, not here, so nothing is vetoed yet.
+        "keypoints_vetoed": 0,
+        "blockiness_mean": (
+            round(float(np.mean([a.blockiness for a in assessments])), 4) if assessments else None
+        ),
+        "blockiness_max": (
+            round(float(np.max([a.blockiness for a in assessments])), 4) if assessments else None
+        ),
+        "threshold": round(float(next(iter(thresholds))), 3) if len(thresholds) == 1 else None,
+    }
+    # Effectiveness of the suppression itself, averaged over the frames that
+    # actually got corrected. Both numbers are measured on the same real frames,
+    # so this works on any footage — it needs no synthetic ground truth.
+    if corrected and len(blockiness_after) == frames_corrected:
+        artifacts_report["blockiness_before"] = round(
+            float(np.mean([a.blockiness for a in corrected])), 4)
+        artifacts_report["blockiness_after"] = round(float(np.mean(blockiness_after)), 4)
+
+    illumination_report = dict(illumination_summary)
+    illumination_report["exposure_chain"] = exposure_summary
+
+    reports: dict[str, dict[str, Any]] = {
+        "artifacts_report": artifacts_report,
+        "illumination_report": illumination_report,
+        "dynamic_report": dynamic_summary,
+        "gps_report": gps_summary,
+    }
+    paths: dict[str, Path] = {}
+    for name, payload in reports.items():
+        path = out_dir / f"{name}.json"
+        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        paths[name] = path
+
+    # Per-frame tables behind the timeline charts. ``index`` is the video frame
+    # number, which is what the charts label their x axis with.
+    if not frame_table.empty:
+        frame_artifacts = pd.DataFrame({
+            "index": frame_table["frame_index"],
+            "blockiness": frame_table["blockiness"],
+        })
+        frame_illumination = pd.DataFrame({
+            "index": frame_table["frame_index"],
+            "shadow_fraction": frame_table["shadow_fraction"],
+            "low_light": frame_table["low_light"],
+        })
+        for name, table in (("frame_artifacts", frame_artifacts),
+                            ("frame_illumination", frame_illumination)):
+            path = out_dir / f"{name}.parquet"
+            table.to_parquet(path, index=False)
+            paths[name] = path
+
+    return paths
 
 
 def _empty_mask(image: np.ndarray):
@@ -485,13 +597,31 @@ def run_pipeline(
             manifest.mark_skipped(name, reason)
             result.skipped_stages[name] = reason
 
+    # Which optional inputs this run actually had, and what ran without them.
+    # Derived from the metrics the stages already recorded, so it always
+    # describes the run that happened rather than the run that was configured.
+    ledger = describe_optional_inputs(manifest)
+    absent = missing_inputs(ledger)
     manifest.summary = {
         "budget": budget.summary(),
         "stages": manifest.status_table(),
         "completed": result.completed_stages,
         "skipped": result.skipped_stages,
+        "optional_inputs": ledger,
     }
     manifest.save()
+
+    # Standalone too: the Stage Lab and the QA report read a run directory
+    # without parsing the whole manifest.
+    (run_dir / "optional_inputs.json").write_text(
+        json.dumps(ledger, indent=2, default=str), encoding="utf-8")
+    if absent:
+        log_event(
+            log, logging.INFO,
+            f"{len(absent)} optional input(s) absent; fallbacks in effect",
+            event="optional_inputs", counts=summarize(ledger),
+            absent=[row["key"] for row in absent],
+        )
 
     summary_path = run_dir / "summary.json"
     summary_path.write_text(json.dumps(manifest.summary, indent=2, default=str), encoding="utf-8")

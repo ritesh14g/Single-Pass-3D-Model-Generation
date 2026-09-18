@@ -35,6 +35,22 @@ def test_every_stage_page_loads(stage):
     assert not at.exception, at.exception
 
 
+def test_stage2_runs_prerequisite_stages_from_the_ui():
+    """Stage 2 owns only ``condition``, which cannot run without ingest output.
+
+    The Lab must run the prerequisite chain (``manifest_stages_through``), so
+    clicking Run on the Stage 2 page produces a scorecard instead of raising
+    "conditioning needs a completed ingest stage".
+    """
+    at = _app().run()
+    label = next(o for o in at.sidebar.radio(key="page").options if "Stage 2:" in o)
+    at.sidebar.radio(key="page").set_value(label).run()
+    at.number_input(key="condition_syn_frames").set_value(40).run()
+    at.button(key="condition_run").click().run()
+    assert not at.exception, at.exception
+    assert any("Stage score" in m.label for m in at.metric)
+
+
 def test_stage1_runs_end_to_end_from_the_ui():
     at = _app().run()
     label = next(o for o in at.sidebar.radio(key="page").options if "Stage 1:" in o)

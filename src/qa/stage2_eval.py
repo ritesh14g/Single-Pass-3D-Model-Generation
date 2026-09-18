@@ -68,6 +68,23 @@ class ConditionOutputs:
         )
 
 
+def _band(cfg: Any, key: str, default: float) -> float:
+    """A Stage 2 scorecard threshold, from ``qa.stage2`` with a safe fallback."""
+    try:
+        value = cfg.get_path(f"qa.stage2.{key}")
+    except Exception:
+        return default
+    return default if value is None else float(value)
+
+
+def _band_list(cfg: Any, key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    try:
+        value = cfg.get_path(f"qa.stage2.{key}")
+    except Exception:
+        return default
+    return tuple(str(v) for v in value) if value else default
+
+
 def _threshold_status(value: float, warn_above: float, fail_above: float) -> str:
     if value <= warn_above:
         return PASS
@@ -118,15 +135,20 @@ def _artifact_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: Any, t
         "Keypoints vetoed on block grid", keypoints_vetoed, "info", INFO,
         "SIFT/FAST keypoints discarded on compression block boundary.",
     ))
-    if truth is not None and "blockiness_before" in art and "blockiness_after" in art:
+    if "blockiness_before" in art and "blockiness_after" in art:
+        # Measured on the same frames before and after suppression, so this
+        # needs no ground truth and reports on whatever footage was run. It is
+        # the only artifact KPI that says whether conditioning *worked*; the
+        # correction fraction above only says how much work the input needed.
         before = float(art["blockiness_before"])
         after = float(art["blockiness_after"])
         reduction = (before - after) / max(before, 1e-6)
         ev.kpis.append(Kpi(
-            "blockiness_reduction", "Artifact suppression (ground truth)",
-            "Blockiness reduction ratio", round(reduction, 3), "> 0.10 (S2-1 fix target)",
+            "blockiness_reduction", "Artifact suppression",
+            "Blockiness reduction on corrected frames", round(reduction, 3),
+            "> 0.10 (S2-1 fix target)",
             PASS if reduction > 0.10 else WARN if reduction > 0.0 else FAIL,
-            "Score before: " + str(round(before, 3)) + ", after: " + str(round(after, 3)) + ".",
+            "Mean score before: " + str(round(before, 3)) + ", after: " + str(round(after, 3)) + ".",
         ))
 
 
@@ -145,27 +167,36 @@ def _illumination_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: An
     shadow_max = float(illum.get("shadow_fraction_max", 0.0))
     if frames:
         ll_frac = low_light / frames
+        ll_warn = _band(cfg, "low_light_fraction_warn", 0.20)
+        ll_fail = _band(cfg, "low_light_fraction_fail", 0.50)
         ev.kpis.append(Kpi(
             "low_light_fraction", "Illumination",
-            "Low-light frames", round(ll_frac, 3), "info",
-            PASS if ll_frac == 0 else INFO,
+            "Low-light frames", round(ll_frac, 3), "< " + str(ll_warn),
+            _threshold_status(ll_frac, ll_warn, ll_fail),
             str(low_light) + " of " + str(frames) + " frames triggered low-light path (§5.4 accuracy note).",
         ))
+    shadow_warn = _band(cfg, "shadow_fraction_warn", 0.30)
+    shadow_fail = _band(cfg, "shadow_fraction_fail", 0.50)
     ev.kpis.append(Kpi(
         "shadow_fraction_mean", "Illumination",
-        "Mean shadow coverage per frame", round(shadow_mean, 3), "info", INFO,
-        "Peak per-frame shadow coverage: " + str(round(shadow_max * 100, 1)) + "%.",
+        "Mean shadow coverage per frame", round(shadow_mean, 3),
+        "< " + str(shadow_warn),
+        _threshold_status(shadow_mean, shadow_warn, shadow_fail),
+        "Peak per-frame shadow coverage: " + str(round(shadow_max * 100, 1)) + "%. "
+        "High coverage means either a genuinely shadowed scene or an over-firing "
+        "detector; separating the two needs ground truth (S2-3).",
     ))
     chain = illum.get("exposure_chain", {})
     if chain:
+        gain_span_warn = _band(cfg, "gain_span_warn", GAIN_SPAN_WARN)
         gain_span = float(chain.get("gain_span", 0.0))
         rejected_links = int(chain.get("rejected_links", 0))
         chain_frames = int(chain.get("frames", 0))
         ev.kpis.append(Kpi(
             "exposure_gain_span", "Illumination",
             "Exposure gain span across sequence", round(gain_span, 3),
-            "< " + str(GAIN_SPAN_WARN),
-            PASS if gain_span < GAIN_SPAN_WARN else WARN if gain_span < GAIN_SPAN_WARN * 2 else FAIL,
+            "< " + str(gain_span_warn),
+            PASS if gain_span < gain_span_warn else WARN if gain_span < gain_span_warn * 2 else FAIL,
             "Large span means auto-exposure drifted significantly during the flight.",
         ))
         if chain_frames:
@@ -246,12 +277,14 @@ def _gps_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: Any) -> Non
     median_out = int(gps.get("median_outliers", 0))
     smoothed = int(gps.get("smoothed_fixes", 0))
     if input_fixes:
+        outlier_warn = _band(cfg, "gps_outlier_fraction_warn", GPS_OUTLIER_FRACTION_WARN)
+        outlier_fail = _band(cfg, "gps_outlier_fraction_fail", GPS_OUTLIER_FRACTION_FAIL)
         outlier_frac = (envelope + median_out) / input_fixes
         ev.kpis.append(Kpi(
             "gps_outlier_fraction", "GPS conditioning",
             "GPS fixes rejected as outliers", round(outlier_frac, 3),
-            "< " + str(int(GPS_OUTLIER_FRACTION_WARN * 100)) + "%",
-            _threshold_status(outlier_frac, GPS_OUTLIER_FRACTION_WARN, GPS_OUTLIER_FRACTION_FAIL),
+            "< " + str(int(outlier_warn * 100)) + "%",
+            _threshold_status(outlier_frac, outlier_warn, outlier_fail),
             "Envelope: " + str(envelope) + ", median: " + str(median_out) + ", from " + str(input_fixes) + " fixes.",
         ))
         ev.kpis.append(Kpi(
@@ -261,10 +294,16 @@ def _gps_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: Any) -> Non
             PASS if smoothed >= int(input_fixes * 0.7) else WARN,
             "Fixes with a finite smoothed position estimate.",
         ))
+    altitude_source = str(gps.get("altitude_source", "unknown"))
+    good = _band_list(cfg, "altitude_source_pass", ("baro+gps_complementary",))
+    acceptable = _band_list(cfg, "altitude_source_warn", ("gps",))
     ev.kpis.append(Kpi(
         "gps_altitude_source", "GPS conditioning",
-        "Altitude source", str(gps.get("altitude_source", "unknown")), "info", INFO,
-        "baro+gps_complementary is best; baro_relative_only means datum is unknown.",
+        "Altitude source", altitude_source, " or ".join(good),
+        PASS if altitude_source in good else WARN if altitude_source in acceptable else FAIL,
+        "baro+gps_complementary is best; GPS-only is noisier but keeps an absolute "
+        "datum; baro_relative_only leaves the vertical datum unknown, which breaks "
+        "absolute georeferencing downstream.",
     ))
     rtk = bool(gps.get("rtk_detected", False))
     gps_weight = gps.get("gps_weight", 1.0)
@@ -273,7 +312,10 @@ def _gps_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: Any) -> Non
         "RTK/PPK detected", rtk, "info", INFO,
         "GPS weight: " + str(round(float(gps_weight), 1)) + "x with RTK.",
     ))
-    max_speed = gps.get("max_speed_observed")
+    # GpsReport.to_dict() emits "max_speed_observed_mps"; the older unsuffixed
+    # spelling is still accepted so reports written before that name settled
+    # keep scoring.
+    max_speed = gps.get("max_speed_observed_mps", gps.get("max_speed_observed"))
     if max_speed is not None:
         max_speed = float(max_speed)
         limit = float(cfg.get_path("condition.gps.max_speed_mps"))
