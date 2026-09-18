@@ -68,8 +68,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 
 | # | Stage | Spec | Status | Lab panel | Evaluator | Notes |
 |---|-------|------|--------|-----------|-----------|-------|
-| 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
-| 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | 36/36 tests pass; S2-1 and S2-2 closed |
+| 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
+| 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
 | 4 | Reconstruction tracks | §7 | ⚪ planned | — | — | Track A first (submission floor) |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
@@ -95,6 +95,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `src/ingest/video_reader.py` | 1 | Streaming decode (grab-skip), HW decode attempt, keyframes via PyAV |
 | `src/ingest/telemetry.py` | 1 | DJI SRT (3 dialects) / CSV / TXT / EXIF parsing → `telemetry.parquet`; ENU helper |
 | `src/ingest/dji_flight_record.py` | 1 | Binary `DJIFlightRecord_*.txt` (v≤12) decoder; recording segments; video alignment |
+| `src/core/inputs.py` | all | Optional-input ledger: registry of every input with a fallback, derived per run from recorded metrics |
+| `src/ingest/klv.py` | 1 | MISB ST 0601 / STANAG 4609 KLV embedded in the video stream; MPEG-2 TS depacketizer; no ffmpeg/klvdata dependency |
 | `src/ingest/frame_selector.py` | 1 | Overlap-targeting selection, verified overlap estimator, blur gate calls |
 | `src/condition/blur.py` | 1+2 | Blur metrics, adaptive thresholds (used by Stage 1 gate), sharpening |
 | `src/condition/artifacts.py` | 2 | Blockiness detect/suppress, grid keypoint veto |
@@ -115,6 +117,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `tests/test_core.py` | infra | Config, budget, manifest, chunk sizing |
 | `tests/test_telemetry.py` | 1+2 | SRT dialects, CSV, TXT, interpolation, ENU, GPS filter |
 | `tests/test_dji_flight_record.py` | 1 | Binary DJI log decoding, segment detection, video alignment |
+| `tests/test_optional_inputs.py` | all | Ledger registry, per-flag absences, and unknown-vs-absent |
+| `tests/test_klv.py` | 1 | ST 0601 encode/decode round-trip, TS depacketization, error markers, checksum, DJI fall-through |
 | `tests/test_ingest.py` | 1 | Reader, overlap estimator, selection, aperture regression |
 | `tests/test_stage1_eval.py` | 1 | End-to-end Stage 1 on synthetic flights + scorecard |
 | `tests/test_condition.py` | 2 | Conditioning modules — **36/36 pass** (S2-1 and S2-2 closed) |
@@ -225,12 +229,21 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S1-3 | 1 | Hardware decode never engages with pip OpenCV (no CUDA) | Verify on GPU instance |
 | S1-4 | 1 | **§4.3 speed acceptance (<60 s, 10-min 4K) not met on this machine.** Projection on 640 px synthetic: analysis 64 ms/kept frame → ~77 s at the 1200-frame cap; software decode scaled to 10 min of 4K → ~740 s | Decode dominates: needs NVDEC (S1-3) and/or keyframe seeking instead of `grab()` over the whole clip. Then trim analysis (cache anchor corners: `goodFeaturesToTrack` recomputed per probe, ~10% of time). Measure on real 4K on the GPU box |
 | S1-6 | 1 | Decoded/total frames 0.73 (WARN, target <0.60) on fast synthetic pan | Fast pan keeps a frame every ~3; likely fine on real survey speeds — re-check on real footage |
+| ~~S1-9~~ | 1 | ~~KLV parser has never seen a real STANAG 4609 file~~ | **Closed 2026-09-18**: validated on all 8 QGISFMV MISB sample clips (`Drone Video Dataset/QGISFMV_Samples/MISB/`). 407–1953 rows each, GPS + attitude on every one, ST 0601 versions 1/4/6, all checksums valid in strict mode. Cross-checked `Cheyenne_Handoff` against its own burned-in overlay: aircraft position within ~7 m, altitude 9754 vs 9749 ft, frame centre lat exact, frame-centre elevation 6036 vs 6037 ft, slant range 3314 m vs 1.8 NM, UTC timestamp matched to the second. It found two real bugs — see S1-12 and S1-13 |
+| ~~S1-10~~ | 1 | ~~MP4/MOV-wrapped KLV is opt-in and only found when samples are contiguous~~ | **Superseded 2026-09-18 by S1-13**: the sample clips that looked MP4-wrapped are MPEG-2 TS with a misleading extension. Genuine-MP4 scanning stays opt-in (`scan_mp4`), which is still the right default for DJI footage |
+| ~~S1-12~~ | 1 | ~~ST 0601 checksum was computed as a plain byte sum; it rejected every real packet in all 8 sample clips~~ | **Closed 2026-09-18**: the standard specifies `bcc_16`, which adds bytes into alternating halves of a 16-bit accumulator. The synthetic round-trip could not catch it because the test encoder used the same wrong formula. Regression vector `TestRealPacket.REAL_PACKET` is a real local set from `klv_metadata_test_sync.ts`; reverting the fix fails 2 tests |
+| ~~S1-13~~ | 1 | ~~KLV source selection gated on file extension, so real ISR footage was skipped~~ | **Closed 2026-09-18**: all 8 MISB samples are MPEG-2 TS but are named `.ts`, `.mp4`, `.mpeg4` and `.H264`. Under the old rule the pipeline missed 5 of 8. `file_is_ts()` now sniffs 189 bytes for TS framing; all 8 are found with default config |
+| S1-11 | 1 | KLV carries no barometric altitude and no focal length; `alt_baro` and `focal_mm` stay NaN on an ISR clip | Focal could be derived from sensor HFOV (tag 16, parsed and stored) plus sensor width, but the width is not in ST 0601 — deriving it would need a per-platform table. Not fabricated for now |
 | S1-5 | 1 | SRT parser only tested on synthetic dialects | Test on real DJI SRTs from 2+ firmwares; competition dataset |
 | ~~S1-7~~ | 1 | ~~Blur gate false-rejects sharp frames when scene content lowers sharpness~~ | **Closed 2026-09-15**: `condition.blur.rolling_baseline`. LineVision clip reject fraction 0.713 → 0.000, 450-frame run gone; synthetic blur still fully rejected |
 | S1-8 | 1 | Overlap stays 0.998 on the forward-oblique LineVision clip; selector cannot reach the §4.3 band | Not the stride cap: with `max_stride_seconds: 10` (600 frames) strides go 15→30→60→120 then fall back to 60 and repeat (max 123). The ~240-frame probe fails verification and `_probe_for_overlap` halves it silently. 120-frame pairs (~26 m of travel at 12.9 m/s) still measure 0.998, so the affine area-overlap estimate is likely invalid for oblique/zooming views. Next: check overlap on a nadir survey clip; consider feature-track survival as the overlap measure for oblique footage |
-| S2-1 | 2 | Bilateral suppression doesn't reduce strong synthetic blocking (xfail) | Test on real low-bitrate H.264 before tuning |
-| S2-2 | 2 | Shadow detector: fixed 25th-percentile luminance cut caps recall at 25% of frame (xfail on mild synthetic shadow) | Realistic shadow (0.32× light, 19.5% of frame): recall 0.98 / precision 0.90. Need a cap-free threshold that isn't Otsu |
-| S2-3 | 2 | 45% shadow fraction on demo synthetic flight (false positives on dark blue-ish blocks) | Check on real footage |
+| ~~S2-1~~ | 2 | ~~Bilateral suppression doesn't reduce strong synthetic blocking (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: boundary-weighted bilateral + guided refinement. Measured reduction ratio **0.233** on the repo test scene (KPI target > 0.10) |
+| ~~S2-2~~ | 2 | ~~Shadow detector: fixed 25th-percentile luminance cut caps recall at 25% of frame (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: relative blue-ratio + value threshold. Measured on the repo test scene: recall **0.521** (KPI target > 0.50 — passes by 0.021, not the 0.69 the session entry claimed), precision **0.321**, frame fraction **0.317**. Margin is thin and precision is poor — see S2-3 |
+| S2-3 | 2 | 45% shadow fraction on demo synthetic flight (false positives on dark blue-ish blocks) | Still open. Corroborated 2026-09-18: on the repo test scene the detector flags 31.7% of the frame at precision 0.321 — ~3× over-detection. Check on real footage |
+| ~~S2-5~~ | 2 | ~~Stage 2 Lab panel crashed on Run: `RuntimeError: conditioning needs a completed ingest stage`~~ | **Closed 2026-09-18**: `manifest_stages` is ownership, not dependency, so the Lab ran `condition` alone into an empty run dir. Added `manifest_stages_through()` in `src/stages.py`; `ui/app.py` now runs the prerequisite chain. Regression test added and confirmed to fail without the fix |
+| ~~S2-6~~ | 2 | ~~Stage 2 scores 0/100 on real pipeline output; the condition stage writes none of the six artifacts the evaluator reads~~ | **Closed 2026-09-18**: `_write_condition_reports()` in `src/pipeline.py` now emits the four report JSONs and two per-frame parquets, registered as manifest artifacts. `demo_flight.mp4` rescored 0/100 → **100/100** (12 KPIs live, was 4). Also fixed a key mismatch: `GpsReport.to_dict()` writes `max_speed_observed_mps`, the evaluator read `max_speed_observed`, so that KPI never fired. Guarded by `tests/test_stage2_eval.py` (16 of 18 fail without the fix) |
+| ~~S2-7~~ | 2 | ~~No direct test coverage for `src/qa/stage2_eval.py` (310 lines); Stage 1 has `tests/test_stage1_eval.py`~~ | **Closed 2026-09-18**: `tests/test_stage2_eval.py`, 66 tests. 18 integration (report contract, manifest registration, chart columns, scorecard) plus 48 table-driven unit tests over `evaluate_condition` with synthesised reports, one per threshold boundary across all four KPI groups, the missing-report branches, the scale-free GPS path and the warn-counts-half score arithmetic. Verified by mutation: flipping `<` to `<=` in the gain-span and shadow-recall comparisons fails 3 tests |
+| ~~S2-8~~ | 2 | ~~100/100 overstates Stage 2: 5 of 12 KPIs were INFO, so a degraded run could not move the score~~ | **Closed 2026-09-18**: shadow coverage, low-light fraction and altitude provenance promoted to scored KPIs with bands in `qa.stage2` (rule 6 — the gain-span and GPS-outlier constants moved there too). Now 9 scored / 3 info; a fully degraded report scores **5.6/100** with 8 fails. `demo_flight.mp4` still scores 100, now earned across 9 scored KPIs. The three remaining INFO KPIs are contextual, not quality signals (keypoints vetoed happens in Stage 4; RTK absence is not a defect; masked *area* is scored instead of mover count). **Does not close S2-3**: coverage is not correctness — telling an over-firing detector from a genuinely dark scene still needs per-pixel truth |
 | S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -602,3 +615,444 @@ write Stage Lab panel, flip status to BUILT, confirm 36/36 tests green.
 - Stage 3 is Occluded Surface Reconstruction (§6), but it needs Stage 4 (recon) output first.
 - Start Stage 4 Track A (OpenDroneMap) — the submission floor.
 - GPU box work per `CLOUD_GPU_GUIDE.md`: S1-3 (NVDEC), S1-4 (real 4K timing), Track B.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (Lab panel wiring to Stage 1)
+**Goal:** Audit the Stage 2 hand-off from the 2026-09-16 session, then fix the Stage Lab
+panel so Stage 2 actually runs on top of Stage 1 output.
+
+**Created:**
+- (none — see Modified)
+
+**Modified:**
+- `src/stages.py` — added `manifest_stages_through(stage)`: the manifest stages needed to
+  *produce* a stage's output (every BUILT stage at or before it in `execution_order`, then
+  the stage itself), as distinct from `manifest_stages`, which is what a stage *owns*.
+- `ui/app.py` — the stage page now runs `manifest_stages_through(spec)` instead of
+  `list(spec.manifest_stages)`. Stage 1 is unaffected (`['ingest']` either way); Stage 2
+  now resolves to `['ingest', 'condition']`.
+- `ui/stages/stage2_condition.py` — `evaluate()` called `Config.default()`, which does not
+  exist on `Config`; it raised `AttributeError` the first time it was ever executed.
+  Replaced with a `_load()` helper mirroring `stage1_ingest._load`: reads the config from
+  the run manifest (so Lab parameter overrides are what get scored, not defaults) and loads
+  outputs from `run_dir / "condition"` rather than the run root. Fixed at all three call
+  sites (`evaluate`, `headline`, `render_results`).
+- `tests/test_ui_smoke.py` — added `test_stage2_runs_prerequisite_stages_from_the_ui`,
+  mirroring the Stage 1 end-to-end test.
+- `DEVLOG.md` — status board, open issues (S2-1/S2-2 struck, S2-5/S2-6/S2-7 added), this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- Did **not** add `"ingest"` to Stage 2's `manifest_stages`. Ownership must stay disjoint —
+  `tests/test_stage1_eval.py::test_every_manifest_stage_belongs_to_exactly_one_spec_stage`
+  enforces it, and the budget keys off the same tuple. Dependency is a separate concept, so
+  it got a separate helper. This also fixes Stages 3–6 in advance: `occlusion` resolves to
+  `['ingest','condition','fusion']` and `recon` to `['ingest','condition','track_b',...]`,
+  respecting the §6/§7 execution-order inversion.
+- Verified the 2026-09-16 xfail removals were legitimate: only the `@pytest.mark.xfail`
+  decorators were removed, assertion bodies untouched. Measured both KPIs directly —
+  blockiness reduction **0.233** (target > 0.10, comfortable); shadow recall **0.521**
+  (target > 0.50, passes by 0.021). The session entry's "69% recall" is not reproducible on
+  the repo's own test scene; logged the measured number instead.
+
+**Dead ends (also add to §4):** (none — the failed approach here was the *previous* session's
+assumption that a panel which loads is a panel that works; recorded as S2-7.)
+
+**Tests:** 157 passed / 0 xfailed / 0 failed (was 156; +1 new). New test confirmed to fail
+with `RuntimeError: conditioning needs a completed ingest stage` when the `ui/app.py` fix is
+reverted, so it is a real regression guard and not a tautology.
+
+**Open issues added/closed:** S2-5 closed. S2-1, S2-2 struck (were closed 2026-09-16 but §5
+had not been updated). S2-6 and S2-7 added. S2-3 corroborated with numbers. S2-4 unchanged
+(run logged `ultralytics is not installed`).
+
+**Next:**
+- **S2-6 is the blocker**: Stage 2's scorecard reads 0/100 until `src/condition/*` writes the
+  four report JSONs and two parquet frames the evaluator expects. Until then "BUILT" overstates
+  Stage 2 — the panel runs, but it cannot score.
+- Then S2-7: add `tests/test_stage2_eval.py`.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (S2-6: the scorecard reads 0/100)
+**Goal:** Close S2-6 — make the conditioning stage write the artifacts `src/qa/stage2_eval.py`
+reads, so the Stage 2 scorecard measures the run instead of reporting missing files.
+
+**Created:**
+- `tests/test_stage2_eval.py` — 18 integration tests over a real synthetic run: the four report
+  JSONs and two parquets exist, are registered as manifest artifacts, load non-empty, carry the
+  columns the charts plot, and produce a scorecard with no `*_report_missing` KPI.
+
+**Modified:**
+- `src/pipeline.py` — added `_write_condition_reports()`; `run_condition` now tracks
+  `artifact_assessments` and emits `artifacts_report.json`, `illumination_report.json`,
+  `dynamic_report.json`, `gps_report.json`, `frame_artifacts.parquet` and
+  `frame_illumination.parquet`, all registered in the manifest. The illumination and dynamic
+  summaries are computed once and shared with the metrics dict rather than recomputed.
+- `src/qa/stage2_eval.py` — `_gps_kpis` read `max_speed_observed`; `GpsReport.to_dict()` writes
+  `max_speed_observed_mps`, so the max-speed KPI could never fire. Reads the canonical name now,
+  falling back to the old spelling.
+- `ui/stages/stage2_condition.py` — KPI table cast to text before `st.dataframe`. With only four
+  KPIs the column was all-numeric; with twelve it mixes floats, ints, bools and strings, and
+  Arrow inferred `double` then raised `ArrowInvalid` on `"baro+gps_complementary"`. Streamlit
+  swallowed it into a fallback render, so the suite stayed green while the table degraded.
+- `DEVLOG.md` — status board back to 🟢, S2-6 struck, S2-7 narrowed, S2-8 added, this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- Wrote the reports from what the stage *already computes*. `summarize_illumination`,
+  `summarize_masks`, `ExposureChain.summary` and `GpsReport.to_dict` already returned exactly the
+  keys the evaluator wanted — they were being routed into manifest metrics and nowhere else. This
+  is an adapter, not new measurement, which is why it is ~90 lines and changed no numbers.
+- The reports are written even though the manifest holds the same numbers, because the evaluator
+  is a standalone reader: it takes a run directory and nothing else, so the Lab can score a run it
+  did not launch. Duplication is the price of that contract.
+- **Left the ground-truth KPIs dormant on purpose.** `blockiness_before/after`, `shadow_recall` and
+  `shadow_false_positive` need per-pixel truth for real frames; `generate_synthetic_flight`
+  produces flight-level truth only. The evaluator skips absent keys, so they stay silent rather
+  than being filled with numbers nothing measured. Logged as S2-8, with a test asserting they
+  remain absent so nobody "fixes" this by fabricating them.
+- `keypoints_vetoed` is reported as 0 with a comment: grid-keypoint vetoing (`filter_grid_keypoints`)
+  runs at feature extraction in Stage 4, not in conditioning.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 175 passed / 0 xfailed / 0 failed (was 157; +18). Verified the new tests are real guards
+by stashing `src/pipeline.py` and re-running: 16 of the 18 fail without the fix. The 2 that still
+pass are the honesty checks asserting the ground-truth KPIs stay dormant, which is correct in both
+states.
+
+**Open issues added/closed:** S2-6 closed. S2-7 narrowed to "unit coverage of KPI threshold logic".
+S2-8 added (100/100 overstates the stage — 5 of 12 KPIs are INFO and cost nothing).
+
+**Next:**
+- S2-8 then S2-3: decide whether shadow coverage becomes a scored KPI, or add per-pixel truth to
+  `src/qa/synthetic.py` so shadow recall scores for real. Until then treat 100/100 as "nothing is
+  broken", not "nothing can be improved".
+- S2-4 still needs `ultralytics` on the GPU box before the semantic masking path is exercised.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (S2-7: evaluator test coverage)
+**Goal:** Close S2-7 — the Stage 2 evaluator's KPI threshold logic had no unit coverage, so
+every warn and fail branch was unexercised.
+
+**Created:** (none — extended `tests/test_stage2_eval.py`)
+
+**Modified:**
+- `tests/test_stage2_eval.py` — added 48 table-driven unit tests (66 total in the file). They
+  drive `evaluate_condition` with synthesised report dicts rather than a pipeline run, one case
+  per threshold boundary: artifact correction fraction, blockiness reduction (and its absence
+  without ground truth), exposure gain span, rejected links, low-light, shadow recall, dark-paint
+  false positives, peak masked area, GPS outlier fraction, smoothed-fix survival, both spellings
+  of the max-speed key, the scale-free GPS early return, the missing-report branches, and the
+  score arithmetic (warn counts half, info does not count).
+- `DEVLOG.md` — S2-7 struck, status board suite count, this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- Boundary values, not midpoints. Every case sits exactly on a threshold (0.15 not 0.2; 0.50 not
+  0.6), because that is the only place an off-by-one comparison shows up.
+- Verified the tests are load-bearing by mutation rather than by assuming: flipping `<` to `<=`
+  in the gain-span comparison and `>` to `>=` in shadow recall failed 3 tests. A boundary test
+  that passes under both spellings of the comparison is not testing the boundary.
+- Fixed one expectation of mine, not the code: the score-arithmetic case scores 83.3, not 75 —
+  `exposure_rejected_links` also passes when no links were rejected, so three KPIs score, not two.
+  The test now names all three explicitly so the arithmetic is readable.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 223 passed / 0 xfailed / 0 failed (was 175; +48).
+
+**Open issues added/closed:** S2-7 closed. Remaining Stage 2 issues: S2-3 (shadow over-detection),
+S2-4 (ultralytics on the GPU box), S2-8 (100/100 overstates the stage).
+
+**Next:**
+- S2-8 / S2-3 together: promote shadow coverage to a scored KPI, or add per-pixel truth to
+  `src/qa/synthetic.py` so `shadow_recall` and `shadow_false_positive` score for real. The unit
+  tests for both already exist and are currently exercised only with synthesised inputs.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 1 (KLV / STANAG 4609 telemetry)
+**Goal:** The PS targets military-intelligence and disaster-management use, where imagery is
+normally STANAG 4609 — telemetry multiplexed into the video stream as MISB ST 0601 KLV, not a
+DJI sidecar. Add a KLV telemetry source while leaving the SRT/CSV/EXIF paths untouched.
+
+**Created:**
+- `src/ingest/klv.py` — MISB ST 0601 parser: MPEG-2 TS depacketizer, BER/BER-OID decoding,
+  ST 0601 fixed-point scaling, checksum verification, and container resolution (TS, raw `.klv`,
+  optional MP4 scan). Maps sensor lat/lon/alt and platform heading/pitch/roll onto the canonical
+  schema, and carries frame centre, slant range, sensor-relative pointing and FOV as extra columns.
+- `tests/test_klv.py` — 25 tests. Includes an ST 0601 *encoder* written from the standard, so the
+  round-trip tests compare two independent implementations of the same scaling rules.
+
+**Modified:**
+- `src/ingest/telemetry.py` — added the `klv` branch to `load_telemetry`; added `TELEMETRY_SOURCES`
+  as the single registry of readable sources; default source list is now `[klv, srt, csv, exif]`.
+- `configs/default.yaml` — `ingest.telemetry.klv` section (`enabled`, `sidecar_suffixes`,
+  `scan_mp4`, `require_checksum`, `max_packets`) and the reordered `sources`.
+- `ui/stages/stage1_ingest.py` — the telemetry multiselect hard-coded `["srt", "csv", "exif"]` as
+  its options while taking its default from config. Adding a fourth source put a default outside
+  the options, Streamlit raised, and the **whole Stage 1 panel failed to render** — two UI tests
+  caught it. Options now come from `TELEMETRY_SOURCES` plus anything a preset adds.
+- `DEVLOG.md` — repo map, status board, S1-9/S1-10/S1-11, this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **No new dependency.** `klvdata`/`pymisb` would work, and QGISFMV uses pymisb + ffmpeg, but
+  neither ffmpeg nor klvdata is installed here and the PS puts this format on the critical path.
+  Followed the `dji_flight_record.py` precedent: self-contained binary parser, format documented
+  in the module docstring.
+- **No PAT/PMT walk.** The 16-byte universal key identifies local sets unambiguously once TS
+  headers are stripped, and each set's BER length says where it ends. Parsing PES framing would
+  add failure modes without adding information. The PID with the most keys wins.
+- **MP4 scanning is opt-in.** Proving a DJI MP4 has no KLV costs a full read of a 4K file on every
+  run. TS and `.klv` sidecars are found automatically; MP4 needs `scan_mp4: true` (S1-10).
+- **ST 0601 error markers decode to NaN**, not to a plausible angle. `0x8000` in tag 6 means "no
+  reading"; decoding it as -20° pitch would be a silent lie. Tested.
+- **Lenient checksums by default.** Failures are counted and reported in the table notes; some
+  encoders emit a wrong checksum on otherwise sound packets. `require_checksum: true` rejects the
+  stream instead.
+- `klv` goes **first** in the source order: it is multiplexed against the video's own clock, so it
+  needs none of the alignment search the `flight_record` settings exist for. It is absent from DJI
+  footage and falls through at INFO, not as a downgrade.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 248 passed / 0 xfailed / 0 failed (was 223; +25). Verified the round-trip tests are real
+by mutating the parser's scale factors — latitude ±90→±180 and altitude offset −900→0 each fail
+`test_position_round_trips`. Verified the DJI path is unaffected by running the real pipeline on
+`demo_flight.mp4`: KLV logs "no KLV/STANAG 4609 metadata", SRT parses 120 rows, elapsed 4.3 s.
+
+**Open issues added/closed:** S1-9, S1-10, S1-11 added. None closed.
+
+**Next:**
+- **S1-9 is the one that matters**: this parser has never seen a real STANAG 4609 file. Get one
+  before trusting it — real muxes vary (multi-PID, PES padding, ST 0604 timestamps, ST 0102
+  security sets).
+- Surface the new georeferencing fields (frame centre, slant range, sensor pointing) in the Stage 1
+  Lab telemetry tab, and use them as pose priors in Stage 4 / georeferencing in Stage 5.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (S2-8: make the scorecard able to fail)
+**Goal:** Close S2-8. Stage 2 scored 100/100 with 5 of 12 KPIs reporting "info", so no degraded
+run could move the number. A scorecard that cannot go red cannot localise a fault, which is the
+whole reason the Stage Lab exists — and the plan is to lean on it when real footage arrives.
+
+**Created:** (none — extended `tests/test_stage2_eval.py`)
+
+**Modified:**
+- `configs/default.yaml` — new `qa.stage2` section holding every Stage 2 scorecard band:
+  `shadow_fraction_warn/fail`, `low_light_fraction_warn/fail`, `altitude_source_pass/warn`, plus
+  `gain_span_warn` and `gps_outlier_fraction_warn/fail`, which had been hard-coded module
+  constants in the evaluator (rule 6).
+- `src/qa/stage2_eval.py` — `_band()` / `_band_list()` read those thresholds with the old
+  constants as fallbacks, so an old preset still scores. Three KPIs promoted from INFO to scored:
+  mean shadow coverage, low-light fraction, and altitude source.
+- `tests/test_stage2_eval.py` — 19 tests added (85 in the file). Bands for all three promoted
+  KPIs, a config-override test proving the band is tunable, and `TestTheCardCanFail`, which is
+  the actual S2-8 regression guard.
+- `DEVLOG.md` — S2-8 struck, status board, this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Promoted three KPIs, not five.** The remaining INFO KPIs are context, not quality signals, and
+  scoring them would add noise rather than sensitivity: `keypoints_vetoed` is always 0 because
+  grid vetoing runs in Stage 4; `gps_rtk_detected` — most platforms have no RTK and its absence is
+  not a defect; `dynamic_frames_with_movers` — how much of a frame is masked is the
+  reconstruction-relevant quantity and is already scored as `dynamic_masked_fraction_max`, so a
+  survey over a highway would be penalised twice for nothing.
+- **Altitude provenance is scored on the rule the KPI text already stated**: complementary baro+GPS
+  passes, GPS-only warns (noisier but still an absolute datum), `baro_relative_only` fails because
+  the vertical datum is unknown and absolute georeferencing downstream becomes a guess.
+- **Shadow bands are deliberately loose** (warn 0.30, fail 0.50). A genuinely shadowed scene can
+  reach 0.3; past half the frame an over-firing detector is the likelier explanation. This measures
+  *coverage*, not *correctness* — which is why it does not close S2-3.
+- Fixed two of my own test expectations rather than the code: the score-arithmetic case moves
+  83.3 → 90.0 now that low-light and shadow score, and `dynamic_frames_with_movers` legitimately
+  stays INFO.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 267 passed / 0 xfailed / 0 failed (was 248; +19).
+
+**Open issues added/closed:** S2-8 closed. S2-3 and S2-4 remain open for Stage 2.
+
+**Next:**
+- **S2-3 still needs per-pixel truth.** `shadow_recall` and `shadow_false_positive` have unit tests
+  but stay dormant on real runs because `src/qa/synthetic.py` emits flight-level truth only. Note
+  the evaluator reads those values from the *report*, so wiring them up means either contaminating
+  the production `run_condition` with test-only truth or moving ground-truth KPIs to evaluation
+  time — the second is the right design and is not a small change.
+- Real-footage Stage 2 run on `LineVision-VideoGeoTagging.mp4`, then Track A on public imagery.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 1 (KLV validated on real ISR footage)
+**Goal:** Close S1-9 — the KLV parser had only ever seen packets this repo encoded itself. Eight
+real STANAG 4609 clips arrived (QGISFMV sample media, `Drone Video Dataset/QGISFMV_Samples/MISB/`).
+
+**Created:** (none — extended `tests/test_klv.py`)
+
+**Modified:**
+- `src/ingest/klv.py` — **two real bugs**, both invisible to the synthetic tests:
+  1. `_checksum` was a plain byte sum. ST 0601 specifies `bcc_16`, which adds each byte into
+     alternating halves of a 16-bit accumulator. The plain sum matched **0 of 2,396** real packets;
+     `bcc_16` matches all of them. `require_checksum: true` would have rejected every real stream.
+  2. `find_klv_source` gated on file extension. All eight samples are MPEG-2 TS but are named
+     `.ts`, `.mp4`, `.mpeg4` and `.H264` — the pipeline missed 5 of 8. Added `file_is_ts()`, which
+     sniffs 189 bytes for sync-byte framing; a genuine MP4 still needs `scan_mp4`.
+- `tests/test_klv.py` — `TestRealPacket` (a real 238-byte local set from `klv_metadata_test_sync.ts`
+  as a hex vector) and `TestMisnamedContainers`. 38 tests in the file.
+- `DEVLOG.md` — S1-9 closed, S1-10 superseded, S1-12 and S1-13 added and closed, this entry.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Kept `scan_mp4: false`.** The evidence looked like it argued for flipping it — until the files
+  turned out to be TS wearing an `.mp4` extension. Sniffing the container fixes the real problem;
+  the original reasoning (never read a 475 MB DJI MP4 to prove it has no KLV) still stands.
+- Embedded a real packet as a test vector rather than only widening the synthetic tests. The
+  checksum bug is the exact failure a self-encoding round-trip cannot catch: encoder and decoder
+  agreed with each other and disagreed with the world. One external vector is worth more here than
+  any number of self-consistent ones.
+
+**Dead ends (also add to §4):**
+- **A round-trip test against your own encoder cannot validate a shared assumption.** The ST 0601
+  scaling was caught this way (mutation-tested, genuinely independent), but the checksum was not,
+  because the same wrong formula was written on both sides. Any future binary format added here
+  needs at least one vector from outside the repo before it is trusted.
+
+**Tests:** 277 passed / 0 xfailed / 0 failed (was 267; +10). Verified the real vector is what catches
+the checksum bug: reverting `_checksum` to the plain sum fails exactly the 2 `TestRealPacket` tests
+while all 27 synthetic KLV tests still pass.
+
+**Validation against burned-in overlay** (`Cheyenne_Handoff`, frame at 00:03, overlay vs parsed):
+
+| Field | Overlay | Parsed | |
+|---|---|---|---|
+| UTC | 19SEP2012 14:32:35 −6.0 | 2012-09-19 20:32:34 UTC | matches to the second |
+| Aircraft lat/lon | 41.09990N 104.78970W | 41.09984 / −104.78979 | ~7 m |
+| Aircraft altitude | 9749 ft | 2973 m = 9754 ft | 5 ft |
+| Frame centre lat | 41.12784N | 41.127838 | exact |
+| Frame centre elevation | 6037 ft | 1839.9 m = 6036 ft | 1 ft |
+| Slant range | 1.8 NM | 3314 m = 1.789 NM | rounds to 1.8 |
+
+**Open issues added/closed:** S1-9, S1-12, S1-13 closed. S1-10 superseded. S1-11 (no baro/focal in
+KLV) still stands and is inherent to the format.
+
+**Next:**
+- These eight clips are usable Stage 1 inputs *today* — real nadir and oblique ISR footage with
+  frame-synced telemetry, no alignment guesswork. Run Stage 1 + 2 against them for a real-footage
+  scorecard.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (first real-footage run + dark-mode scorecard)
+**Goal:** Read the first real Stage 2 scorecard (Esri_multiplexer_1, a real ISR clip), fix the
+unreadable Diagnostics table in dark mode, and answer whether 78/100 is a good result.
+
+**Created:** (none)
+
+**Modified:**
+- `ui/stages/stage2_condition.py` — the Diagnostics scorecard painted rows with opaque light
+  pastels (`#e6ffed`, `#fff8c5`, `#ffebe9`). Streamlit keeps its own text colour, so in dark mode
+  every row was light text on a pale fill and unreadable. Replaced with translucent `rgba` tints
+  that sit over whatever ground the theme paints, so contrast holds in both.
+- `src/pipeline.py` — `run_condition` now re-scores each corrected frame *after*
+  `suppress_block_artifacts` and writes `blockiness_before`/`blockiness_after` into
+  `artifacts_report.json`.
+- `src/qa/stage2_eval.py` — `blockiness_reduction` no longer gated on `truth`. Before and after
+  are measured on the same real frame, so nothing about it needs synthetic ground truth; the gate
+  was over-conservative and left the KPI dormant on every real run. Group renamed from
+  "Artifact suppression (ground truth)" to "Artifact suppression".
+- `tests/test_stage2_eval.py` — the two tests that pinned the old gating updated; added a case for
+  "no frame needed correction, so there is no before/after pair". The shadow ground-truth honesty
+  guard is narrowed to the shadow KPIs, which genuinely still need per-pixel truth.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Did not move the blockiness threshold to clear the fail.** 53 frames: median 1.278, but 11
+  above 1.5 and 6 above 2.0 — only 6 of the 17 sit in the marginal 1.35–1.5 band. The population
+  is genuinely bimodal, so the detector is right and the footage really is blocky in about a fifth
+  of frames. Raising the band to make the card green would be deleting the signal, which is the
+  opposite of what S2-8 was for.
+- **Added the measurement the fail was missing instead.** "Frames requiring correction" measures
+  the *input* — how much work it needed — and says nothing about whether conditioning helped. The
+  new KPI answers that: on this clip, corrected frames went 1.787 → 1.277, a **28.6% reduction**,
+  and 1.277 is below the 1.35 visible-blocking threshold, so corrected frames now read as clean.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 278 passed / 0 xfailed / 0 failed (was 277; +1).
+
+**First real-footage Stage 2 scorecard** (`Esri_multiplexer_1.mp4`, 53 frames): **80/100**,
+7 pass / 2 warn / 1 fail / 3 info.
+
+| | value | target | |
+|---|---|---|---|
+| Frames requiring correction | 0.321 | < 0.30 | FAIL — property of the input, not the stage |
+| Blockiness reduction on corrected frames | 0.286 | > 0.10 | PASS — suppression works on real footage |
+| Exposure gain span | 0.6 | < 0.4 | WARN — real auto-exposure drift, absent from synthetic |
+| Altitude source | gps | baro+gps_complementary | WARN — KLV carries no baro (S1-11) |
+| Mean shadow coverage | 0.045 | < 0.30 | PASS — and far below the 0.218 the synthetic clip gave |
+
+**Open issues added/closed:** none closed. The exposure-gain-span warn is the first real evidence
+for a §5.4 issue that synthetic flights never produced; worth its own investigation.
+
+**Next:**
+- Investigate the exposure gain span (0.6 vs 0.4): real AE hunting is exactly the thing
+  `ExposureChain` exists to absorb, and the synthetic generator never exercised it.
+- Run the remaining 7 MISB clips for a spread rather than a single data point.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Declared fallbacks for every optional input
+**Goal:** Missing barometer, focal length, RTK, PyAV, ultralytics and the rest were each handled
+with a working fallback, but only announced as a `downgrade` warning in `run.jsonl`. Make the
+availability of every optional input a declared, visible part of each run.
+
+**Created:**
+- `src/core/inputs.py` — registry of 10 optional inputs, each with the stage that decides it, the
+  fallback that runs without it, and what that costs. `describe_optional_inputs(manifest)` builds
+  the per-run ledger.
+- `tests/test_optional_inputs.py` — 16 tests: registry invariants, one case per flag, and the
+  unknown-vs-absent distinction.
+
+**Modified:**
+- `src/pipeline.py` — writes the ledger to `manifest.summary["optional_inputs"]` and to a
+  standalone `optional_inputs.json`, and logs a one-line roll-up of what was absent.
+- `ui/lab.py` — `render_optional_inputs()`: an expander, open by default when anything is absent,
+  listing input / status / detail / what ran instead / what it costs.
+- `ui/app.py` — shown under the scorecard on every stage page and on "Pipeline so far".
+- `tests/test_core.py` — `test_stage_timing_is_recorded` slept 10 ms against Windows' ~15.6 ms
+  timer granularity and failed under full-suite load while passing in isolation. Now 50 ms. A
+  pre-existing flake, unrelated to this change, found while running the suite.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Derived, not threaded.** The ledger reads metrics the stages already record rather than taking
+  a new parameter through every stage signature. Adding an entry costs nothing at the call sites
+  and the ledger cannot claim something the run did not measure.
+- **Three-valued, not boolean.** `unknown` (the deciding stage never ran) is kept distinct from
+  `absent` (it ran and the input was not there). Rendering "we did not look" as "missing" would be
+  a lie, and it is the state every row is in before ingest completes. Two tests pin it.
+- **Absent is not a failure and is not scored.** These are legitimate operating modes, so the
+  ledger sits *beside* the scorecard rather than inside it. The point is that a surprising KPI is
+  often a missing input rather than a broken stage, and that link was previously invisible.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 294 passed / 0 xfailed / 0 failed (was 278; +16).
+
+**Ledger on the real ISR clip** (`Esri_multiplexer_1.mp4`): 4 present, 6 absent — barometric
+altitude, baro/GPS fusion, focal length, RTK, PyAV keyframes, semantic masking. Two of the run's
+three non-pass KPIs are explained directly by it: the altitude-source WARN is the missing
+barometer (S1-11, inherent to KLV), not a GPS bug.
+
+**Open issues added/closed:** none closed.
+
+**Next:**
+- Exposure gain span 0.6 vs 0.4 on real footage — the one warn the ledger does *not* explain, so
+  it is a genuine §5.4 question.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
