@@ -18,6 +18,7 @@ import streamlit as st
 from src.core.config import Config
 from src.core.manifest import RunManifest
 from src.ingest.video_reader import VideoReader
+from src.ingest.telemetry import TELEMETRY_SOURCES
 from src.qa.stage1_eval import (
     OVERLAP_BAND,
     IngestOutputs,
@@ -119,7 +120,12 @@ def render_params(cfg: Config) -> dict[str, Any]:
             format_func=lambda w: "native" if w is None else f"{w}px")
         values["ingest.video.hardware_decode"] = st.checkbox("Try hardware decode", bool(video["hardware_decode"]))
         sources = list(cfg.get_path("ingest.telemetry.sources"))
-        chosen = st.multiselect("Telemetry sources (priority order)", ["srt", "csv", "exif"], sources)
+        # Options come from the registry, plus anything a preset configured that
+        # the registry does not list — a default outside the options would make
+        # Streamlit raise and take the whole panel down with it.
+        options = list(dict.fromkeys(list(TELEMETRY_SOURCES) + sources))
+        chosen = st.multiselect("Telemetry sources (priority order)", options, sources,
+                                help="klv = MISB ST 0601 / STANAG 4609 embedded metadata.")
         values["ingest.telemetry.sources"] = chosen
         record = cfg.get_path("ingest.telemetry.flight_record")
         segment = st.text_input(

@@ -41,6 +41,11 @@ log = get_logger(__name__)
 
 SCHEMA_COLUMNS = ["t", "lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm", "valid_flags"]
 
+# Every telemetry source ``load_telemetry`` knows how to read, in the §4.2
+# priority order. The Stage Lab offers these, so a source added here appears
+# in the UI without the two lists drifting apart.
+TELEMETRY_SOURCES = ("klv", "srt", "csv", "exif")
+
 
 class TelemetryFlags(IntFlag):
     """Per-row validity bitmask carried through to the QA report."""
@@ -697,7 +702,7 @@ def load_telemetry(
     an error.
     """
     video_path = Path(video_path)
-    sources = list(cfg.get_path("ingest.telemetry.sources", ["srt", "csv", "exif"]))
+    sources = list(cfg.get_path("ingest.telemetry.sources", ["klv", "srt", "csv", "exif"]))
     column_map = cfg.get_path("ingest.telemetry.csv_column_map", {})
     if hasattr(column_map, "to_dict"):
         column_map = column_map.to_dict()
@@ -726,6 +731,16 @@ def load_telemetry(
                     table = parse_dji_flight_record(path, video_duration_s=video_duration_s, **settings)
                 else:
                     table = parse_flight_csv(path, column_map, headerless_order=headerless_order)
+        elif source == "klv":
+            # Imported here: klv builds on TelemetryTable from this module.
+            from src.ingest.klv import load_klv_for_video
+
+            settings = cfg.get_path("ingest.telemetry.klv", {})
+            settings = settings.to_dict() if hasattr(settings, "to_dict") else dict(settings)
+            table = load_klv_for_video(video_path, settings)
+            if table is None:
+                log_event(log, logging.INFO, "no KLV/STANAG 4609 metadata for this video",
+                          video=video_path.name)
         elif source == "exif":
             if frame_paths:
                 table = parse_exif(frame_paths, frame_timestamps)
@@ -749,7 +764,7 @@ def load_telemetry(
             event="downgrade",
             component="telemetry",
             fallback="scale-free reconstruction",
-            reason="no SRT, CSV or EXIF source yielded usable rows",
+            reason="no KLV, SRT, CSV or EXIF source yielded usable rows",
         )
         return TelemetryTable.empty("no telemetry source available; model is scale-free")
 

@@ -39,10 +39,31 @@ ingest:
   telemetry:
     # Search order for telemetry; first source that yields valid rows wins,
     # later sources fill missing columns only. See spec §4.2.
-    sources: [srt, csv, exif]
+    # klv is first: STANAG 4609 metadata is multiplexed against the video's own
+    # clock, so it needs no alignment search and is the most trustworthy source
+    # when present. It is absent from DJI footage and falls through harmlessly.
+    sources: [klv, srt, csv, exif]
     # Accept a fix only if the reported horizontal accuracy is below this (m).
     # null disables the check (most DJI SRT variants do not report it).
     max_hdop: null
+    klv:
+      # MISB ST 0601 (STANAG 4609) telemetry carried inside the video stream —
+      # the usual format for military-intelligence and disaster-response
+      # imagery. Parsed by src/ingest/klv.py; needs neither ffmpeg nor klvdata.
+      enabled: true
+      # Sidecar files searched when the video itself is not a TS. A raw .klv is
+      # what `ffmpeg -i in.ts -map 0:d -c copy out.klv` writes.
+      sidecar_suffixes: [.klv, .ts]
+      # Scan MP4/MOV for KLV samples. Off by default: a DJI MP4 never carries
+      # KLV, and proving that costs a full read of a 4K file on every run. Turn
+      # it on for MP4-wrapped ISR footage.
+      scan_mp4: false
+      # Reject the whole stream if any ST 0601 checksum (tag 1) fails. Off by
+      # default because some encoders emit a wrong checksum while the rest of
+      # the packet is sound; failures are counted and reported either way.
+      require_checksum: false
+      # Guard rail for very long recordings; ISR platforms emit ~30 packets/s.
+      max_packets: 200000
     csv_column_map:
       # Canonical name -> list of accepted header spellings (case-insensitive,
       # matched after stripping non-alphanumerics). Extend, never hard-code.
