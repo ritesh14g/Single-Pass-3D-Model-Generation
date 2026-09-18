@@ -61,6 +61,10 @@ class ExposureTransform:
     bias: float = 0.0
     fit_quality: float = 1.0    # correlation of the quantile fit, 0-1
     clamped: bool = False
+    # The composed gain before clamping. When `clamped` is set, `gain` is a
+    # bound rather than a measurement, and this is what the chain actually
+    # asked for — the difference is how far the correction fell short.
+    requested_gain: float = 1.0
 
     def apply(self, image: np.ndarray) -> np.ndarray:
         if abs(self.gain - 1.0) < 1e-3 and abs(self.bias) < 0.5:
@@ -73,6 +77,7 @@ class ExposureTransform:
             "bias": round(self.bias, 2),
             "fit_quality": round(self.fit_quality, 3),
             "clamped": self.clamped,
+            "requested_gain": round(self.requested_gain, 4),
         }
 
 
@@ -217,10 +222,14 @@ class ExposureChain:
         self.max_gain = float(chain_cfg["max_gain"])
         self.min_gain = float(chain_cfg["min_gain"])
         self.transforms: dict[int, ExposureTransform] = {}
+        # The gain the chain would have reached with no bounds, per frame. Only
+        # a diagnostic: never applied to an image.
+        self.unclamped_gains: dict[int, float] = {}
         self.rejected_links = 0
         self._previous: np.ndarray | None = None
         self._previous_key: int | None = None
         self._cumulative = ExposureTransform(1.0, 0.0)
+        self._unclamped_gain = 1.0
 
     def push(
         self, key: int, image: np.ndarray, geometry: Sequence[float] | None = None
@@ -238,6 +247,7 @@ class ExposureChain:
 
         if self._previous is None:
             self._cumulative = ExposureTransform(1.0, 0.0)
+            self._unclamped_gain = 1.0
         else:
             step = fit_gain_bias(self._previous, image, geometry)
             if step.fit_quality < 0.5 or not (self.min_gain <= step.gain <= self.max_gain):
@@ -253,31 +263,55 @@ class ExposureChain:
                 step = ExposureTransform(1.0, 0.0, fit_quality=step.fit_quality)
             composed_gain = self._cumulative.gain * step.gain
             composed_bias = self._cumulative.gain * step.bias + self._cumulative.bias
+            # A second accumulator that is never clamped. Once a frame is
+            # pinned to a bound the clamped value becomes the next frame's
+            # base, so the chain forgets where it really was; this keeps the
+            # true trajectory, which is what distinguishes accumulated drift
+            # from a scene that genuinely changed brightness.
+            self._unclamped_gain *= step.gain
+            requested_gain = composed_gain
             clamped = False
             if not (self.min_gain <= composed_gain <= self.max_gain):
                 composed_gain = float(np.clip(composed_gain, self.min_gain, self.max_gain))
                 clamped = True
             self._cumulative = ExposureTransform(
-                gain=composed_gain, bias=composed_bias, fit_quality=step.fit_quality, clamped=clamped
+                gain=composed_gain, bias=composed_bias, fit_quality=step.fit_quality,
+                clamped=clamped, requested_gain=requested_gain,
             )
 
         self._previous = image
         self._previous_key = key
         self.transforms[key] = self._cumulative
+        self.unclamped_gains[key] = self._unclamped_gain
         return self._cumulative
 
     def summary(self) -> dict[str, Any]:
         if not self.transforms:
             return {"enabled": self.enabled, "frames": 0}
         gains = np.array([t.gain for t in self.transforms.values()], dtype=float)
+        requested = np.array([t.requested_gain for t in self.transforms.values()], dtype=float)
+        unclamped = np.array(list(self.unclamped_gains.values()), dtype=float)
+        clamped_frames = sum(1 for t in self.transforms.values() if t.clamped)
         return {
             "enabled": self.enabled,
             "frames": len(self.transforms),
             "gain_min": round(float(gains.min()), 4),
             "gain_max": round(float(gains.max()), 4),
             "gain_span": round(float(gains.max() - gains.min()), 4),
+            # Span of what the chain asked for, before the bounds truncated it.
+            # Equal to gain_span when nothing clamped; larger when it did, and
+            # the gap is the size of the correction that never got applied.
+            "requested_gain_min": round(float(requested.min()), 4),
+            "requested_gain_max": round(float(requested.max()), 4),
+            "requested_gain_span": round(float(requested.max() - requested.min()), 4),
             "rejected_links": self.rejected_links,
-            "clamped_frames": sum(1 for t in self.transforms.values() if t.clamped),
+            "clamped_frames": clamped_frames,
+            "clamped_fraction": round(clamped_frames / len(self.transforms), 4),
+            # The unbounded trajectory. A monotonic march away from 1.0 means
+            # per-link error accumulating through the composition; a wander
+            # that happens to cross a bound means the scene really changed.
+            "unclamped_gain_final": round(float(unclamped[-1]), 4),
+            "unclamped_gain_span": round(float(unclamped.max() - unclamped.min()), 4),
         }
 
 

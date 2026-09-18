@@ -198,17 +198,38 @@ class TestArtifactKpis:
 
 
 class TestIlluminationKpis:
-    @pytest.mark.parametrize("span,expected", [
-        (GAIN_SPAN_WARN - 0.01, PASS),
-        (GAIN_SPAN_WARN, WARN),
-        (GAIN_SPAN_WARN * 2 - 0.01, WARN),
-        (GAIN_SPAN_WARN * 2, FAIL),
-    ])
-    def test_exposure_gain_span_bands(self, cfg, span, expected):
+    def test_gain_span_is_informational_because_it_saturates(self, cfg):
+        """Once a frame clamps, the span is the clamp width, not a measurement."""
         ev = evaluate_condition(_outputs(illumination={
-            "frames": 10, "exposure_chain": {"frames": 10, "gain_span": span, "rejected_links": 0},
+            "frames": 10, "exposure_chain": {"frames": 10, "gain_span": 0.6,
+                                             "requested_gain_span": 0.72,
+                                             "clamped_frames": 9, "rejected_links": 0},
         }), cfg)
-        assert _status(ev, "exposure_gain_span") == expected
+        assert _status(ev, "exposure_gain_span") == INFO
+        # The number that was truncated is still reported, in the detail.
+        span_kpi = next(k for k in ev.kpis if k.key == "exposure_gain_span")
+        assert "0.72" in span_kpi.detail
+
+    @pytest.mark.parametrize("clamped,expected", [
+        (0, PASS), (1, PASS), (2, WARN), (3, WARN), (4, FAIL), (9, FAIL),
+    ])
+    def test_exposure_clamped_fraction_bands(self, cfg, clamped, expected):
+        """The outcome measure: frames the chain could not fully correct."""
+        ev = evaluate_condition(_outputs(illumination={
+            "frames": 10, "exposure_chain": {"frames": 10, "gain_span": 0.6,
+                                             "clamped_frames": clamped, "rejected_links": 0},
+        }), cfg)
+        assert _status(ev, "exposure_clamped_fraction") == expected
+
+    def test_a_runaway_chain_is_named_in_the_detail(self, cfg):
+        """Drift and a genuinely changing scene look identical without this."""
+        ev = evaluate_condition(_outputs(illumination={
+            "frames": 10, "exposure_chain": {"frames": 10, "gain_span": 0.6,
+                                             "clamped_frames": 9, "rejected_links": 0,
+                                             "unclamped_gain_final": 0.0004},
+        }), cfg)
+        detail = next(k for k in ev.kpis if k.key == "exposure_clamped_fraction").detail
+        assert "0.0004" in detail and "compounding" in detail
 
     @pytest.mark.parametrize("rejected,expected", [
         (9, PASS), (10, WARN), (24, WARN), (25, FAIL),
@@ -299,15 +320,16 @@ class TestScoreArithmetic:
         # span warns. 4.5 / 5 = 90.0. The INFO KPIs must not dilute it.
         ev = evaluate_condition(_outputs(
             artifacts={"frames_evaluated": 100, "frames_corrected": 0},      # pass
-            illumination={"frames": 10, "low_light_frames": 1,               # info
+            illumination={"frames": 10, "low_light_frames": 1,               # pass
                           "exposure_chain": {"frames": 10, "gain_span": GAIN_SPAN_WARN,
-                                             "rejected_links": 0}},          # warn
+                                             "clamped_frames": 3,            # warn
+                                             "rejected_links": 0}},          # pass
         ), cfg)
         assert _status(ev, "artifact_correct_fraction") == PASS
-        assert _status(ev, "exposure_gain_span") == WARN
+        assert _status(ev, "exposure_clamped_fraction") == WARN
+        assert _status(ev, "exposure_gain_span") == INFO
         assert _status(ev, "exposure_rejected_links") == PASS
         assert _status(ev, "low_light_fraction") == PASS
-        assert _status(ev, "keypoints_vetoed") == INFO
         assert ev.score == 90.0
 
 
@@ -378,7 +400,8 @@ class TestTheCardCanFail:
             illumination={
                 "frames": 100, "low_light_frames": 80,                     # fail
                 "shadow_fraction_mean": 0.85, "shadow_fraction_max": 0.95, # fail
-                "exposure_chain": {"frames": 100, "gain_span": 1.2,        # fail
+                "exposure_chain": {"frames": 100, "gain_span": 1.2,
+                                   "clamped_frames": 90,                   # fail
                                    "rejected_links": 40},                  # fail
             },
             dynamic={"frames": 100, "frames_with_movers": 70,
@@ -398,8 +421,12 @@ class TestTheCardCanFail:
     def test_the_illumination_group_alone_can_fail(self, cfg):
         """S2-3 is an illumination defect; that group must be able to go red."""
         ev = evaluate_condition(self._degraded(), cfg)
-        illumination = [k for k in ev.kpis if k.group.startswith("Illumination")]
-        assert all(k.status == FAIL for k in illumination), [k.key for k in illumination]
+        # Only the scored ones: exposure_gain_span is deliberately INFO because
+        # it saturates at the clamp width once anything clamps.
+        scored = [k for k in ev.kpis
+                  if k.group.startswith("Illumination") and k.status != INFO]
+        assert scored, "the illumination group scored nothing"
+        assert all(k.status == FAIL for k in scored), [(k.key, k.status) for k in scored]
 
     def test_only_genuinely_contextual_kpis_stay_unscored(self, cfg):
         """Every remaining INFO KPI is context, not a quality signal.
@@ -413,4 +440,4 @@ class TestTheCardCanFail:
         ev = evaluate_condition(self._degraded(), cfg)
         info = {k.key for k in ev.kpis if k.status == INFO}
         assert info <= {"keypoints_vetoed", "gps_rtk_detected",
-                        "dynamic_frames_with_movers", "gps_note"}
+                        "dynamic_frames_with_movers", "exposure_gain_span", "gps_note"}

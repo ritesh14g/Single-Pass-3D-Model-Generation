@@ -239,6 +239,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S1-8 | 1 | Overlap stays 0.998 on the forward-oblique LineVision clip; selector cannot reach the §4.3 band | Not the stride cap: with `max_stride_seconds: 10` (600 frames) strides go 15→30→60→120 then fall back to 60 and repeat (max 123). The ~240-frame probe fails verification and `_probe_for_overlap` halves it silently. 120-frame pairs (~26 m of travel at 12.9 m/s) still measure 0.998, so the affine area-overlap estimate is likely invalid for oblique/zooming views. Next: check overlap on a nadir survey clip; consider feature-track survival as the overlap measure for oblique footage |
 | ~~S2-1~~ | 2 | ~~Bilateral suppression doesn't reduce strong synthetic blocking (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: boundary-weighted bilateral + guided refinement. Measured reduction ratio **0.233** on the repo test scene (KPI target > 0.10) |
 | ~~S2-2~~ | 2 | ~~Shadow detector: fixed 25th-percentile luminance cut caps recall at 25% of frame (xfail)~~ | **Closed 2026-09-16, verified 2026-09-18**: relative blue-ratio + value threshold. Measured on the repo test scene: recall **0.521** (KPI target > 0.50 — passes by 0.021, not the 0.69 the session entry claimed), precision **0.321**, frame fraction **0.317**. Margin is thin and precision is poor — see S2-3 |
+| S2-9 | 2 | **The exposure chain diverges: 46 of 53 frames clamped on real ISR footage.** Per-link fitted gains are systematically below 1 (1.0 → 0.94 → 0.889 → 0.817 → 0.659 → 0.506 → 0.442 → 0.383, floor at frame 7). Composed over 53 frames the unbounded gain reaches **0.0004** — a 2500× brightness change no scene produces, so this is per-link error compounding, not auto-exposure drift | Not an overlap problem: median overlap on this clip is 0.845. `rejected_links` is 0, so every link passed the quality gate and the fit is biased rather than noisy. Next: check whether `fit_gain_bias` is symmetric (A→B vs B→A) on a static pair; then re-anchor the chain to an absolute target luminance every N frames, or damp each composition toward an absolute estimate, instead of pure chaining. Raising `min_gain` only moves the wall |
 | S2-3 | 2 | 45% shadow fraction on demo synthetic flight (false positives on dark blue-ish blocks) | Still open. Corroborated 2026-09-18: on the repo test scene the detector flags 31.7% of the frame at precision 0.321 — ~3× over-detection. Check on real footage |
 | ~~S2-5~~ | 2 | ~~Stage 2 Lab panel crashed on Run: `RuntimeError: conditioning needs a completed ingest stage`~~ | **Closed 2026-09-18**: `manifest_stages` is ownership, not dependency, so the Lab ran `condition` alone into an empty run dir. Added `manifest_stages_through()` in `src/stages.py`; `ui/app.py` now runs the prerequisite chain. Regression test added and confirmed to fail without the fix |
 | ~~S2-6~~ | 2 | ~~Stage 2 scores 0/100 on real pipeline output; the condition stage writes none of the six artifacts the evaluator reads~~ | **Closed 2026-09-18**: `_write_condition_reports()` in `src/pipeline.py` now emits the four report JSONs and two per-frame parquets, registered as manifest artifacts. `demo_flight.mp4` rescored 0/100 → **100/100** (12 KPIs live, was 4). Also fixed a key mismatch: `GpsReport.to_dict()` writes `max_speed_observed_mps`, the evaluator read `max_speed_observed`, so that KPI never fired. Guarded by `tests/test_stage2_eval.py` (16 of 18 fail without the fix) |
@@ -1055,4 +1056,60 @@ barometer (S1-11, inherent to KLV), not a GPS bug.
 **Next:**
 - Exposure gain span 0.6 vs 0.4 on real footage — the one warn the ledger does *not* explain, so
   it is a genuine §5.4 question.
+- Stage 4 Track A (OpenDroneMap) remains the submission floor.
+
+### Session — 2026-09-18 — ritesh14g (with Claude) — Stage 2 (§5.4 exposure: instrument and re-score)
+**Goal:** The exposure gain span warned at 0.6 against a 0.4 target on real ISR footage — the one
+non-pass KPI the optional-input ledger could not explain. Find out what it is actually measuring.
+
+**Created:** (none)
+
+**Modified:**
+- `src/condition/illumination.py` — `ExposureTransform` carries `requested_gain` (the composed gain
+  before clamping); `ExposureChain` keeps a second accumulator that is never clamped and never
+  applied, purely so the true trajectory survives. `summary()` reports `requested_gain_*`,
+  `clamped_fraction`, `unclamped_gain_final` and `unclamped_gain_span`.
+- `src/pipeline.py` — per-frame `exposure_gain`, `exposure_gain_requested` and `exposure_clamped`
+  recorded in `conditioned.parquet` and `frame_illumination.parquet`.
+- `src/qa/stage2_eval.py` — new scored KPI `exposure_clamped_fraction`; `exposure_gain_span`
+  demoted to INFO.
+- `configs/default.yaml` — `qa.stage2.exposure_clamped_fraction_warn/fail`.
+- `ui/stages/stage2_condition.py` — applied-vs-requested gain chart with a unity rule.
+- `tests/test_stage2_eval.py` — bands for the new KPI, a case pinning that the runaway is named in
+  the detail, and the three existing tests that assumed gain span was scored.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **`gain_span` was measuring the clamp, not the footage.** Observed `gain_min` was exactly 0.4,
+  the configured `min_gain`; 46 of 53 frames were pinned. The KPI would have read 0.6 however much
+  worse the underlying divergence got, which is why it warned instead of failing.
+- **Scored the outcome instead.** `clamped_fraction` is 0.868 on this clip and now FAILs. Stage 2
+  drops 80 → 75, which is the more honest number: 87% of frames had their exposure normalisation
+  silently truncated.
+- **Kept `gain_span` as INFO rather than deleting it.** The gap between it (0.6) and the requested
+  span (0.72) is the size of the correction that was lost, which is worth seeing.
+- **Did not raise `gain_span_warn` or `min_gain`.** The threshold is the only reason this was found,
+  and the clamp is currently load-bearing — raising it would move the wall, not remove it.
+
+**Dead ends (also add to §4):**
+- **Low overlap is not the cause.** The obvious hypothesis was that budget degradation widened the
+  stride until consecutive kept frames shared too little content for a photometric fit. Median
+  overlap on this clip is **0.845**, comfortably above the §4.3 band, so the fit has plenty of
+  shared region and is biased rather than starved. Do not re-investigate stride here.
+
+**Tests:** 298 passed / 0 xfailed / 0 failed (was 294; +4).
+
+**Measured on `Esri_multiplexer_1.mp4`:** gains 1.0 → 0.94 → 0.889 → 0.817 → 0.659 → 0.506 → 0.442
+→ 0.383, hitting the floor at frame 7 and staying there. Unbounded final gain **0.0004**.
+`rejected_links` 0, so every link passed the quality gate.
+
+**Open issues added/closed:** S2-9 added (the divergence itself — this session instrumented and
+re-scored it; the fix is still open).
+
+**Next:**
+- **S2-9 step 3:** test whether `fit_gain_bias` is symmetric on a static pair. A consistent
+  sub-1 gain on identical frames would localise the bias to the fit itself.
+- Then re-anchor: an absolute luminance target every N frames, or damping toward one, so error
+  decays rather than compounds.
 - Stage 4 Track A (OpenDroneMap) remains the submission floor.

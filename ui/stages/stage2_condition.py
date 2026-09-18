@@ -233,6 +233,33 @@ def render_results(
                 .properties(height=160)
             )
             st.altair_chart(chart, use_container_width=True)
+
+        if not frame_il.empty and "exposure_gain_requested" in frame_il.columns:
+            st.markdown("**Exposure gain per frame** (applied vs. requested)")
+            st.caption(
+                "The chain composes each frame's transform onto its predecessor's. A "
+                "trajectory that walks away from 1.0 and stays at a bound is per-link "
+                "error compounding, not a scene that changed brightness."
+            )
+            melted = frame_il.melt(
+                id_vars="index", value_vars=["exposure_gain", "exposure_gain_requested"],
+                var_name="series", value_name="gain")
+            melted["series"] = melted["series"].map(
+                {"exposure_gain": "applied (clamped)", "exposure_gain_requested": "requested"})
+            gain_chart = (
+                alt.Chart(melted)
+                .mark_line()
+                .encode(
+                    x=alt.X("index:Q", title="Frame index"),
+                    y=alt.Y("gain:Q", title="Gain"),
+                    color=alt.Color("series:N", title=None),
+                    tooltip=["index", "series", "gain"],
+                )
+                .properties(height=170)
+            )
+            unity = (alt.Chart(pd.DataFrame({"gain": [1.0]}))
+                     .mark_rule(color="#6e7781", strokeDash=[4, 2]).encode(y="gain:Q"))
+            st.altair_chart(gain_chart + unity, use_container_width=True)
     else:
         st.info("No illumination report found in this run directory.")
 

@@ -481,6 +481,12 @@ qa:
     # datum unknown, which breaks absolute georeferencing downstream silently.
     altitude_source_pass: [baro+gps_complementary]
     altitude_source_warn: [gps]
+    # Fraction of frames whose exposure transform hit a gain bound. A clamped
+    # frame is one the chain could not correct, so this is the outcome measure;
+    # gain_span saturates at the clamp width and reports the same number however
+    # bad the underlying drift gets.
+    exposure_clamped_fraction_warn: 0.10
+    exposure_clamped_fraction_fail: 0.30
     # Bands that used to be hard-coded in src/qa/stage2_eval.py.
     gain_span_warn: 0.40
     gps_outlier_fraction_warn: 0.10

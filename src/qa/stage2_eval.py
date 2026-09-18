@@ -188,16 +188,41 @@ def _illumination_kpis(ev: StageEvaluation, outputs: "ConditionOutputs", cfg: An
     ))
     chain = illum.get("exposure_chain", {})
     if chain:
-        gain_span_warn = _band(cfg, "gain_span_warn", GAIN_SPAN_WARN)
         gain_span = float(chain.get("gain_span", 0.0))
         rejected_links = int(chain.get("rejected_links", 0))
         chain_frames = int(chain.get("frames", 0))
+        requested_span = float(chain.get("requested_gain_span", gain_span))
+
+        # Scored: how many frames the chain could not correct. A clamped frame
+        # had its exposure transform truncated at a bound, so the normalisation
+        # did not fully apply — an outcome, unlike the span below.
+        if chain_frames:
+            clamped_frac = float(chain.get(
+                "clamped_fraction", int(chain.get("clamped_frames", 0)) / chain_frames))
+            warn = _band(cfg, "exposure_clamped_fraction_warn", 0.10)
+            fail = _band(cfg, "exposure_clamped_fraction_fail", 0.30)
+            unclamped_final = chain.get("unclamped_gain_final")
+            detail = (str(int(chain.get("clamped_frames", 0))) + " of " + str(chain_frames)
+                      + " frames hit a gain bound; their exposure was not fully normalised.")
+            if unclamped_final is not None:
+                detail += (" Unbounded, the chain would have reached gain "
+                           + str(round(float(unclamped_final), 4))
+                           + " — far from 1.0 means per-link error is compounding, "
+                           "not that the scene changed.")
+            ev.kpis.append(Kpi(
+                "exposure_clamped_fraction", "Illumination",
+                "Frames with exposure clamped", round(clamped_frac, 3),
+                "< " + str(warn), _threshold_status(clamped_frac, warn, fail), detail,
+            ))
+
+        # Informational: once anything clamps, this is the width of the clamp
+        # range, not a measurement of the footage. Kept because the gap between
+        # it and the requested span is the size of the correction that was lost.
         ev.kpis.append(Kpi(
             "exposure_gain_span", "Illumination",
-            "Exposure gain span across sequence", round(gain_span, 3),
-            "< " + str(gain_span_warn),
-            PASS if gain_span < gain_span_warn else WARN if gain_span < gain_span_warn * 2 else FAIL,
-            "Large span means auto-exposure drifted significantly during the flight.",
+            "Exposure gain span across sequence", round(gain_span, 3), "info", INFO,
+            "Span the chain asked for before clamping: " + str(round(requested_span, 3))
+            + ". Large values mean auto-exposure drift, a compounding chain, or both.",
         ))
         if chain_frames:
             rfrac = rejected_links / chain_frames

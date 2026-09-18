@@ -269,11 +269,16 @@ def run_condition(
                 weight = illumination.weight
                 shadow_fraction = illumination.shadow_fraction
                 low_light = illumination.low_light
+                exposure_gain = exposure.gain
+                exposure_requested = exposure.requested_gain
+                exposure_clamped = exposure.clamped
                 blockiness = artifact_assessment.blockiness
                 masked_fraction = mask.fraction
             else:
                 weight = base_weight
                 shadow_fraction, low_light, blockiness, masked_fraction = 0.0, False, 1.0, 0.0
+                exposure_gain = exposure_requested = 1.0
+                exposure_clamped = False
                 mask = _empty_mask(image)
                 illumination = None
 
@@ -301,6 +306,9 @@ def run_condition(
                     "blockiness": float(blockiness),
                     "shadow_fraction": float(shadow_fraction),
                     "low_light": bool(low_light),
+                    "exposure_gain": float(exposure_gain),
+                    "exposure_gain_requested": float(exposure_requested),
+                    "exposure_clamped": bool(exposure_clamped),
                     "dynamic_fraction": float(masked_fraction),
                     "conditioning_degraded": degraded,
                 }
@@ -423,6 +431,12 @@ def _write_condition_reports(
             "index": frame_table["frame_index"],
             "shadow_fraction": frame_table["shadow_fraction"],
             "low_light": frame_table["low_light"],
+            # Per-frame exposure, so the gain trajectory can be read off a chart
+            # instead of inferred from a min/max pair. A span that equals the
+            # clamp width says nothing about what the chain was trying to do.
+            "exposure_gain": frame_table["exposure_gain"],
+            "exposure_gain_requested": frame_table["exposure_gain_requested"],
+            "exposure_clamped": frame_table["exposure_clamped"],
         })
         for name, table in (("frame_artifacts", frame_artifacts),
                             ("frame_illumination", frame_illumination)):
