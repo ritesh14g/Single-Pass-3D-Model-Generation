@@ -62,7 +62,9 @@ class TestBudget:
     def test_stage_timing_is_recorded(self):
         budget = Budget(total_s=10, stages={"ingest": 5})
         with budget.stage("ingest"):
-            time.sleep(0.01)
+            # Comfortably above Windows' ~15.6 ms timer granularity: a 10 ms
+            # sleep here measured as 0.0 under full-suite load and flaked.
+            time.sleep(0.05)
         assert budget.stage_times["ingest"] > 0
         assert budget.summary()["within_budget"] is True
 

@@ -1,2 +1,4 @@
 [server]
-maxUploadSize = 300
+# Megabytes. 1 GB: the MISB/STANAG 4609 sample clips run 475-485 MB, and real
+# 4K survey footage is larger still, so 300 rejected most real test input.
+maxUploadSize = 1024
