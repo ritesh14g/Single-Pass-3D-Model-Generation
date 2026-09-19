@@ -164,10 +164,38 @@ class DynamicMasker:
     def _predict(self, image: np.ndarray) -> Any:
         # ultralytics takes a CUDA index, not "cuda"; under MIG the slice is
         # always visible as device 0.
+        kwargs: dict[str, Any] = {}
+        if self.half and _ultralytics_takes_half():
+            kwargs["half"] = True
         return self._model.predict(
             image, conf=self.conf_threshold, verbose=False, retina_masks=True,
-            device=0 if self.device == "cuda" else "cpu", half=self.half,
+            device=0 if self.device == "cuda" else "cpu", **kwargs,
         )
+
+
+_TAKES_HALF: bool | None = None
+
+
+def _ultralytics_takes_half() -> bool:
+    """Whether this ultralytics still accepts ``half`` without complaint.
+
+    8.4 deprecated ``half`` in favour of ``quantize`` and warns on every
+    predict call, which buried the run log on the cloud box. The new option's
+    values aren't pinned down yet, so on those versions inference runs in FP32:
+    still on the GPU, and yolov8n-seg is small enough that FP16 barely matters.
+    """
+    global _TAKES_HALF
+    if _TAKES_HALF is None:
+        try:
+            from ultralytics.cfg import DEFAULT_CFG_DICT
+
+            _TAKES_HALF = "quantize" not in DEFAULT_CFG_DICT
+        except Exception:  # noqa: BLE001 - unknown layout: keep the old behaviour
+            _TAKES_HALF = True
+        if not _TAKES_HALF:
+            log_event(log, logging.INFO,
+                      "ultralytics deprecates 'half'; dynamic masking runs FP32 on the GPU")
+    return _TAKES_HALF
 
 
 def dilate_mask(mask: np.ndarray, pixels: int) -> np.ndarray:
