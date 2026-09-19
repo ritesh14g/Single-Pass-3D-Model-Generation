@@ -114,11 +114,14 @@ class NvdecCapture:
         if not torch.cuda.is_available():
             raise RuntimeError("torch sees no CUDA device")
         self._torch = torch
-        self._decoder = nvc.SimpleDecoder(
-            str(path), gpu_id=gpu_id, use_device_memory=True,
-            output_color_type=nvc.OutputColorType.RGB,
-        )
+        self._decoder = self._make_decoder(nvc, path, gpu_id, scan=False)
         meta = self._decoder.get_stream_metadata()
+        if "mpeg4" in str(getattr(meta, "codec_name", "")).lower().replace("-", ""):
+            # PyNvVideoCodec warns that MPEG-4 Part 2 headers misreport the
+            # frame count, and a wrong count means reading past the real end.
+            # Scanning costs a demux pass, so only pay it for this codec.
+            self._decoder = self._make_decoder(nvc, path, gpu_id, scan=True)
+            meta = self._decoder.get_stream_metadata()
         self.width = int(getattr(meta, "width", 0) or 0)
         self.height = int(getattr(meta, "height", 0) or 0)
         self.fps = float(getattr(meta, "average_fps", 0) or 0)
@@ -132,6 +135,16 @@ class NvdecCapture:
         if first.ndim != 3 or first.shape[2] != 3:
             raise RuntimeError(f"unexpected NVDEC frame shape {first.shape}")
         self.height, self.width = int(first.shape[0]), int(first.shape[1])
+
+    @staticmethod
+    def _make_decoder(nvc, path: Path, gpu_id: int, scan: bool):
+        kwargs = dict(gpu_id=gpu_id, use_device_memory=True, output_color_type=nvc.OutputColorType.RGB)
+        if scan:
+            try:
+                return nvc.SimpleDecoder(str(path), need_scanned_stream_metadata=True, **kwargs)
+            except TypeError:  # older PyNvVideoCodec without the flag
+                pass
+        return nvc.SimpleDecoder(str(path), **kwargs)
 
     def _fetch(self, index: int) -> np.ndarray:
         tensor = self._torch.from_dlpack(self._decoder[index])

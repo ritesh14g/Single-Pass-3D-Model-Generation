@@ -123,9 +123,13 @@ class TestBudget:
         budget = Budget(total_s=1.0, stages={"a": 0.5, "b": 0.5})
         with budget.stage("a"):
             time.sleep(0.7)
+        # Read the clock *before* the allotment: remaining_s only shrinks, so
+        # this bound holds exactly. Reading it after raced by ~7 µs on the
+        # 3-core cloud box.
+        remaining_before = budget.remaining_s
         squeezed = budget.allotment_for("b")
         assert squeezed < 0.5
-        assert squeezed <= budget.remaining_s + 1e-6
+        assert squeezed <= remaining_before
 
     def test_disabled_budget_never_degrades(self):
         budget = Budget(total_s=0.001, stages={"x": 0.001}, enabled=False)

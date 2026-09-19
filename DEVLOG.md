@@ -249,7 +249,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | ~~S2-7~~ | 2 | ~~No direct test coverage for `src/qa/stage2_eval.py` (310 lines); Stage 1 has `tests/test_stage1_eval.py`~~ | **Closed 2026-09-18**: `tests/test_stage2_eval.py`, 66 tests. 18 integration (report contract, manifest registration, chart columns, scorecard) plus 48 table-driven unit tests over `evaluate_condition` with synthesised reports, one per threshold boundary across all four KPI groups, the missing-report branches, the scale-free GPS path and the warn-counts-half score arithmetic. Verified by mutation: flipping `<` to `<=` in the gain-span and shadow-recall comparisons fails 3 tests |
 | ~~S2-8~~ | 2 | ~~100/100 overstates Stage 2: 5 of 12 KPIs were INFO, so a degraded run could not move the score~~ | **Closed 2026-09-18**: shadow coverage, low-light fraction and altitude provenance promoted to scored KPIs with bands in `qa.stage2` (rule 6 — the gain-span and GPS-outlier constants moved there too). Now 9 scored / 3 info; a fully degraded report scores **5.6/100** with 8 fails. `demo_flight.mp4` still scores 100, now earned across 9 scored KPIs. The three remaining INFO KPIs are contextual, not quality signals (keypoints vetoed happens in Stage 4; RTK absence is not a defect; masked *area* is scored instead of mover count). **Does not close S2-3**: coverage is not correctness — telling an over-firing detector from a genuinely dark scene still needs per-pixel truth |
 | S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box. As of 2026-09-19 YOLO is passed `device=0, half=True` when CUDA is visible, with GPU→CPU retry on failure (unit-tested with a fake model); check the log says `device=cuda` and record ms/frame |
-| ENV-1 | — | Institute box is a notebook profile: Docker (needed for Track A / ODM) probably unavailable | Check on day 1 (`CLOUD_GPU_GUIDE.md` §3 step 2). If absent: VM profile from the institute, or run Track A elsewhere |
+| ENV-1 | — | **Confirmed 2026-09-19: no Docker, Podman or Apptainer on the institute notebook.** Track A (`opendronemap/odm:gpu`) cannot run there as specified | Ask the institute for a VM profile or a container runtime, or run Track A on another machine. Decide before Stage 4 starts |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -1229,3 +1229,29 @@ ENV-1 added.
 - On the box: `nvidia-smi -L`, Docker check, `pip install PyNvVideoCodec av ultralytics`,
   `src.cli inspect` → expect `(nvdec)`; measure decode fps and YOLO ms/frame; record MIG profile,
   driver, CUDA, CPU quota here.
+
+### Session — 2026-09-19 — ritesh14g (with Claude) — First run on the institute box
+**Goal:** Bring the repo up on the institute notebook and record the hardware.
+
+**Measured hardware:** `NVIDIA H100 80GB HBM3 MIG 2g.20gb`, torch reports **19.62 GB**; torch
+2.11.0+cu128, CUDA 12.8; cgroup `cpu.max` = `300000 100000` → **3 threads** applied; conda base
+**Python 3.13** (the repo targets 3.10; the venv is built on 3.13 with `--system-site-packages`);
+opencv-python 5.0.0.93, PyNvVideoCodec 2.2.3, av 18.1.0, ultralytics 8.4.155. No Docker, Podman or
+Apptainer (ENV-1). The Jupyter proxy rejects browser uploads with **413**, even for 1.6 MB, so
+footage has to come in from the terminal (gdown or wget).
+
+**Tests on the box:** 319 passed / 2 failed.
+- `TestBudget::test_later_stages_inherit_the_squeeze`: a clock-ordering flake (7 µs) with a 1 µs
+  tolerance. Fixed in the test: it now reads `remaining_s` before the allotment, so the bound holds exactly.
+- `TestFrameSelection::test_a_clean_video_loses_no_frames_to_the_gate`: 2 frames rejected. **NVDEC
+  engaged on the synthetic MPEG-4 Part 2 video**, and PyNvVideoCodec warned that the header frame
+  count is unreliable for that codec. `NvdecCapture` now rebuilds the decoder with
+  `need_scanned_stream_metadata=True` when the codec is MPEG-4. **Not yet re-verified on the box.**
+
+**Modified:** `src/ingest/video_reader.py` (scanned metadata for MPEG-4), `tests/test_core.py`
+(flake fix), `DEVLOG.md` (ENV-1 confirmed).
+
+**Tests (local, no GPU):** 321 passed.
+
+**Next:** on the box, `git pull`, re-run pytest, run the NVDEC-vs-OpenCV frame comparison, then
+`inspect` a real H.264 clip (Esri) and expect `(nvdec)`.
