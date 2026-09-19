@@ -20,10 +20,17 @@ run:
 device:
   # "cuda", "cpu", or "auto" (cuda when available, else cpu with a loud log line).
   prefer: auto
-  # Total GPU memory the pipeline may assume, in GB. Chunk sizing reads this.
-  gpu_memory_gb: 24
+  # Total GPU memory the pipeline may assume, in GB. Chunk sizing reads this;
+  # a visible card's real memory overrides it. 20 = the institute's H100 MIG
+  # slice (CLOUD_GPU_GUIDE.md §2). The spec's reference card is 24.
+  gpu_memory_gb: 20
   # Leave this much GPU memory free for concurrent stages (§7.2).
   gpu_headroom_gb: 4
+  # FP16 inference for GPU models (YOLO now, VGGT later). Ignored on CPU.
+  half_precision: true
+  # OpenCV / torch thread pools. "auto" = the container's real CPU quota
+  # (cgroup-aware), so a 3-core notebook doesn't run 100+ threads.
+  cpu_threads: auto
 
 # ---------------------------------------------------------------------------
 # Stage 1 — Ingest (§4)
@@ -32,6 +39,11 @@ ingest:
   video:
     # Try hardware decode first; fall back to software with a logged downgrade.
     hardware_decode: true
+    # First rung of hardware decode: NVDEC via PyNvVideoCodec (GPU), then
+    # OpenCV's hardware flag, then OpenCV software. Needs hardware_decode.
+    nvdec: true
+    # CUDA device index for NVDEC. Under MIG the slice is always 0.
+    nvdec_gpu_id: 0
     # Frames are scored at this width before any expensive operation.
     scoring_width: 640
     # Working resolution the rest of the pipeline sees. null = native.

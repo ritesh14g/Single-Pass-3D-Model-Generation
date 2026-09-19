@@ -124,7 +124,12 @@ def inspect(video: Path, preset, config_files, overrides, srt, csv_path, as_json
     cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
     setup_logging(None, level="WARNING", jsonl=False)
 
-    with VideoReader(video, hardware_decode=bool(cfg.get_path("ingest.video.hardware_decode"))) as reader:
+    with VideoReader(
+        video,
+        hardware_decode=bool(cfg.get_path("ingest.video.hardware_decode")),
+        nvdec=bool(cfg.get_path("ingest.video.nvdec", True)),
+        nvdec_gpu_id=int(cfg.get_path("ingest.video.nvdec_gpu_id", 0)),
+    ) as reader:
         metadata = reader.metadata.to_dict()
         keyframes = reader.keyframe_indices()
 
@@ -142,7 +147,7 @@ def inspect(video: Path, preset, config_files, overrides, srt, csv_path, as_json
     click.echo(f"\n  {video.name}")
     click.echo(f"    {metadata['width']}x{metadata['height']} @ {metadata['fps']:.2f} fps, "
                f"{metadata['frame_count']} frames, {metadata['duration_s']:.1f}s, codec {metadata['fourcc']}")
-    click.echo(f"    hardware decode: {'yes' if metadata['hardware_decode'] else 'no'}")
+    click.echo(f"    hardware decode: {'yes' if metadata['hardware_decode'] else 'no'} ({metadata['decoder']})")
     click.echo(f"    keyframes: {report['keyframes'] if report['keyframes'] is not None else 'unknown (PyAV absent)'}")
 
     telemetry_summary = report["telemetry"]

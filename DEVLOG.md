@@ -57,7 +57,8 @@ python -m venv .venv --system-site-packages
 ```
 
 - Git identity used so far: `ritesh14g <riteshbehera6914@gmail.com>`.
-- Dev machine has **no GPU**; Track B / ODM work needs the rented GPU box.
+- Dev machine has **no GPU**. GPU box = institute notebook: **20 GB H100 MIG slice, 3 CPU cores,
+  56 GB RAM** (`CLOUD_GPU_GUIDE.md` §0). All code is GPU-first with a logged CPU fallback.
 - Stage Lab writes to `data/lab/` (runs, synthetic inputs, `history.jsonl`); git-ignored.
 
 ---
@@ -226,7 +227,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 |----|-------|-------|----------------------|
 | ~~S1-1~~ | 1 | ~~Median overlap 0.68~~ | **Closed session 2**: sharpness-only replacement ranking; now 0.761 |
 | S1-2 | 1 | PyAV not installed → I-frame preference untested | `pip install av`, test on real H.264 |
-| S1-3 | 1 | Hardware decode never engages with pip OpenCV (no CUDA) | Verify on GPU instance |
+| S1-3 | 1 | Hardware decode never engages with pip OpenCV (no CUDA) | **Code path added 2026-09-19**: NVDEC via PyNvVideoCodec (`NvdecCapture`), open-time and mid-stream fallback to OpenCV, tested with a fake capture. The adapter targets the PyNvVideoCodec 2.x `SimpleDecoder` API and has **never run on real NVDEC**. Verify on the institute box: `src.cli inspect` must say `(nvdec)`, then measure fps vs `ingest.video.nvdec=false` |
 | S1-4 | 1 | **§4.3 speed acceptance (<60 s, 10-min 4K) not met on this machine.** Projection on 640 px synthetic: analysis 64 ms/kept frame → ~77 s at the 1200-frame cap; software decode scaled to 10 min of 4K → ~740 s | Decode dominates: needs NVDEC (S1-3) and/or keyframe seeking instead of `grab()` over the whole clip. Then trim analysis (cache anchor corners: `goodFeaturesToTrack` recomputed per probe, ~10% of time). Measure on real 4K on the GPU box |
 | S1-6 | 1 | Decoded/total frames 0.73 (WARN, target <0.60) on fast synthetic pan | Fast pan keeps a frame every ~3; likely fine on real survey speeds — re-check on real footage |
 | ~~S1-9~~ | 1 | ~~KLV parser has never seen a real STANAG 4609 file~~ | **Closed 2026-09-18**: validated on all 8 QGISFMV MISB sample clips (`Drone Video Dataset/QGISFMV_Samples/MISB/`). 407–1953 rows each, GPS + attitude on every one, ST 0601 versions 1/4/6, all checksums valid in strict mode. Cross-checked `Cheyenne_Handoff` against its own burned-in overlay: aircraft position within ~7 m, altitude 9754 vs 9749 ft, frame centre lat exact, frame-centre elevation 6036 vs 6037 ft, slant range 3314 m vs 1.8 NM, UTC timestamp matched to the second. It found two real bugs — see S1-12 and S1-13 |
@@ -247,7 +248,8 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | ~~S2-6~~ | 2 | ~~Stage 2 scores 0/100 on real pipeline output; the condition stage writes none of the six artifacts the evaluator reads~~ | **Closed 2026-09-18**: `_write_condition_reports()` in `src/pipeline.py` now emits the four report JSONs and two per-frame parquets, registered as manifest artifacts. `demo_flight.mp4` rescored 0/100 → **100/100** (12 KPIs live, was 4). Also fixed a key mismatch: `GpsReport.to_dict()` writes `max_speed_observed_mps`, the evaluator read `max_speed_observed`, so that KPI never fired. Guarded by `tests/test_stage2_eval.py` (16 of 18 fail without the fix) |
 | ~~S2-7~~ | 2 | ~~No direct test coverage for `src/qa/stage2_eval.py` (310 lines); Stage 1 has `tests/test_stage1_eval.py`~~ | **Closed 2026-09-18**: `tests/test_stage2_eval.py`, 66 tests. 18 integration (report contract, manifest registration, chart columns, scorecard) plus 48 table-driven unit tests over `evaluate_condition` with synthesised reports, one per threshold boundary across all four KPI groups, the missing-report branches, the scale-free GPS path and the warn-counts-half score arithmetic. Verified by mutation: flipping `<` to `<=` in the gain-span and shadow-recall comparisons fails 3 tests |
 | ~~S2-8~~ | 2 | ~~100/100 overstates Stage 2: 5 of 12 KPIs were INFO, so a degraded run could not move the score~~ | **Closed 2026-09-18**: shadow coverage, low-light fraction and altitude provenance promoted to scored KPIs with bands in `qa.stage2` (rule 6 — the gain-span and GPS-outlier constants moved there too). Now 9 scored / 3 info; a fully degraded report scores **5.6/100** with 8 fails. `demo_flight.mp4` still scores 100, now earned across 9 scored KPIs. The three remaining INFO KPIs are contextual, not quality signals (keypoints vetoed happens in Stage 4; RTK absence is not a defect; masked *area* is scored instead of mover count). **Does not close S2-3**: coverage is not correctness — telling an over-firing detector from a genuinely dark scene still needs per-pixel truth |
-| S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box |
+| S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box. As of 2026-09-19 YOLO is passed `device=0, half=True` when CUDA is visible, with GPU→CPU retry on failure (unit-tested with a fake model); check the log says `device=cuda` and record ms/frame |
+| ENV-1 | — | Institute box is a notebook profile: Docker (needed for Track A / ODM) probably unavailable | Check on day 1 (`CLOUD_GPU_GUIDE.md` §3 step 2). If absent: VM profile from the institute, or run Track A elsewhere |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -1169,3 +1171,61 @@ is ruled out, so the bias is in `_fit_paired`.
 - **S2-9 remains the real fix.** Symmetry test on `_fit_paired` (A→B vs B→A on one pair), then
   re-anchor to an absolute luminance target instead of pure chaining.
 - Stage 4 Track A is now safe to start: no conditioned frame is destroyed.
+
+### Session — 2026-09-19 — ritesh14g (with Claude) — GPU-first / CPU-fallback for Stages 1–2 on the institute box
+**Goal:** Assess the institute GPU (20 GB H100 MIG slice, 3 Xeon 8480+ cores, 56 GB RAM, PyTorch
+CUDA notebook profile) against the PS, and make Stages 1–2 use the GPU when present and fall back
+to the CPU cleanly when not.
+
+**Created:** (none)
+
+**Modified:**
+- `src/core/device.py` — `resolve_device` cached per process (downgrade logged once);
+  `use_half_precision`; cgroup-aware `cgroup_cpu_quota` / `cpu_thread_budget`; `configure_runtime`
+  caps OpenCV + torch threads; `device_info` records `mig`.
+- `src/ingest/video_reader.py` — `NvdecCapture` (PyNvVideoCodec `SimpleDecoder`, cv2.VideoCapture-shaped)
+  as the first decode rung; `_read()` recovers from an NVDEC fault mid-stream by re-reading that frame
+  through OpenCV; `VideoMetadata.decoder` records which backend ran. **Fixed an off-by-one**:
+  `stream()` recorded `_position` one frame behind after `grab()` (harmless before, load-bearing for
+  the fallback).
+- `src/condition/dynamic_mask.py` — YOLO gets `device=0`/`"cpu"` and `half`; a GPU error retries
+  the frame on CPU and stays there instead of disabling semantic masking.
+- `src/pipeline.py` — `configure_runtime` at run start, result in `manifest.environment`; NVDEC keys
+  passed to both readers; condition report gains `dynamic_device`.
+- `src/cli.py` — NVDEC keys; `inspect` prints the decoder used.
+- `src/core/inputs.py` — hardware-decode ledger line names the decoder.
+- `ui/stages/stage1_ingest.py` — "Prefer NVDEC" checkbox.
+- `configs/default.yaml` — `device.gpu_memory_gb` 24 → **20**; new `device.half_precision`,
+  `device.cpu_threads: auto`, `ingest.video.nvdec`, `ingest.video.nvdec_gpu_id`.
+- `requirements.txt` — PyNvVideoCodec listed as optional.
+- `tests/test_core.py`, `tests/test_ingest.py`, `tests/test_condition.py` — cgroup parsing, thread cap,
+  20 GB chunk fit, NVDEC open/mid-stream fallback (stream and read_indices, pixel-exact), YOLO GPU→CPU retry.
+- `CLOUD_GPU_GUIDE.md` — new §0 (machine, sufficiency verdict, fallback map); notebook-profile
+  setup, data transfer, remote UI and hygiene.
+- `CLAUDE.md` — machine specs and the GPU-first/CPU-fallback rule.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Sufficiency:** 20 GB fits Track B's default 128-frame chunk (16 GB after headroom → ~135 max),
+  but not Track A + B concurrently. **3 CPU cores are the binding constraint**: software 4K decode
+  can't meet the ingest budget there, so NVDEC is mandatory, not a nice-to-have. Notebook profile
+  likely has no Docker → Track A at risk (ENV-1).
+- **PyNvVideoCodec over OpenCV-CUDA / PyAV hwaccel:** pip-installable without sudo or a custom
+  OpenCV build, which a notebook profile requires.
+- **Thread cap from cgroup quota:** containers typically see all host cores (8480+ has 56 per
+  socket); unbounded OpenCV/torch pools would oversubscribe 3 cores.
+- Stage 2 bilateral / NLM stay on CPU: GPU versions would change outputs the scorecard is tuned
+  on. Revisit only if profiling on the box shows them dominating.
+
+**Dead ends (also add to §4):** (none)
+
+**Tests:** 321 passed / 0 xfailed / 0 failed (was 309; +12).
+
+**Open issues added/closed:** S1-3 and S2-4 updated (code paths in, hardware verification pending);
+ENV-1 added.
+
+**Next:**
+- On the box: `nvidia-smi -L`, Docker check, `pip install PyNvVideoCodec av ultralytics`,
+  `src.cli inspect` → expect `(nvdec)`; measure decode fps and YOLO ms/frame; record MIG profile,
+  driver, CUDA, CPU quota here.

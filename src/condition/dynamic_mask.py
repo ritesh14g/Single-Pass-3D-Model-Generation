@@ -33,6 +33,7 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 
+from src.core.device import resolve_device, use_half_precision
 from src.core.logging import get_logger, log_downgrade, log_event
 
 log = get_logger(__name__)
@@ -70,6 +71,11 @@ class DynamicMasker:
     available the masker reports ``available=False`` and returns empty masks —
     the pipeline then relies on the geometric test alone, with the downgrade
     recorded loudly rather than silently changing the result.
+
+    Inference runs on the GPU when one is visible (FP16 unless
+    ``device.half_precision`` is off). A GPU failure mid-run — out of memory
+    on a shared MIG slice, a driver hiccup — retries the frame on the CPU and
+    stays there, rather than dropping semantic masking altogether.
     """
 
     def __init__(self, cfg: Any):
@@ -79,6 +85,8 @@ class DynamicMasker:
         self.wanted_classes = {str(c).lower() for c in dyn_cfg["classes"]}
         self.conf_threshold = float(dyn_cfg["conf_threshold"])
         self.dilate_px = int(dyn_cfg["dilate_px"])
+        self.device = resolve_device(cfg.get_path("device.prefer", "auto"))
+        self.half = use_half_precision(cfg)
         self._model: Any = None
         self._load_attempted = False
         self.available = False
@@ -101,7 +109,7 @@ class DynamicMasker:
             self._model = YOLO(self.model_name)
             self.available = True
             log_event(log, logging.INFO, f"loaded dynamic-object model {self.model_name}",
-                      classes=sorted(self.wanted_classes))
+                      classes=sorted(self.wanted_classes), device=self.device, half=self.half)
         except Exception as exc:  # noqa: BLE001 - weights missing or download blocked
             self.unavailable_reason = f"{type(exc).__name__}: {exc}"
             log_downgrade(log, "semantic dynamic masking", "geometric consistency only",
@@ -115,14 +123,17 @@ class DynamicMasker:
             return DynamicMaskResult(mask=empty, method="none")
 
         try:
-            predictions = self._model.predict(
-                image, conf=self.conf_threshold, verbose=False, retina_masks=True
-            )
+            predictions = self._predict(image)
         except Exception as exc:  # noqa: BLE001 - inference failure must not kill the run
-            log_downgrade(log, "semantic dynamic masking", "geometric consistency only",
-                          f"inference failed: {type(exc).__name__}: {exc}")
-            self.available = False
-            return DynamicMaskResult(mask=empty, method="none")
+            if self.device == "cpu":
+                log_downgrade(log, "semantic dynamic masking", "geometric consistency only",
+                              f"inference failed: {type(exc).__name__}: {exc}")
+                self.available = False
+                return DynamicMaskResult(mask=empty, method="none")
+            log_downgrade(log, "GPU dynamic masking", "CPU dynamic masking",
+                          f"{type(exc).__name__}: {exc}")
+            self.device, self.half = "cpu", False
+            return self.mask(image)
 
         mask = empty
         counts: dict[str, int] = {}
@@ -149,6 +160,14 @@ class DynamicMasker:
 
         mask = dilate_mask(mask, self.dilate_px)
         return DynamicMaskResult(mask=mask, fraction=float(mask.mean()), classes=counts, method="semantic")
+
+    def _predict(self, image: np.ndarray) -> Any:
+        # ultralytics takes a CUDA index, not "cuda"; under MIG the slice is
+        # always visible as device 0.
+        return self._model.predict(
+            image, conf=self.conf_threshold, verbose=False, retina_masks=True,
+            device=0 if self.device == "cuda" else "cpu", half=self.half,
+        )
 
 
 def dilate_mask(mask: np.ndarray, pixels: int) -> np.ndarray:

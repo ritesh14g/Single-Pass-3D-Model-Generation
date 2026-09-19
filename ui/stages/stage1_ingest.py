@@ -119,6 +119,9 @@ def render_params(cfg: Config) -> dict[str, Any]:
             "Working max width", widths, index=widths.index(current),
             format_func=lambda w: "native" if w is None else f"{w}px")
         values["ingest.video.hardware_decode"] = st.checkbox("Try hardware decode", bool(video["hardware_decode"]))
+        values["ingest.video.nvdec"] = st.checkbox(
+            "Prefer NVDEC (GPU, PyNvVideoCodec)", bool(video.get("nvdec", True)),
+            help="First rung of hardware decode; falls back to OpenCV with a logged downgrade.")
         sources = list(cfg.get_path("ingest.telemetry.sources"))
         # Options come from the registry, plus anything a preset configured that
         # the registry does not list — a default outside the options would make

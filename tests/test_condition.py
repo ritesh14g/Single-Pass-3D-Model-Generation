@@ -330,6 +330,29 @@ class TestDynamicObjects:
             assert not result.mask.any()
             assert masker.unavailable_reason
 
+    def test_gpu_failure_retries_on_cpu_and_stays_there(self, cfg, scene):
+        class FlakyGpuModel:
+            def __init__(self):
+                self.devices = []
+
+            def predict(self, image, **kwargs):
+                self.devices.append(kwargs["device"])
+                if kwargs["device"] != "cpu":
+                    raise RuntimeError("CUDA out of memory")
+                return []
+
+        masker = DynamicMasker(cfg)
+        model = FlakyGpuModel()
+        masker._model, masker._load_attempted, masker.available = model, True, True
+        masker.device, masker.half = "cuda", True
+        first = masker.mask(scene)
+        masker.mask(scene)
+        # The frame that hit the fault is re-run on the CPU; later frames go
+        # straight there. Semantic masking survives, just slower.
+        assert model.devices == [0, "cpu", "cpu"]
+        assert first.method == "semantic"
+        assert masker.available and masker.device == "cpu" and not masker.half
+
     def test_dilation_grows_the_mask(self):
         mask = np.zeros((50, 50), dtype=bool)
         mask[20:30, 20:30] = True

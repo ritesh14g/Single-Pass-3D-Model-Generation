@@ -28,3 +28,4 @@ pygltflib>=1.16
 # av            # PyAV: I-frame detection for keyframe preference (§5.3)
 # ultralytics   # YOLOv8-seg: semantic dynamic-object masking (§5.5)
 # torch         # Track B (§7.2); CUDA build on the GPU box
+# PyNvVideoCodec  # NVDEC GPU decode (§4.1); needs torch with CUDA. Falls back to OpenCV

@@ -4,7 +4,12 @@ Three rules from the spec drive this module:
 
   * accept 1080p and 4K MP4/MOV;
   * use hardware decode (NVDEC) when the build supports it, and downgrade
-    loudly rather than failing when it does not;
+    loudly rather than failing when it does not. The order tried is
+    PyNvVideoCodec on the GPU (:class:`NvdecCapture`), then OpenCV's own
+    hardware flag, then OpenCV software decode. The pip OpenCV wheel never
+    engages NVDEC, so on the cloud box the first rung is the one that matters —
+    with only 3 CPU cores there, software 4K decode alone would eat the whole
+    §9 ingest budget;
   * **never decode the whole video into RAM** — a 10-minute 4K clip is ~300 GB
     of raw frames. Everything here streams: score, keep, release.
 
@@ -69,6 +74,7 @@ class VideoMetadata:
     duration_s: float
     fourcc: str
     hardware_decode: bool = False
+    decoder: str = "opencv"
 
     def to_dict(self) -> dict:
         return {
@@ -80,8 +86,106 @@ class VideoMetadata:
             "duration_s": round(self.duration_s, 2),
             "fourcc": self.fourcc,
             "hardware_decode": self.hardware_decode,
+            "decoder": self.decoder,
             "megapixels": round(self.width * self.height / 1e6, 2),
         }
+
+
+class NvdecFailure(RuntimeError):
+    """NVDEC failed after the stream was open; the reader falls back to OpenCV."""
+
+
+class NvdecCapture:
+    """GPU decode through PyNvVideoCodec, shaped like ``cv2.VideoCapture``.
+
+    Only the subset :class:`VideoReader` uses is implemented. Frames decode
+    into GPU memory and are converted RGB->BGR there, so the CPU only pays for
+    the copy back. ``grab()`` just advances the position: the decoder serves
+    random access itself, so skipped frames are never copied to the host.
+
+    Timestamps are index / fps (constant frame rate), which is what the OpenCV
+    path falls back to anyway when the container carries none.
+    """
+
+    def __init__(self, path: Path, gpu_id: int = 0):
+        import PyNvVideoCodec as nvc
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("torch sees no CUDA device")
+        self._torch = torch
+        self._decoder = nvc.SimpleDecoder(
+            str(path), gpu_id=gpu_id, use_device_memory=True,
+            output_color_type=nvc.OutputColorType.RGB,
+        )
+        meta = self._decoder.get_stream_metadata()
+        self.width = int(getattr(meta, "width", 0) or 0)
+        self.height = int(getattr(meta, "height", 0) or 0)
+        self.fps = float(getattr(meta, "average_fps", 0) or 0)
+        self.frame_count = int(len(self._decoder) or getattr(meta, "num_frames", 0) or 0)
+        self.codec = str(getattr(meta, "codec_name", "") or "")
+        self._position = 0
+        # Prove the path end to end before trusting it with the run: an API
+        # mismatch or a MIG slice without a decoder engine fails here, at open,
+        # where falling back costs nothing.
+        first = self._fetch(0)
+        if first.ndim != 3 or first.shape[2] != 3:
+            raise RuntimeError(f"unexpected NVDEC frame shape {first.shape}")
+        self.height, self.width = int(first.shape[0]), int(first.shape[1])
+
+    def _fetch(self, index: int) -> np.ndarray:
+        tensor = self._torch.from_dlpack(self._decoder[index])
+        if tensor.ndim == 3 and tensor.shape[0] == 3 and tensor.shape[-1] != 3:
+            tensor = tensor.permute(1, 2, 0)  # planar -> interleaved
+        return tensor.flip(-1).contiguous().cpu().numpy()
+
+    def isOpened(self) -> bool:  # noqa: N802 - cv2.VideoCapture's name
+        return self._decoder is not None
+
+    def release(self) -> None:
+        self._decoder = None
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if self._position >= self.frame_count:
+            return False, None
+        try:
+            image = self._fetch(self._position)
+        except Exception as exc:  # noqa: BLE001 - the reader decides how to recover
+            raise NvdecFailure(f"{type(exc).__name__}: {exc}") from exc
+        self._position += 1
+        return True, image
+
+    def grab(self) -> bool:
+        if self._position >= self.frame_count:
+            return False
+        self._position += 1
+        return True
+
+    def set(self, prop: int, value: float) -> bool:
+        if prop == cv2.CAP_PROP_POS_FRAMES:
+            self._position = max(int(value), 0)
+            return True
+        return False
+
+    def get(self, prop: int) -> float:
+        if prop == cv2.CAP_PROP_FPS:
+            return self.fps
+        if prop == cv2.CAP_PROP_FRAME_COUNT:
+            return float(self.frame_count)
+        if prop == cv2.CAP_PROP_FRAME_WIDTH:
+            return float(self.width)
+        if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+            return float(self.height)
+        if prop == cv2.CAP_PROP_FOURCC:
+            code = (self.codec.lower() + "    ")[:4]
+            return float(sum(ord(c) << (8 * i) for i, c in enumerate(code)))
+        if prop == cv2.CAP_PROP_POS_MSEC and self.fps > 0:
+            return max(self._position - 1, 0) / self.fps * 1000.0
+        return 0.0
+
+
+# PyNvVideoCodec missing is a fact about the install, not the video: say it once.
+_NVDEC_UNAVAILABLE: str | None = None
 
 
 class VideoReader:
@@ -90,7 +194,14 @@ class VideoReader:
     Usable as a context manager; the underlying capture is released on exit.
     """
 
-    def __init__(self, path: Path | str, hardware_decode: bool = True, max_width: int | None = None):
+    def __init__(
+        self,
+        path: Path | str,
+        hardware_decode: bool = True,
+        max_width: int | None = None,
+        nvdec: bool = True,
+        nvdec_gpu_id: int = 0,
+    ):
         self.path = Path(path)
         if not self.path.is_file():
             raise FileNotFoundError(f"video not found: {self.path}")
@@ -106,6 +217,9 @@ class VideoReader:
         self._position = 0
         self._hardware_requested = hardware_decode
         self._hardware_active = False
+        self._nvdec_requested = hardware_decode and nvdec
+        self._nvdec_gpu_id = nvdec_gpu_id
+        self.decoder = "opencv"
         # Cumulative seconds spent inside VideoCapture read/grab/seek. Survives
         # close() so a profiling pass and a selection pass on one reader add up.
         # This is what separates decode cost from analysis cost in the Stage 1
@@ -114,8 +228,13 @@ class VideoReader:
         self.metadata = self._probe()
 
     # -- Lifecycle ----------------------------------------------------------
-    def _open(self) -> cv2.VideoCapture:
+    def _open(self) -> cv2.VideoCapture | NvdecCapture:
         """Open the capture, trying hardware decode first when requested."""
+        if self._nvdec_requested:
+            cap = self._open_nvdec()
+            if cap is not None:
+                return cap
+        self.decoder = "opencv"
         if self._hardware_requested and hasattr(cv2, "CAP_PROP_HW_ACCELERATION"):
             params = [
                 int(cv2.CAP_PROP_HW_ACCELERATION),
@@ -126,7 +245,9 @@ class VideoReader:
                 if cap.isOpened():
                     active = cap.get(cv2.CAP_PROP_HW_ACCELERATION)
                     self._hardware_active = bool(active and active > 0)
-                    if not self._hardware_active:
+                    if self._hardware_active:
+                        self.decoder = "opencv-hw"
+                    else:
                         log_downgrade(
                             log, "hardware decode", "software decode",
                             "OpenCV build accepted the flag but did not engage an accelerator",
@@ -148,8 +269,47 @@ class VideoReader:
             raise RuntimeError(f"could not open video: {self.path}")
         return cap
 
+    def _open_nvdec(self) -> NvdecCapture | None:
+        global _NVDEC_UNAVAILABLE
+        if _NVDEC_UNAVAILABLE is not None:
+            return None
+        try:
+            import PyNvVideoCodec  # noqa: F401
+        except ImportError:
+            _NVDEC_UNAVAILABLE = "PyNvVideoCodec is not installed"
+            log_downgrade(log, "NVDEC decode", "OpenCV decode", _NVDEC_UNAVAILABLE)
+            return None
+        try:
+            cap = NvdecCapture(self.path, gpu_id=self._nvdec_gpu_id)
+        except Exception as exc:  # noqa: BLE001 - any failure here just means "use OpenCV"
+            log_downgrade(log, "NVDEC decode", "OpenCV decode", f"{type(exc).__name__}: {exc}")
+            return None
+        self._hardware_active = True
+        self.decoder = "nvdec"
+        return cap
+
+    def _read(self) -> tuple[bool, np.ndarray | None]:
+        """``cap.read()``, recovering from an NVDEC failure mid-stream.
+
+        The frame that failed is re-read through OpenCV at the same index, so
+        the caller sees no gap: only a slower run and a logged downgrade.
+        """
+        try:
+            return self._timed(self.cap.read)
+        except NvdecFailure as exc:
+            position = self._position
+            log_downgrade(log, "NVDEC decode", "OpenCV decode",
+                          f"failed mid-stream at frame {position}: {exc}")
+            self._nvdec_requested = False
+            self._hardware_active = False
+            self.close()
+            # Same grab-or-seek rule as any other jump: a raw seek on long-GOP
+            # video can land a frame off.
+            self._skip_to(position)
+            return self._timed(self.cap.read)
+
     @property
-    def cap(self) -> cv2.VideoCapture:
+    def cap(self) -> cv2.VideoCapture | NvdecCapture:
         if self._cap is None:
             self._cap = self._open()
             self._position = 0
@@ -197,6 +357,7 @@ class VideoReader:
             duration_s=count / fps if count else 0.0,
             fourcc=fourcc,
             hardware_decode=self._hardware_active,
+            decoder=self.decoder,
         )
         log_event(log, logging.INFO, f"opened {self.path.name}", **meta.to_dict())
         return meta
@@ -234,14 +395,13 @@ class VideoReader:
         """
         if step < 1:
             raise ValueError("step must be >= 1")
-        cap = self.cap
         if start > 0:
             self._skip_to(start)
 
         index = max(start, self._position)
         yielded = 0
         while True:
-            ok, image = self._timed(cap.read)
+            ok, image = self._read()
             if not ok:
                 break
             timestamp = self._timestamp(index)
@@ -251,10 +411,12 @@ class VideoReader:
             if max_frames is not None and yielded >= max_frames:
                 return
             for _ in range(step - 1):
-                if not self._timed(cap.grab):
+                # Through self.cap, not a local: a mid-stream NVDEC fallback
+                # swaps the capture underneath this loop.
+                if not self._timed(self.cap.grab):
                     return
                 index += 1
-                self._position = index
+                self._position = index + 1  # the grabbed frame is consumed
             index += 1
 
     def _skip_to(self, target: int) -> None:
@@ -279,14 +441,13 @@ class VideoReader:
         wanted = sorted({int(i) for i in indices if i >= 0})
         if not wanted:
             return
-        cap = self.cap
         for index in wanted:
             if self.metadata.frame_count and index >= self.metadata.frame_count:
                 log_event(log, logging.WARNING, "requested frame past end of video; skipping",
                           index=index, frame_count=self.metadata.frame_count)
                 continue
             self._skip_to(index)
-            ok, image = self._timed(cap.read)
+            ok, image = self._read()
             if not ok:
                 log_event(log, logging.WARNING, "decode failed; skipping frame", index=index)
                 continue

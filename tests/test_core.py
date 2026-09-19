@@ -9,7 +9,13 @@ import pytest
 
 from src.core.budget import Budget, BudgetExceeded
 from src.core.config import ConfigError, deep_merge, load_config, parse_override
-from src.core.device import chunk_frames_for_memory, peak_memory_gb
+from src.core.device import (
+    cgroup_cpu_quota,
+    chunk_frames_for_memory,
+    configure_runtime,
+    cpu_thread_budget,
+    peak_memory_gb,
+)
 from src.core.manifest import RunManifest, StageStatus
 
 
@@ -222,3 +228,47 @@ class TestDeviceSizing:
 
     def test_tiny_card_still_returns_a_usable_chunk(self):
         assert chunk_frames_for_memory(total_gb=6.0, headroom_gb=4.0) >= 8
+
+    def test_institute_mig_slice_fits_the_default_chunk(self, cfg):
+        # The team's box is a 20 GB H100 MIG slice (CLOUD_GPU_GUIDE.md §2).
+        # With the configured headroom the spec's default 128-frame chunk must
+        # still fit, or Track B would start life already cut down.
+        chunk = chunk_frames_for_memory(
+            total_gb=cfg.device.gpu_memory_gb, headroom_gb=cfg.device.gpu_headroom_gb, requested=128
+        )
+        assert chunk == 128
+        assert peak_memory_gb(chunk) <= cfg.device.gpu_memory_gb - cfg.device.gpu_headroom_gb
+
+
+class TestCpuThreads:
+    def test_cgroup_v2_quota_is_read_in_cores(self, tmp_path):
+        (tmp_path / "cpu.max").write_text("300000 100000")
+        assert cgroup_cpu_quota(tmp_path) == pytest.approx(3.0)
+        assert cpu_thread_budget(tmp_path) <= 3
+
+    def test_cgroup_v2_unlimited_means_no_quota(self, tmp_path):
+        (tmp_path / "cpu.max").write_text("max 100000")
+        assert cgroup_cpu_quota(tmp_path) is None
+
+    def test_cgroup_v1_quota_is_read_in_cores(self, tmp_path):
+        (tmp_path / "cpu").mkdir()
+        (tmp_path / "cpu" / "cpu.cfs_quota_us").write_text("250000")
+        (tmp_path / "cpu" / "cpu.cfs_period_us").write_text("100000")
+        # Fractional quotas round down, but never below one thread.
+        assert cgroup_cpu_quota(tmp_path) == pytest.approx(2.5)
+        assert cpu_thread_budget(tmp_path) <= 2
+
+    def test_no_cgroup_files_means_no_quota(self, tmp_path):
+        assert cgroup_cpu_quota(tmp_path) is None
+        assert cpu_thread_budget(tmp_path) >= 1
+
+    def test_configured_thread_count_is_applied_to_opencv(self, cfg):
+        import cv2
+
+        before = cv2.getNumThreads()
+        try:
+            applied = configure_runtime(cfg.merged({"device": {"cpu_threads": 2}}))
+            assert applied == {"cpu_threads": 2, "cpu_threads_source": "config"}
+            assert cv2.getNumThreads() == 2
+        finally:
+            cv2.setNumThreads(before)

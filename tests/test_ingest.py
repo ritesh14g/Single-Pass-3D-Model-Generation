@@ -8,8 +8,11 @@ construction rather than estimated.
 
 from __future__ import annotations
 
+import sys
 import time
+import types
 
+import cv2
 import numpy as np
 import pytest
 
@@ -20,9 +23,111 @@ from src.ingest.frame_selector import (
     load_selection,
     select_frames,
 )
-from src.ingest.video_reader import VideoReader, probe_video
+from src.ingest import video_reader
+from src.ingest.video_reader import NvdecFailure, VideoReader, probe_video
 from src.condition.blur import to_profile_gray
 from tests import fixtures
+
+
+@pytest.fixture
+def fake_nvdec(monkeypatch):
+    """Pretend PyNvVideoCodec is installed; the test supplies the capture class."""
+    monkeypatch.setitem(sys.modules, "PyNvVideoCodec", types.ModuleType("PyNvVideoCodec"))
+    monkeypatch.setattr(video_reader, "_NVDEC_UNAVAILABLE", None)
+
+    def install(capture_cls):
+        monkeypatch.setattr(video_reader, "NvdecCapture", capture_cls)
+
+    return install
+
+
+class _OpenCvBackedNvdec:
+    """Stands in for NvdecCapture: OpenCV underneath, failing on demand."""
+
+    fail_at: int | None = None
+
+    def __init__(self, path, gpu_id=0):
+        self._cap = cv2.VideoCapture(str(path))
+        self._position = 0
+
+    def isOpened(self):  # noqa: N802
+        return self._cap.isOpened()
+
+    def release(self):
+        self._cap.release()
+
+    def read(self):
+        if self.fail_at is not None and self._position >= self.fail_at:
+            raise NvdecFailure("simulated decoder fault")
+        self._position += 1
+        return self._cap.read()
+
+    def grab(self):
+        self._position += 1
+        return self._cap.grab()
+
+    def set(self, prop, value):
+        if prop == cv2.CAP_PROP_POS_FRAMES:
+            self._position = int(value)
+        return self._cap.set(prop, value)
+
+    def get(self, prop):
+        return self._cap.get(prop)
+
+
+class TestGpuDecodeFallback:
+    """GPU first, CPU fallback, never a crash (CLOUD_GPU_GUIDE.md §2)."""
+
+    def test_without_pynvvideocodec_opencv_decodes(self, flight, monkeypatch):
+        monkeypatch.setitem(sys.modules, "PyNvVideoCodec", None)  # import raises
+        monkeypatch.setattr(video_reader, "_NVDEC_UNAVAILABLE", None)
+        with VideoReader(flight.video_path) as reader:
+            assert reader.metadata.decoder in ("opencv", "opencv-hw")
+            assert len(list(reader.stream(max_frames=3))) == 3
+
+    def test_nvdec_failing_at_open_falls_back(self, flight, fake_nvdec):
+        class Broken:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("no decoder engine on this MIG slice")
+
+        fake_nvdec(Broken)
+        with VideoReader(flight.video_path) as reader:
+            assert reader.metadata.decoder in ("opencv", "opencv-hw")
+            assert reader.metadata.frame_count == flight.frame_count
+
+    def test_nvdec_is_used_when_it_works(self, flight, fake_nvdec):
+        fake_nvdec(_OpenCvBackedNvdec)
+        with VideoReader(flight.video_path) as reader:
+            assert reader.metadata.decoder == "nvdec"
+            assert reader.metadata.hardware_decode
+
+    def test_mid_stream_nvdec_failure_leaves_no_gap(self, flight, fake_nvdec):
+        class FailsAtFour(_OpenCvBackedNvdec):
+            fail_at = 4
+
+        with VideoReader(flight.video_path, nvdec=False) as reader:
+            expected = {f.index: f.image for f in reader.stream(step=2, max_frames=6)}
+        fake_nvdec(FailsAtFour)
+        with VideoReader(flight.video_path) as reader:
+            frames = list(reader.stream(step=2, max_frames=6))
+            assert reader.decoder in ("opencv", "opencv-hw")
+        assert [f.index for f in frames] == sorted(expected)
+        for frame in frames:
+            assert np.array_equal(frame.image, expected[frame.index])
+
+    def test_mid_read_indices_failure_leaves_no_gap(self, flight, fake_nvdec):
+        class FailsAtTen(_OpenCvBackedNvdec):
+            fail_at = 10
+
+        wanted = [2, 9, 12, 20]
+        with VideoReader(flight.video_path, nvdec=False) as reader:
+            expected = {f.index: f.image for f in reader.read_indices(wanted)}
+        fake_nvdec(FailsAtTen)
+        with VideoReader(flight.video_path) as reader:
+            frames = list(reader.read_indices(wanted))
+        assert [f.index for f in frames] == wanted
+        for frame in frames:
+            assert np.array_equal(frame.image, expected[frame.index])
 
 
 class TestVideoReader:

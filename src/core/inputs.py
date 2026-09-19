@@ -84,8 +84,9 @@ def _resolve_hardware_decode(metrics: dict[str, Any]) -> tuple[str, str]:
     if not isinstance(video, dict) or "hardware_decode" not in video:
         return UNKNOWN, "no video metrics recorded"
     if video["hardware_decode"]:
-        return PRESENT, f"accelerator engaged for {video.get('fourcc', 'this codec')}"
-    return ABSENT, "OpenCV did not engage an accelerator for this build"
+        via = video.get("decoder", "hardware")
+        return PRESENT, f"{via} engaged for {video.get('fourcc', 'this codec')}"
+    return ABSENT, "neither NVDEC nor OpenCV engaged an accelerator; decoded on the CPU"
 
 
 def _resolve_keyframes(metrics: dict[str, Any]) -> tuple[str, str]:

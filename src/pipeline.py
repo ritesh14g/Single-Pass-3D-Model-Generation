@@ -48,7 +48,7 @@ from src.condition.illumination import (
 )
 from src.core.budget import Budget
 from src.core.config import Config
-from src.core.device import chunk_frames_for_memory, device_info
+from src.core.device import chunk_frames_for_memory, configure_runtime, device_info
 from src.core.logging import get_logger, log_event, setup_logging
 from src.core.inputs import describe_optional_inputs, missing_inputs, summarize
 from src.core.manifest import RunManifest, StageStatus
@@ -118,6 +118,8 @@ def run_ingest(
         inputs.video,
         hardware_decode=bool(ingest_cfg["video"]["hardware_decode"]),
         max_width=ingest_cfg["video"]["max_width"],
+        nvdec=bool(ingest_cfg["video"].get("nvdec", True)),
+        nvdec_gpu_id=int(ingest_cfg["video"].get("nvdec_gpu_id", 0)),
     ) as reader:
         metadata = reader.metadata
 
@@ -228,6 +230,8 @@ def run_condition(
         inputs.video,
         hardware_decode=bool(ingest_cfg["video"]["hardware_decode"]),
         max_width=ingest_cfg["video"]["max_width"],
+        nvdec=bool(ingest_cfg["video"].get("nvdec", True)),
+        nvdec_gpu_id=int(ingest_cfg["video"].get("nvdec_gpu_id", 0)),
     ) as reader:
         for position, frame in enumerate(reader.read_indices(wanted)):
             selected = selection.frames[position] if position < len(selection.frames) else None
@@ -349,6 +353,7 @@ def run_condition(
         "illumination": illumination_summary,
         "dynamic": dynamic_summary,
         "dynamic_model_available": masker.available,
+        "dynamic_device": masker.device,
         "dynamic_unavailable_reason": masker.unavailable_reason,
         "blockiness_mean": round(float(np.mean(blockiness_scores)), 3) if blockiness_scores else None,
         "mean_weight": round(float(frame_table["weight"].mean()), 3) if len(frame_table) else None,
@@ -546,7 +551,8 @@ def run_pipeline(
 
     manifest = RunManifest.open(run_dir, cfg.to_dict(), resume=bool(cfg.get_path("run.resume", True)))
     manifest.inputs = inputs.to_dict()
-    manifest.environment = environment_info(cfg)
+    runtime = configure_runtime(cfg)
+    manifest.environment = {**environment_info(cfg), **runtime}
     manifest.save()
 
     budget = Budget.from_config(cfg)
