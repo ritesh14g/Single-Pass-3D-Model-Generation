@@ -22,3 +22,6 @@ weights/
 
 # Stage Lab runs, synthetic inputs, uploads, history
 data/lab/
+
+# third-party binaries (OpenMVS etc.), fetched per machine
+tools/

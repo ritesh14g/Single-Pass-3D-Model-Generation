@@ -72,7 +72,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
-| 4 | Reconstruction tracks | §7 | ⚪ planned | — | — | Track A first (submission floor) |
+| 4 | Reconstruction tracks | §7 | 🟡 probing | — | — | Track A engine chosen: **pycolmap + OpenMVS** (not ODM, ENV-1). CPU chain verified on laptop; GPU run on the box pending (`scripts/recon_probe.py`) |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -114,6 +114,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `ui/stages/__init__.py` | UI | Panel registry + panel contract |
 | `ui/stages/stage1_ingest.py` | 1 | Stage 1 parameters and diagnostics |
 | `ui/stages/stage2_condition.py` | 2 | Stage 2 parameters (artifacts/illumination/dynamic/GPS) and diagnostics |
+| `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
+| `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
 | `.streamlit/config.toml` | UI | Streamlit server settings (upload cap 300 MB) |
 | `tests/test_core.py` | infra | Config, budget, manifest, chunk sizing |
 | `tests/test_telemetry.py` | 1+2 | SRT dialects, CSV, TXT, interpolation, ENU, GPS filter |
@@ -219,6 +221,24 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 - ❌ **Otsu luminance threshold for shadows** (tried in session 1 probes): precision dropped
   to 0.58–0.65 and it flagged 18% of a shadow-free frame. Not the fix for S2-2.
 
+**Reconstruction (Stage 4)**
+- ❌ **OpenDroneMap as Track A.** Needs Docker/Apptainer, absent on the box (ENV-1), and its
+  SfM, matching, meshing and texturing are CPU-bound on a 3-core slice; only feature extraction
+  and densify use the GPU. Replaced by pycolmap (CUDA wheel) + OpenMVS, which are the same
+  class of components ODM wraps.
+- ❌ **`demo_flight.mp4` for judging 3D quality.** It is a flat canvas translated in image space:
+  focal length and curvature are unobservable. Freezing distortion sent focal 978 → 4 907 px;
+  GPS priors + frozen distortion → 22 663 px with 5/43 registered. The output bends into a bowl
+  (sag/length 0.045) whatever the settings. Use real footage or a rendered 3D scene.
+- ❌ **Global mapper (GLOMAP, `pycolmap.global_mapping`) on the flat synthetic pan**: "no 3D
+  points to optimize", no model. Not yet tried on real footage — not a verdict on real data.
+- ❌ **GPS position priors to fix the focal/height ambiguity.** On a constant-height nadir flight
+  images + GPS only fix height/focal. On Esri, priors pulled focal 1928 → 1132 px and height above
+  ground 93 → 56 m (truth ≈ 111 m). What works: **seed focal from telemetry HFOV and hold it
+  fixed** → 107.1 m (−3.5%). Refining a seeded focal drifts back to 1908 px / 92 m.
+- ❌ **COLMAP Poisson at its default depth 13.** 5.35 M faces from 43 frames at 640×480;
+  TextureMesh ran > 10 min and was stopped. Depth 11: 676 k faces in 14 s, texture in 52 s.
+
 ---
 
 ## 5. Open issues
@@ -250,7 +270,11 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | ~~S2-7~~ | 2 | ~~No direct test coverage for `src/qa/stage2_eval.py` (310 lines); Stage 1 has `tests/test_stage1_eval.py`~~ | **Closed 2026-09-18**: `tests/test_stage2_eval.py`, 66 tests. 18 integration (report contract, manifest registration, chart columns, scorecard) plus 48 table-driven unit tests over `evaluate_condition` with synthesised reports, one per threshold boundary across all four KPI groups, the missing-report branches, the scale-free GPS path and the warn-counts-half score arithmetic. Verified by mutation: flipping `<` to `<=` in the gain-span and shadow-recall comparisons fails 3 tests |
 | ~~S2-8~~ | 2 | ~~100/100 overstates Stage 2: 5 of 12 KPIs were INFO, so a degraded run could not move the score~~ | **Closed 2026-09-18**: shadow coverage, low-light fraction and altitude provenance promoted to scored KPIs with bands in `qa.stage2` (rule 6 — the gain-span and GPS-outlier constants moved there too). Now 9 scored / 3 info; a fully degraded report scores **5.6/100** with 8 fails. `demo_flight.mp4` still scores 100, now earned across 9 scored KPIs. The three remaining INFO KPIs are contextual, not quality signals (keypoints vetoed happens in Stage 4; RTK absence is not a defect; masked *area* is scored instead of mover count). **Does not close S2-3**: coverage is not correctness — telling an over-firing detector from a genuinely dark scene still needs per-pixel truth |
 | S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box. As of 2026-09-19 YOLO is passed `device=0, half=True` when CUDA is visible, with GPU→CPU retry on failure (unit-tested with a fake model); check the log says `device=cuda` and record ms/frame |
-| ENV-1 | — | **Confirmed 2026-09-19: no Docker, Podman or Apptainer on the institute notebook.** Track A (`opendronemap/odm:gpu`) cannot run there as specified | Ask the institute for a VM profile or a container runtime, or run Track A on another machine. Decide before Stage 4 starts |
+| ~~ENV-1~~ | — | ~~No Docker, Podman or Apptainer on the institute notebook; ODM cannot run there~~ | **Closed 2026-09-21 by re-scoping Track A**: no container needed. `pycolmap-cuda12` 4.2.0 has a cp313 manylinux wheel (pip, no root); OpenMVS 2.4.0's Ubuntu build is statically linked (glibc + libstdc++ only) and runs from a folder. Unverified on the box until S4-3 |
+| S4-1 | 4 | Camera centres sit **5–7 m RMS** from KLV GPS after a similarity fit on Esri, in every variant (≈ 1 m would be expected for a well-timed GPS). GPS steps between selected frames are irregular (1.6, 4, 15.8, 21.9, 29, 16 … m) | Suspect KLV-to-frame timing or interpolation, not SfM. Plot residual vs time; try a time offset sweep. Blocks GPS priors and §8.1 georeferencing accuracy |
+| S4-2 | 4 | No 3D ground truth for the Stage 4 evaluator: `demo_flight.mp4` is planar and unobservable (see §4) | Render a synthetic flight over a textured 3D terrain with known cameras (`src/qa/synthetic.py`), so `stage4_eval.py` can score pose error, focal error and surface error |
+| S4-3 | 4 | GPU path (CUDA SIFT, matching, PatchMatch stereo) never run | Run `scripts/recon_probe.py` on the box; record timings vs laptop CPU in this log |
+| S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -1280,3 +1304,56 @@ the limit is a quality gate that has to be tuned on real footage (S1-14).
 speed on real H.264 still needs measuring. S1-14 added.
 
 **Next:** Esri H.264 clip via gdown → `inspect` (expect `nvdec`) → full run and timings.
+
+### Session — 2026-09-21 — ritesh14g (with Claude) — Stage 4 Track A engine probe (laptop CPU)
+**Goal:** Choose the Track A engine now that ODM cannot run on the box (ENV-1), and prove the
+chain end to end on the laptop before the GPU box is available.
+
+**Created:**
+- `scripts/recon_probe.py` — standalone probe: pycolmap SIFT/matching/incremental SfM (focal
+  seeded from telemetry HFOV and held fixed when present), dense by COLMAP PatchMatch on CUDA or
+  OpenMVS DensifyPointCloud on CPU, Poisson mesh (depth 11), OpenMVS TextureMesh → OBJ. Every GPU
+  step retries on CPU with a logged downgrade. Writes `probe_summary.json` with timings and a
+  metric check (camera-vs-GPS RMS, height above ground vs telemetry).
+
+**Modified:**
+- `.gitignore` — `tools/` (third-party binaries fetched per machine).
+- `requirements.txt` — pycolmap (CPU) vs pycolmap-cuda12 (box), OpenMVS location, plyfile.
+- `DEVLOG.md` — this entry, status board, repo map, §4 Stage 4 dead ends, ENV-1 closed, S4-1..S4-4.
+
+**Deleted/Moved:** (none)
+
+**Decisions:**
+- **Track A = pycolmap + OpenMVS, not ODM.** ODM needs a container runtime the box lacks and is
+  CPU-bound where the box is weakest (3 cores). pycolmap-cuda12 puts SIFT, matching, BA and
+  PatchMatch on the GPU; OpenMVS supplies the same mesh/texture back end ODM uses. The same
+  pycolmap BA is §7.3's refinement bridge for Track B.
+- **Dense engine by device:** COLMAP PatchMatch (CUDA only) on the box, OpenMVS densify on CPU.
+  OpenMVS's prebuilt binaries are CPU-only (Windows CUDA build exists separately; Linux build
+  has no CUDA runtime).
+- **Telemetry intrinsics are load-bearing** (see §4): focal from HFOV, held fixed.
+
+**Measured (laptop, i5-1135G7, 8 threads, CPU only):**
+
+| Clip | Frames | Registered | Reproj | Extract | Match | Map | Dense | Mesh | Texture |
+|---|---|---|---|---|---|---|---|---|---|
+| `demo_flight` 640×480 | 43 | 43 | 0.16 px | 6 s | 87 s | 49 s | 395 s (OpenMVS) | 14 s (d11) | 52 s |
+| `Esri_multiplexer_1` 3840×2160, SIFT at 1600 | 53 | 52 | 1.13 px | 66 s | 219 s | 60 s | not run (box) | — | — |
+
+Esri, metric check against KLV (camera ≈ 111 m above ground, nominal focal 2248 px):
+self-calibrated 93 m; frozen distortion 109 m (f 2309); GPS priors 56 m; **telemetry focal fixed
+107 m**. Stages 1–2 on Esri: 1 min 47 s on the laptop.
+
+**Dead ends (also added to §4):** ODM; demo clip for 3D QA; global mapper on the flat pan; GPS
+priors for focal; Poisson depth 13.
+
+**Tests:** not run this session — no `src/` or `tests/` change (new script, `.gitignore`,
+`requirements.txt` comments only).
+
+**Open issues added/closed:** ENV-1 closed (re-scoped). S4-1, S4-2, S4-3, S4-4 added.
+
+**Next:**
+- Box: `pip install pycolmap-cuda12==4.2.0`, fetch OpenMVS Ubuntu build, run Stages 1–2 + the probe
+  on Esri; record timings here (S4-3).
+- Then `src/recon/track_a_colmap.py` with config in `configs/default.yaml`, Stage Lab panel,
+  `src/qa/stage4_eval.py`, synthetic 3D ground truth (S4-2).
