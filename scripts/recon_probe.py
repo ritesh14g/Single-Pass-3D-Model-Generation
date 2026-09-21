@@ -192,27 +192,42 @@ def run_sparse(out: Path, images: Path, sparse_dir: Path, hints: dict, fix_focal
 
 
 def clean_mesh(src: Path, dst: Path, min_component_fraction: float) -> dict[str, int]:
-    """Drop degenerate faces, unreferenced vertices and small fragments before texturing.
+    """Drop non-finite vertices, degenerate faces and small fragments before texturing.
 
     On the box, Poisson on the Esri cloud gave 1.75 M vertices for 1.82 M faces (a clean
-    surface has ~2 faces per vertex), i.e. many fragments, and TextureMesh segfaulted on it.
+    surface has ~2 faces per vertex) and NaN vertex coordinates; TextureMesh segfaulted
+    on it and ``trimesh.split`` stalled. Components are found with one sparse
+    connected-components pass over the vertex graph, which is linear in the mesh size.
     """
     import trimesh
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
 
     mesh = trimesh.load(src, process=False)
     stats = {"vertices_in": len(mesh.vertices), "faces_in": len(mesh.faces)}
-    mesh.update_faces(mesh.nondegenerate_faces())
-    mesh.update_faces(mesh.unique_faces())
+    finite = np.isfinite(mesh.vertices).all(axis=1)
+    stats["nonfinite_vertices"] = int((~finite).sum())
+    faces = np.asarray(mesh.faces)
+    keep = finite[faces].all(axis=1)
+    keep &= (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 0] != faces[:, 2])
+    faces = faces[keep]
+
+    n = len(mesh.vertices)
+    rows = np.concatenate([faces[:, 0], faces[:, 1]])
+    cols = np.concatenate([faces[:, 1], faces[:, 2]])
+    graph = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(n, n))
+    n_comp, labels = connected_components(graph, directed=False)
+    face_label = labels[faces[:, 0]]
+    counts = np.bincount(face_label, minlength=n_comp)
+    big = counts >= min_component_fraction * counts.max()
+    stats.update(components_in=int((counts > 0).sum()), components_kept=int(big.sum()))
+
+    mask = keep.copy()
+    mask[keep] = big[face_label]
+    mesh.update_faces(mask)
     mesh.remove_unreferenced_vertices()
-    parts = mesh.split(only_watertight=False)
-    kept = parts
-    if len(parts) > 1:
-        largest = max(len(p.faces) for p in parts)
-        kept = [p for p in parts if len(p.faces) >= min_component_fraction * largest]
-        mesh = trimesh.util.concatenate(kept)
     mesh.export(dst)
-    stats.update(components_in=len(parts), components_kept=len(kept),
-                 vertices_out=len(mesh.vertices), faces_out=len(mesh.faces))
+    stats.update(vertices_out=len(mesh.vertices), faces_out=len(mesh.faces))
     return stats
 
 

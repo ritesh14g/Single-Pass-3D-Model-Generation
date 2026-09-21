@@ -274,7 +274,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-1 | 4 | Camera centres sit **5–7 m RMS** from KLV GPS after a similarity fit on Esri, in every variant (≈ 1 m would be expected for a well-timed GPS). GPS steps between selected frames are irregular (1.6, 4, 15.8, 21.9, 29, 16 … m) | Suspect KLV-to-frame timing or interpolation, not SfM. Plot residual vs time; try a time offset sweep. Blocks GPS priors and §8.1 georeferencing accuracy |
 | S4-2 | 4 | No 3D ground truth for the Stage 4 evaluator: `demo_flight.mp4` is planar and unobservable (see §4) | Render a synthetic flight over a textured 3D terrain with known cameras (`src/qa/synthetic.py`), so `stage4_eval.py` can score pose error, focal error and surface error |
 | S4-3 | 4 | GPU path (CUDA SIFT, matching, PatchMatch stereo) never run | Run `scripts/recon_probe.py` on the box; record timings vs laptop CPU in this log |
-| S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
+| S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex), **and it contains NaN vertex coordinates** (numpy `invalid value` warnings in the cross products during cleaning; `trimesh.split` then stalled) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -1379,3 +1379,9 @@ TextureMesh then segfaulted (S4-5), and because the script let that exception es
 **Tests:** not run — no `src/` or `tests/` change.
 
 **Next:** on the box, `git pull`, then the probe with `--reuse`; paste the summary. Explain 42 vs 52.
+- Follow-up: the first `--reuse` run showed NaN vertices in the Poisson mesh and stalled in
+  `trimesh.split`. `clean_mesh()` now drops faces touching non-finite vertices first
+  (`nonfinite_vertices` in the summary) and finds fragments with one scipy connected-components
+  pass. Unit-checked on a two-sphere mesh with a NaN vertex. Box sparse summary: **49 conditioned
+  frames (laptop 53), 42 registered**, reproj 1.224 px, focal fixed at 2248; no GPS metric in the
+  summary, so `condition/geo.txt` is probably missing on the box run — to check.
