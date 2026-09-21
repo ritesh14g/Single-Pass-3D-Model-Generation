@@ -34,10 +34,15 @@ from src.core.device import cpu_thread_budget, resolve_device  # noqa: E402
 
 TIMINGS: dict[str, float] = {}
 NOTES: list[str] = []
+LOG_PATH: Path | None = None
 
 
 def log(msg: str) -> None:
-    print(f"[probe] {msg}", flush=True)
+    line = f"[probe] {msg}"
+    print(line, flush=True)
+    if LOG_PATH is not None:
+        with LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
 
 
 def note(msg: str) -> None:
@@ -137,45 +142,8 @@ def run_openmvs(bin_dir: Path, tool: str, work: Path, *args: str, threads: int) 
         raise RuntimeError(f"{tool} exited {result.returncode}:\n" + "\n".join(tail))
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run-dir", type=Path, required=True, help="output folder of `src.cli run`")
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--openmvs-bin", type=Path, default=None, help="folder with OpenMVS executables")
-    ap.add_argument("--sift-size", type=int, default=1600, help="max image side for SIFT")
-    ap.add_argument("--dense-size", type=int, default=1920, help="max image side for dense stereo")
-    ap.add_argument("--poisson-depth", type=int, default=11,
-                    help="COLMAP's default 13 gave 5.4 M faces on 43 small frames and stalled texturing")
-    ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
-    ap.add_argument("--no-texture", action="store_true")
-    args = ap.parse_args()
-
-    run_dir, out = args.run_dir.resolve(), args.out.resolve()
-    images = run_dir / "condition" / "images"
-    geo_path = run_dir / "condition" / "geo.txt"
-    if not images.is_dir():
-        log(f"no conditioned images at {images}; run `python -m src.cli run <video> --out {args.run_dir}` first")
-        return 2
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
-    bin_dir = args.openmvs_bin.resolve() if args.openmvs_bin else None
-
-    threads = cpu_thread_budget()
-    # CUDA needs both a visible GPU (resolve_device) and a CUDA build of pycolmap
-    # (`pip install pycolmap-cuda12`); the plain `pycolmap` wheel is CPU-only.
-    gpu_visible = resolve_device(args.device) == "cuda"
-    use_cuda = gpu_visible and bool(pycolmap.has_cuda)
-    if gpu_visible and not pycolmap.has_cuda:
-        note("DOWNGRADE: GPU visible but pycolmap has no CUDA (install pycolmap-cuda12); running on CPU")
-    env = {"pycolmap": pycolmap.__version__, "pycolmap_cuda": bool(pycolmap.has_cuda),
-           "gpu_visible": gpu_visible, "using_cuda": use_cuda, "cpu_threads": threads, "platform": platform.platform()}
-    log(f"environment {env}")
-    n_images = len(list(images.glob("*.jpg")))
-    hints = telemetry_hints(run_dir)
-    log(f"{n_images} conditioned frames; telemetry hints {hints}")
-
-    # ---- sparse -------------------------------------------------------------
+def run_sparse(out: Path, images: Path, sparse_dir: Path, hints: dict, fix_focal: bool,
+               threads: int, use_cuda: bool, args) -> dict:
     db = out / "database.db"
     reader = pycolmap.ImageReaderOptions()
     reader.camera_model = "SIMPLE_RADIAL"
@@ -193,7 +161,6 @@ def main() -> int:
     # Seed the focal length from telemetry and hold it: on a constant-height nadir
     # flight the images only fix height/focal, so a refined focal drifts (measured on
     # Esri: refined -> 92 m above ground, telemetry-fixed -> 107 m, truth ~111 m).
-    fix_focal = "hfov_deg" in hints
     if fix_focal:
         handle = pycolmap.Database.open(str(db))
         cam = handle.read_all_cameras()[0]
@@ -219,10 +186,89 @@ def main() -> int:
     mapper = pycolmap.IncrementalPipelineOptions()
     mapper.num_threads = threads
     mapper.ba_refine_focal_length = not fix_focal
-    sparse_dir = out / "sparse"
-    sparse_dir.mkdir()
+    sparse_dir.mkdir(exist_ok=True)
     with timed("sparse_map"):
-        recs = pycolmap.incremental_mapping(db, images, sparse_dir, options=mapper)
+        return pycolmap.incremental_mapping(db, images, sparse_dir, options=mapper)
+
+
+def clean_mesh(src: Path, dst: Path, min_component_fraction: float) -> dict[str, int]:
+    """Drop degenerate faces, unreferenced vertices and small fragments before texturing.
+
+    On the box, Poisson on the Esri cloud gave 1.75 M vertices for 1.82 M faces (a clean
+    surface has ~2 faces per vertex), i.e. many fragments, and TextureMesh segfaulted on it.
+    """
+    import trimesh
+
+    mesh = trimesh.load(src, process=False)
+    stats = {"vertices_in": len(mesh.vertices), "faces_in": len(mesh.faces)}
+    mesh.update_faces(mesh.nondegenerate_faces())
+    mesh.update_faces(mesh.unique_faces())
+    mesh.remove_unreferenced_vertices()
+    parts = mesh.split(only_watertight=False)
+    kept = parts
+    if len(parts) > 1:
+        largest = max(len(p.faces) for p in parts)
+        kept = [p for p in parts if len(p.faces) >= min_component_fraction * largest]
+        mesh = trimesh.util.concatenate(kept)
+    mesh.export(dst)
+    stats.update(components_in=len(parts), components_kept=len(kept),
+                 vertices_out=len(mesh.vertices), faces_out=len(mesh.faces))
+    return stats
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run-dir", type=Path, required=True, help="output folder of `src.cli run`")
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--openmvs-bin", type=Path, default=None, help="folder with OpenMVS executables")
+    ap.add_argument("--sift-size", type=int, default=1600, help="max image side for SIFT")
+    ap.add_argument("--dense-size", type=int, default=1920, help="max image side for dense stereo")
+    ap.add_argument("--poisson-depth", type=int, default=11,
+                    help="COLMAP's default 13 gave 5.4 M faces on 43 small frames and stalled texturing")
+    ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    ap.add_argument("--min-component", type=float, default=0.01,
+                    help="drop mesh fragments smaller than this fraction of the largest piece")
+    ap.add_argument("--no-texture", action="store_true")
+    ap.add_argument("--reuse", action="store_true",
+                    help="keep --out and reuse its sparse model and dense cloud; redo mesh and texture")
+    args = ap.parse_args()
+
+    run_dir, out = args.run_dir.resolve(), args.out.resolve()
+    images = run_dir / "condition" / "images"
+    geo_path = run_dir / "condition" / "geo.txt"
+    if not images.is_dir():
+        log(f"no conditioned images at {images}; run `python -m src.cli run <video> --out {args.run_dir}` first")
+        return 2
+    if out.exists() and not args.reuse:
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+    global LOG_PATH
+    LOG_PATH = out / "probe.log"
+    bin_dir = args.openmvs_bin.resolve() if args.openmvs_bin else None
+
+    threads = cpu_thread_budget()
+    # CUDA needs both a visible GPU (resolve_device) and a CUDA build of pycolmap
+    # (`pip install pycolmap-cuda12`); the plain `pycolmap` wheel is CPU-only.
+    gpu_visible = resolve_device(args.device) == "cuda"
+    use_cuda = gpu_visible and bool(pycolmap.has_cuda)
+    if gpu_visible and not pycolmap.has_cuda:
+        note("DOWNGRADE: GPU visible but pycolmap has no CUDA (install pycolmap-cuda12); running on CPU")
+    env = {"pycolmap": pycolmap.__version__, "pycolmap_cuda": bool(pycolmap.has_cuda),
+           "gpu_visible": gpu_visible, "using_cuda": use_cuda, "cpu_threads": threads, "platform": platform.platform()}
+    log(f"environment {env}")
+    n_images = len(list(images.glob("*.jpg")))
+    hints = telemetry_hints(run_dir)
+    log(f"{n_images} conditioned frames; telemetry hints {hints}")
+
+    # ---- sparse -------------------------------------------------------------
+    sparse_dir = out / "sparse"
+    fix_focal = "hfov_deg" in hints
+    reused = [d for d in sparse_dir.glob("*") if (d / "images.bin").exists()] if args.reuse else []
+    if reused:
+        recs = {int(d.name): pycolmap.Reconstruction(str(d)) for d in reused}
+        note(f"reused sparse model(s) from {sparse_dir}")
+    else:
+        recs = run_sparse(out, images, sparse_dir, hints, fix_focal, threads, use_cuda, args)
     if not recs:
         log("SfM produced no model")
         return 1
@@ -243,12 +289,18 @@ def main() -> int:
 
     # ---- dense --------------------------------------------------------------
     undist = out / "dense"
-    with timed("undistort"):
-        pycolmap.undistort_images(undist, sparse_model, images,
-                                  undistort_options=_undistort_options(args.dense_size))
     fused = undist / "fused.ply"
     dense_engine = None
-    if use_cuda:
+    if args.reuse and fused.exists():
+        dense_engine = "reused"
+        note(f"reused dense cloud {fused}")
+    else:
+        if undist.exists():
+            shutil.rmtree(undist)
+        with timed("undistort"):
+            pycolmap.undistort_images(undist, sparse_model, images,
+                                      undistort_options=_undistort_options(args.dense_size))
+    if dense_engine is None and use_cuda:
         try:
             pm = pycolmap.PatchMatchOptions()
             pm.max_image_size = args.dense_size
@@ -268,7 +320,7 @@ def main() -> int:
         else:
             note("dense on CPU via OpenMVS DensifyPointCloud")
             mvs = out / "mvs"
-            mvs.mkdir()
+            mvs.mkdir(exist_ok=True)
             run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-o", str(mvs / "scene.mvs"),
                         "--image-folder", str(undist / "images"), threads=threads)
             run_openmvs(bin_dir, "DensifyPointCloud", mvs, "-i", str(mvs / "scene.mvs"),
@@ -277,30 +329,38 @@ def main() -> int:
             dense_engine = "openmvs_cpu"
 
     mesh = out / "mesh.ply"
+    mesh_clean = out / "mesh_clean.ply"
+    mesh_stats: dict[str, int] = {}
     if dense_engine:
         with timed("mesh_poisson"):
             poisson = pycolmap.PoissonMeshingOptions()
             poisson.depth = args.poisson_depth
             poisson.num_threads = threads
             pycolmap.poisson_meshing(fused, mesh, options=poisson)
+        with timed("mesh_clean"):
+            mesh_stats = clean_mesh(mesh, mesh_clean, args.min_component)
+        log(f"mesh {mesh_stats}")
 
     # ---- texture ------------------------------------------------------------
     textured = None
     if dense_engine and bin_dir is not None and not args.no_texture:
         mvs = out / "mvs"
         mvs.mkdir(exist_ok=True)
-        if not (mvs / "scene.mvs").exists():
-            run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-o", str(mvs / "scene.mvs"),
-                        "--image-folder", str(undist / "images"), threads=threads)
-        run_openmvs(bin_dir, "TextureMesh", mvs, "-i", str(mvs / "scene.mvs"), "-m", str(mesh),
-                    "-o", str(out / "textured.mvs"), "--export-type", "obj", threads=threads)
-        textured = out / "textured.obj"
+        try:
+            if not (mvs / "scene.mvs").exists():
+                run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-o", str(mvs / "scene.mvs"),
+                            "--image-folder", str(undist / "images"), threads=threads)
+            run_openmvs(bin_dir, "TextureMesh", mvs, "-i", str(mvs / "scene.mvs"), "-m", str(mesh_clean),
+                        "-o", str(out / "textured.mvs"), "--export-type", "obj", threads=threads)
+            textured = out / "textured.obj"
+        except Exception as exc:  # noqa: BLE001 - the vertex-coloured mesh is still a result
+            note(f"DOWNGRADE texture: {str(exc).splitlines()[0]}; keeping vertex-coloured mesh_clean.ply")
 
     summary = {
         "environment": env, "telemetry_hints": hints, "sparse": sparse_stats,
-        "dense_engine": dense_engine, "timings_s": TIMINGS,
+        "dense_engine": dense_engine, "mesh": mesh_stats, "timings_s": TIMINGS,
         "total_s": round(sum(TIMINGS.values()), 1), "notes": NOTES,
-        "outputs": {k: str(v) for k, v in {"sparse": sparse_model, "dense": fused, "mesh": mesh,
+        "outputs": {k: str(v) for k, v in {"sparse": sparse_model, "dense": fused, "mesh": mesh_clean,
                                            "textured": textured}.items() if v is not None and Path(v).exists()},
     }
     (out / "probe_summary.json").write_text(json.dumps(summary, indent=2))

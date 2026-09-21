@@ -274,6 +274,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-1 | 4 | Camera centres sit **5–7 m RMS** from KLV GPS after a similarity fit on Esri, in every variant (≈ 1 m would be expected for a well-timed GPS). GPS steps between selected frames are irregular (1.6, 4, 15.8, 21.9, 29, 16 … m) | Suspect KLV-to-frame timing or interpolation, not SfM. Plot residual vs time; try a time offset sweep. Blocks GPS priors and §8.1 georeferencing accuracy |
 | S4-2 | 4 | No 3D ground truth for the Stage 4 evaluator: `demo_flight.mp4` is planar and unobservable (see §4) | Render a synthetic flight over a textured 3D terrain with known cameras (`src/qa/synthetic.py`), so `stage4_eval.py` can score pose error, focal error and surface error |
 | S4-3 | 4 | GPU path (CUDA SIFT, matching, PatchMatch stereo) never run | Run `scripts/recon_probe.py` on the box; record timings vs laptop CPU in this log |
+| S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -1357,3 +1358,24 @@ priors for focal; Poisson depth 13.
   on Esri; record timings here (S4-3).
 - Then `src/recon/track_a_colmap.py` with config in `configs/default.yaml`, Stage Lab panel,
   `src/qa/stage4_eval.py`, synthetic 3D ground truth (S4-2).
+
+### Session — 2026-09-21 — ritesh14g (with Claude) — Stage 4 probe, first GPU run on the box
+**Goal:** Run `scripts/recon_probe.py` on Esri on the H100 MIG slice.
+
+**Measured (box):** the whole GPU chain ran: CUDA SIFT, CUDA matching, SfM, CUDA PatchMatch stereo
+and fusion → **447 102 dense points** (fusion 14.7 s), Poisson 32.3 s, InterfaceCOLMAP 6.9 s.
+**42 images reached the dense workspace**, against 52 registered on the laptop CPU run — to be
+explained from the sparse summary (GPU SIFT differs from CPU SIFT; may be a split model).
+TextureMesh then segfaulted (S4-5), and because the script let that exception escape, no
+`probe_summary.json` was written and the stage timings exist only in the terminal scrollback.
+
+**Modified:**
+- `scripts/recon_probe.py` — `--reuse` (keep the sparse model and dense cloud, redo mesh + texture);
+  `clean_mesh()` before texturing, with before/after counts in the summary; texture failure is a
+  logged `DOWNGRADE`, not a crash; every `[probe]` line is also written to `<out>/probe.log`.
+  Verified on the laptop with `--reuse` on the demo outputs (mesh 12 s, clean 4 s, texture 41 s).
+- `DEVLOG.md` — S4-5.
+
+**Tests:** not run — no `src/` or `tests/` change.
+
+**Next:** on the box, `git pull`, then the probe with `--reuse`; paste the summary. Explain 42 vs 52.
