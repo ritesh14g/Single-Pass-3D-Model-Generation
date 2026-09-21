@@ -44,6 +44,12 @@ ingest:
     nvdec: true
     # CUDA device index for NVDEC. Under MIG the slice is always 0.
     nvdec_gpu_id: 0
+    # PyNvVideoCodec segfaults (uncatchable) instead of raising on inputs it cannot
+    # seek, so NVDEC only gets inputs known to work; everything else decodes through
+    # OpenCV with a logged downgrade. Matched as substrings of the codec name.
+    # MPEG-2 TS killed Stage 2 on the box (S1-15).
+    nvdec_codecs: [h264, hevc, h265, av1, vp9]
+    nvdec_allow_ts: false
     # Frames are scored at this width before any expensive operation.
     scoring_width: 640
     # Working resolution the rest of the pipeline sees. null = native.

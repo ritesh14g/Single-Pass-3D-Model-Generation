@@ -55,7 +55,7 @@ from src.core.manifest import RunManifest, StageStatus
 from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
 from src.ingest.telemetry import TelemetryTable, load_telemetry
-from src.ingest.video_reader import VideoReader
+from src.ingest.video_reader import VideoReader, reader_options
 
 log = get_logger(__name__)
 
@@ -114,13 +114,7 @@ def run_ingest(
     ingest_cfg = cfg.get_path("ingest")
     timing: dict[str, float] = {}
 
-    with VideoReader(
-        inputs.video,
-        hardware_decode=bool(ingest_cfg["video"]["hardware_decode"]),
-        max_width=ingest_cfg["video"]["max_width"],
-        nvdec=bool(ingest_cfg["video"].get("nvdec", True)),
-        nvdec_gpu_id=int(ingest_cfg["video"].get("nvdec_gpu_id", 0)),
-    ) as reader:
+    with VideoReader(inputs.video, **reader_options(cfg)) as reader:
         metadata = reader.metadata
 
         keyframes = None
@@ -207,7 +201,6 @@ def run_condition(
     mask_dir.mkdir(parents=True, exist_ok=True)
 
     enabled = bool(cfg.get_path("condition.enabled"))
-    ingest_cfg = cfg.get_path("ingest")
 
     # §5.6 GPS conditioning on the raw telemetry Stage 1 parsed.
     filtered, gps_report = filter_telemetry(telemetry, cfg)
@@ -226,13 +219,7 @@ def run_condition(
     wanted = selection.indices
     total = max(len(wanted), 1)
 
-    with VideoReader(
-        inputs.video,
-        hardware_decode=bool(ingest_cfg["video"]["hardware_decode"]),
-        max_width=ingest_cfg["video"]["max_width"],
-        nvdec=bool(ingest_cfg["video"].get("nvdec", True)),
-        nvdec_gpu_id=int(ingest_cfg["video"].get("nvdec_gpu_id", 0)),
-    ) as reader:
+    with VideoReader(inputs.video, **reader_options(cfg)) as reader:
         for position, frame in enumerate(reader.read_indices(wanted)):
             selected = selection.frames[position] if position < len(selection.frames) else None
             base_weight = selected.weight if selected else 1.0

@@ -72,7 +72,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
-| 4 | Reconstruction tracks | §7 | 🟡 probing | — | — | Track A engine chosen: **pycolmap + OpenMVS** (not ODM, ENV-1). CPU chain verified on laptop; GPU run on the box pending (`scripts/recon_probe.py`) |
+| 4 | Reconstruction tracks | §7 | 🟡 probing | — | — | Track A engine: **pycolmap (GPU SfM + PatchMatch) → OpenMVS Delaunay mesh + texture**. GPU sparse/dense verified on the box; mesh+texture of the box cloud verified on the laptop (S4-6); full box run pending |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -256,6 +256,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | ~~S1-13~~ | 1 | ~~KLV source selection gated on file extension, so real ISR footage was skipped~~ | **Closed 2026-09-18**: all 8 MISB samples are MPEG-2 TS but are named `.ts`, `.mp4`, `.mpeg4` and `.H264`. Under the old rule the pipeline missed 5 of 8. `file_is_ts()` now sniffs 189 bytes for TS framing; all 8 are found with default config |
 | S1-11 | 1 | KLV carries no barometric altitude and no focal length; `alt_baro` and `focal_mm` stay NaN on an ISR clip | Focal could be derived from sensor HFOV (tag 16, parsed and stored) plus sensor width, but the width is not in ST 0601 — deriving it would need a per-platform table. Not fabricated for now |
 | S1-14 | 1 | Directional-blur detector has almost no margin on clean footage: sharp frames of a clean synthetic pan measure anisotropy **2.121 / 2.186** (OpenCV) and **2.208 / 2.244** (NVDEC) against `fft_anisotropy_reject: 2.2`. The decoder noise alone (1–4 grey levels) flips 2 of 60 frames into `directional_rejects` | Real motion blur measures > 3.0 (`test_condition`), so the limit may be too low. Do **not** retune on synthetic data: measure the anisotropy of clean vs smeared frames on real nadir and oblique footage (roads, crop rows and power lines are naturally anisotropic), then set the limit. The test now checks the outlier gate only |
+| S1-15 | 1 | **NVDEC segfaulted the process on an MPEG-2 transport stream** (Esri, box). Stage 1 streamed it fine; Stage 2's `read_indices` died inside `PyNvVideoCodec SimpleDecoder.__getitem__` (exit 139, `faulthandler` trace). A segfault is not catchable, so the mid-stream fallback cannot help. `device.prefer=cpu` did not stop it either: it never gated NVDEC | **Fixed 2026-09-21, verify on the box**: NVDEC only gets inputs on `ingest.video.nvdec_codecs` (h264/hevc/h265/av1/vp9, substring match) and never a TS container (`file_is_ts` sniff, `nvdec_allow_ts: false`); `device.prefer: cpu` turns NVDEC off. One `reader_options(cfg)` now builds the reader for all three call sites. 11 tests; both gates mutation-checked |
 | S1-5 | 1 | SRT parser only tested on synthetic dialects | Test on real DJI SRTs from 2+ firmwares; competition dataset |
 | ~~S1-7~~ | 1 | ~~Blur gate false-rejects sharp frames when scene content lowers sharpness~~ | **Closed 2026-09-15**: `condition.blur.rolling_baseline`. LineVision clip reject fraction 0.713 → 0.000, 450-frame run gone; synthetic blur still fully rejected |
 | S1-8 | 1 | Overlap stays 0.998 on the forward-oblique LineVision clip; selector cannot reach the §4.3 band | Not the stride cap: with `max_stride_seconds: 10` (600 frames) strides go 15→30→60→120 then fall back to 60 and repeat (max 123). The ~240-frame probe fails verification and `_probe_for_overlap` halves it silently. 120-frame pairs (~26 m of travel at 12.9 m/s) still measure 0.998, so the affine area-overlap estimate is likely invalid for oblique/zooming views. Next: check overlap on a nadir survey clip; consider feature-track survival as the overlap measure for oblique footage |
@@ -275,6 +276,8 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-2 | 4 | No 3D ground truth for the Stage 4 evaluator: `demo_flight.mp4` is planar and unobservable (see §4) | Render a synthetic flight over a textured 3D terrain with known cameras (`src/qa/synthetic.py`), so `stage4_eval.py` can score pose error, focal error and surface error |
 | S4-3 | 4 | GPU path (CUDA SIFT, matching, PatchMatch stereo) never run | Run `scripts/recon_probe.py` on the box; record timings vs laptop CPU in this log |
 | S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex), **and it contains NaN vertex coordinates** (numpy `invalid value` warnings in the cross products during cleaning; `trimesh.split` then stalled) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
+| S4-6 | 4 | **pycolmap-cuda12's Poisson (Linux) breaks meshes the Windows pycolmap builds cleanly.** Same 447 k-point box cloud, depth 11, trim 10: box → 1.82 M faces, 121 743 fragments, 4 564 NaN vertices; laptop → 946 k faces, 30 pieces, 0 NaN, at 1, 3 and 8 threads alike. The cloud itself has no NaN coordinates or normals | **Worked around 2026-09-21**: the probe meshes with OpenMVS `ReconstructMesh` (Delaunay) on the COLMAP cloud imported with `InterfaceCOLMAP -p fused.ply` (reads `fused.ply.vis`): 659 k faces, ~2 faces/vertex, 21 s; TextureMesh then succeeds in 81 s. Poisson + `clean_mesh` stays as the fallback. Not reported upstream yet |
+| S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -1385,3 +1388,39 @@ TextureMesh then segfaulted (S4-5), and because the script let that exception es
   pass. Unit-checked on a two-sphere mesh with a NaN vertex. Box sparse summary: **49 conditioned
   frames (laptop 53), 42 registered**, reproj 1.224 px, focal fixed at 2248; no GPS metric in the
   summary, so `condition/geo.txt` is probably missing on the box run — to check.
+
+### Session — 2026-09-21 — ritesh14g (with Claude) — NVDEC crash in Stage 2 (S1-15), OpenMVS mesher (S4-6)
+**Goal:** Explain why Stage 2 never finished on the box (condition stuck at `running`, no error)
+and why the box mesh was fragmented.
+
+**Measured (box):** `-X faulthandler` re-run of condition → exit **139**, segfault in
+`PyNvVideoCodec/decoders/SimpleDecoder.py:135 __getitem__` ← `VideoReader.read_indices`.
+`--set ingest.video.nvdec=false` → exit 0 in 48.8 s. `--set device.prefer=cpu` → still 139.
+Ingest on the box: 57.9 s of its 60 s allotment, 43 `reduce_frames` degradations (3 cores).
+
+**Measured (laptop, on the box's GPU dense cloud, 79 MB tarball):** cloud is clean (447 102 points,
+no NaN, `.vis` intact). Poisson here is sane at any thread count; the box's is not (S4-6).
+OpenMVS import + Delaunay mesh + texture: 3.6 s + 20.9 s + 80.9 s → textured OBJ. Preview shows
+both forested banks and the river as an empty channel (water gives stereo nothing to match).
+
+**Modified:**
+- `src/ingest/video_reader.py` — `reader_options(cfg)`; `VideoReader(nvdec_codecs=, nvdec_allow_ts=)`;
+  `_open_nvdec` refuses TS containers before touching NVDEC and codecs off the allow-list after open.
+- `src/pipeline.py`, `src/cli.py` — all three `VideoReader` constructions use `reader_options(cfg)`;
+  dropped the now-unused `ingest_cfg` in `run_condition`.
+- `configs/default.yaml` — `ingest.video.nvdec_codecs`, `ingest.video.nvdec_allow_ts`.
+- `tests/test_ingest.py` — `TestNvdecInputGate` (11 tests).
+- `scripts/recon_probe.py` — OpenMVS `ReconstructMesh` is the default mesher (COLMAP cloud imported
+  with `-p`), Poisson + clean is the fallback; `mesher` in the summary; `ply_counts()`;
+  `metric_check` no longer crashes when fewer than 3 frames match the GPS file.
+
+**Decisions:**
+- **Gate NVDEC inputs instead of catching failures.** A segfault kills the interpreter, so
+  "GPU first, CPU fallback" has to be decided before the call for this library.
+- **OpenMVS Delaunay over Poisson** for Track A meshing: works on both builds, is what ODM uses, and
+  its meshes are what TextureMesh expects.
+
+**Tests:** 332 passed / 0 failed (was 321; +11).
+
+**Next:** box: `git pull`, fresh Stages 1–2 on Esri (expect `opencv` decode, 53-ish frames,
+`geo.txt` written), then the full probe; log timings + GPS metric; check S4-7.

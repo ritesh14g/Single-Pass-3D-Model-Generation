@@ -114,6 +114,8 @@ def umeyama(src: np.ndarray, dst: np.ndarray):
 
 def metric_check(rec: pycolmap.Reconstruction, gps: dict[str, np.ndarray]) -> dict[str, float]:
     ims = [im for im in rec.images.values() if im.name in gps]
+    if len(ims) < 3:  # a similarity fit needs three non-collinear positions
+        return {"gps_matched_images": len(ims)}
     cams = np.array([im.projection_center() for im in ims])
     ref = np.array([gps[im.name] for im in ims])
     scale, rot, trans = umeyama(cams, ref)
@@ -191,6 +193,20 @@ def run_sparse(out: Path, images: Path, sparse_dir: Path, hints: dict, fix_focal
         return pycolmap.incremental_mapping(db, images, sparse_dir, options=mapper)
 
 
+def ply_counts(path: Path) -> dict[str, int]:
+    """Vertex and face counts from a PLY header, without loading the mesh."""
+    counts: dict[str, int] = {}
+    with path.open("rb") as fh:
+        for raw in fh:
+            line = raw.decode("ascii", errors="ignore").strip()
+            if line.startswith("element "):
+                _, name, n = line.split()
+                counts[{"vertex": "vertices", "face": "faces"}.get(name, name)] = int(n)
+            if line == "end_header":
+                break
+    return counts
+
+
 def clean_mesh(src: Path, dst: Path, min_component_fraction: float) -> dict[str, int]:
     """Drop non-finite vertices, degenerate faces and small fragments before texturing.
 
@@ -241,7 +257,7 @@ def main() -> int:
     ap.add_argument("--poisson-depth", type=int, default=11,
                     help="COLMAP's default 13 gave 5.4 M faces on 43 small frames and stalled texturing")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
-    ap.add_argument("--min-component", type=float, default=0.01,
+    ap.add_argument("--min-component", type=float, default=0.01,  # Poisson fallback only
                     help="drop mesh fragments smaller than this fraction of the largest piece")
     ap.add_argument("--no-texture", action="store_true")
     ap.add_argument("--reuse", action="store_true",
@@ -343,39 +359,63 @@ def main() -> int:
             shutil.copy(mvs / "scene_dense.ply", fused)
             dense_engine = "openmvs_cpu"
 
+    # ---- mesh ---------------------------------------------------------------
+    # OpenMVS's Delaunay mesher is the default. On the box, pycolmap-cuda12's Poisson
+    # turned a clean 447 k-point cloud into 121 k fragments with NaN vertices and
+    # TextureMesh segfaulted on it; the same cloud meshed cleanly on the laptop, and
+    # OpenMVS meshed it into 659 k faces in 18 s (S4-6). Poisson is the fallback.
+    mvs = out / "mvs"
     mesh = out / "mesh.ply"
-    mesh_clean = out / "mesh_clean.ply"
+    scene_dense = mvs / "scene_dense.mvs"
     mesh_stats: dict[str, int] = {}
-    if dense_engine:
+    mesher = None
+    if dense_engine and bin_dir is not None:
+        mvs.mkdir(exist_ok=True)
+        try:
+            if not scene_dense.exists():  # COLMAP's cloud, imported with its per-point visibility
+                run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-p", str(fused),
+                            "-o", str(scene_dense), "--image-folder", str(undist / "images"),
+                            threads=threads)
+            run_openmvs(bin_dir, "ReconstructMesh", mvs, "-i", str(scene_dense), "-o", str(mesh),
+                        threads=threads)
+            mesher = "openmvs_delaunay"
+            mesh_stats = ply_counts(mesh)
+        except Exception as exc:  # noqa: BLE001
+            note(f"DOWNGRADE mesh: OpenMVS ReconstructMesh failed ({str(exc).splitlines()[0]}); using Poisson")
+    if dense_engine and mesher is None:
+        raw = out / "mesh_poisson.ply"
         with timed("mesh_poisson"):
             poisson = pycolmap.PoissonMeshingOptions()
             poisson.depth = args.poisson_depth
             poisson.num_threads = threads
-            pycolmap.poisson_meshing(fused, mesh, options=poisson)
+            pycolmap.poisson_meshing(fused, raw, options=poisson)
         with timed("mesh_clean"):
-            mesh_stats = clean_mesh(mesh, mesh_clean, args.min_component)
-        log(f"mesh {mesh_stats}")
+            mesh_stats = clean_mesh(raw, mesh, args.min_component)
+        mesher = "colmap_poisson"
+    if mesher:
+        log(f"mesh ({mesher}) {mesh_stats}")
 
     # ---- texture ------------------------------------------------------------
     textured = None
-    if dense_engine and bin_dir is not None and not args.no_texture:
-        mvs = out / "mvs"
+    if mesher and bin_dir is not None and not args.no_texture:
         mvs.mkdir(exist_ok=True)
         try:
-            if not (mvs / "scene.mvs").exists():
-                run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-o", str(mvs / "scene.mvs"),
+            scene = scene_dense
+            if not scene.exists():
+                scene = mvs / "scene.mvs"
+                run_openmvs(bin_dir, "InterfaceCOLMAP", mvs, "-i", str(undist), "-o", str(scene),
                             "--image-folder", str(undist / "images"), threads=threads)
-            run_openmvs(bin_dir, "TextureMesh", mvs, "-i", str(mvs / "scene.mvs"), "-m", str(mesh_clean),
+            run_openmvs(bin_dir, "TextureMesh", mvs, "-i", str(scene), "-m", str(mesh),
                         "-o", str(out / "textured.mvs"), "--export-type", "obj", threads=threads)
             textured = out / "textured.obj"
-        except Exception as exc:  # noqa: BLE001 - the vertex-coloured mesh is still a result
-            note(f"DOWNGRADE texture: {str(exc).splitlines()[0]}; keeping vertex-coloured mesh_clean.ply")
+        except Exception as exc:  # noqa: BLE001 - the untextured mesh is still a result
+            note(f"DOWNGRADE texture: {str(exc).splitlines()[0]}; keeping untextured mesh.ply")
 
     summary = {
         "environment": env, "telemetry_hints": hints, "sparse": sparse_stats,
-        "dense_engine": dense_engine, "mesh": mesh_stats, "timings_s": TIMINGS,
+        "dense_engine": dense_engine, "mesher": mesher, "mesh": mesh_stats, "timings_s": TIMINGS,
         "total_s": round(sum(TIMINGS.values()), 1), "notes": NOTES,
-        "outputs": {k: str(v) for k, v in {"sparse": sparse_model, "dense": fused, "mesh": mesh_clean,
+        "outputs": {k: str(v) for k, v in {"sparse": sparse_model, "dense": fused, "mesh": mesh,
                                            "textured": textured}.items() if v is not None and Path(v).exists()},
     }
     (out / "probe_summary.json").write_text(json.dumps(summary, indent=2))

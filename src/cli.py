@@ -119,17 +119,12 @@ def run(
 def inspect(video: Path, preset, config_files, overrides, srt, csv_path, as_json) -> None:
     """Report what the pipeline can read from VIDEO, without reconstructing."""
     from src.ingest.telemetry import load_telemetry
-    from src.ingest.video_reader import VideoReader
+    from src.ingest.video_reader import VideoReader, reader_options
 
     cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
     setup_logging(None, level="WARNING", jsonl=False)
 
-    with VideoReader(
-        video,
-        hardware_decode=bool(cfg.get_path("ingest.video.hardware_decode")),
-        nvdec=bool(cfg.get_path("ingest.video.nvdec", True)),
-        nvdec_gpu_id=int(cfg.get_path("ingest.video.nvdec_gpu_id", 0)),
-    ) as reader:
+    with VideoReader(video, **reader_options(cfg)) as reader:
         metadata = reader.metadata.to_dict()
         keyframes = reader.keyframe_indices()
 

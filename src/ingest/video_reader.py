@@ -197,6 +197,28 @@ class NvdecCapture:
         return 0.0
 
 
+def _codec_key(name: str) -> str:
+    """Lower-case alphanumerics only: "H.264", "h264" and "cudaVideoCodec_H264" all contain "h264"."""
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def reader_options(cfg) -> dict:
+    """``VideoReader`` keyword arguments from config, shared by every caller.
+
+    ``device.prefer: cpu`` turns NVDEC off as well: a CPU run must not touch the GPU.
+    """
+    video = cfg.get_path("ingest.video")
+    prefer_cpu = str(cfg.get_path("device.prefer", "auto")).lower() == "cpu"
+    return {
+        "hardware_decode": bool(video["hardware_decode"]),
+        "max_width": video.get("max_width"),
+        "nvdec": bool(video.get("nvdec", True)) and not prefer_cpu,
+        "nvdec_gpu_id": int(video.get("nvdec_gpu_id", 0)),
+        "nvdec_codecs": list(video.get("nvdec_codecs") or []) or None,
+        "nvdec_allow_ts": bool(video.get("nvdec_allow_ts", False)),
+    }
+
+
 # PyNvVideoCodec missing is a fact about the install, not the video: say it once.
 _NVDEC_UNAVAILABLE: str | None = None
 
@@ -214,6 +236,8 @@ class VideoReader:
         max_width: int | None = None,
         nvdec: bool = True,
         nvdec_gpu_id: int = 0,
+        nvdec_codecs: Sequence[str] | None = None,
+        nvdec_allow_ts: bool = False,
     ):
         self.path = Path(path)
         if not self.path.is_file():
@@ -232,6 +256,8 @@ class VideoReader:
         self._hardware_active = False
         self._nvdec_requested = hardware_decode and nvdec
         self._nvdec_gpu_id = nvdec_gpu_id
+        self._nvdec_codecs = [_codec_key(c) for c in nvdec_codecs] if nvdec_codecs is not None else None
+        self._nvdec_allow_ts = nvdec_allow_ts
         self.decoder = "opencv"
         # Cumulative seconds spent inside VideoCapture read/grab/seek. Survives
         # close() so a profiling pass and a selection pass on one reader add up.
@@ -292,11 +318,30 @@ class VideoReader:
             _NVDEC_UNAVAILABLE = "PyNvVideoCodec is not installed"
             log_downgrade(log, "NVDEC decode", "OpenCV decode", _NVDEC_UNAVAILABLE)
             return None
+        # PyNvVideoCodec does not raise on inputs it cannot seek: it segfaults, which
+        # no fallback can catch. Stage 2's read_indices killed the process on an
+        # MPEG-2 transport stream (Esri, S1-15) after Stage 1 streamed it fine. So
+        # the inputs NVDEC gets are chosen up front: no TS containers, and only
+        # codecs on the allow-list.
+        from src.ingest.klv import file_is_ts
+
+        if not self._nvdec_allow_ts and file_is_ts(self.path):
+            log_downgrade(log, "NVDEC decode", "OpenCV decode",
+                          "MPEG-2 transport stream: PyNvVideoCodec random access segfaults on it "
+                          "(ingest.video.nvdec_allow_ts)")
+            return None
         try:
             cap = NvdecCapture(self.path, gpu_id=self._nvdec_gpu_id)
         except Exception as exc:  # noqa: BLE001 - any failure here just means "use OpenCV"
             log_downgrade(log, "NVDEC decode", "OpenCV decode", f"{type(exc).__name__}: {exc}")
             return None
+        if self._nvdec_codecs is not None:
+            codec = _codec_key(getattr(cap, "codec", ""))
+            if not any(allowed in codec for allowed in self._nvdec_codecs if allowed):
+                cap.release()
+                log_downgrade(log, "NVDEC decode", "OpenCV decode",
+                              f"codec {codec or 'unknown'!r} is not in ingest.video.nvdec_codecs")
+                return None
         self._hardware_active = True
         self.decoder = "nvdec"
         return cap

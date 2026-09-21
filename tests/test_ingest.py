@@ -130,6 +130,67 @@ class TestGpuDecodeFallback:
             assert np.array_equal(frame.image, expected[frame.index])
 
 
+class TestNvdecInputGate:
+    """S1-15: PyNvVideoCodec segfaults on inputs it cannot seek, so they never reach it."""
+
+    @staticmethod
+    def _with_codec(codec):
+        class Capture(_OpenCvBackedNvdec):
+            pass
+
+        Capture.codec = codec
+        return Capture
+
+    def test_transport_stream_never_reaches_nvdec(self, flight, fake_nvdec, monkeypatch):
+        opened = []
+
+        class Recording(_OpenCvBackedNvdec):
+            def __init__(self, *args, **kwargs):
+                opened.append(True)
+                super().__init__(*args, **kwargs)
+
+        fake_nvdec(Recording)
+        monkeypatch.setattr("src.ingest.klv.file_is_ts", lambda path: True)
+        with VideoReader(flight.video_path) as reader:
+            assert reader.metadata.decoder in ("opencv", "opencv-hw")
+            assert len(list(reader.read_indices([3, 15]))) == 2
+        assert not opened, "NVDEC must not even be opened on a TS container"
+
+    def test_transport_stream_allowed_when_configured(self, flight, fake_nvdec, monkeypatch):
+        fake_nvdec(_OpenCvBackedNvdec)
+        monkeypatch.setattr("src.ingest.klv.file_is_ts", lambda path: True)
+        with VideoReader(flight.video_path, nvdec_allow_ts=True) as reader:
+            assert reader.metadata.decoder == "nvdec"
+
+    @pytest.mark.parametrize("codec", ["h264", "H.264", "cudaVideoCodec_HEVC", "av1"])
+    def test_allowed_codec_uses_nvdec(self, flight, fake_nvdec, codec):
+        fake_nvdec(self._with_codec(codec))
+        with VideoReader(flight.video_path, nvdec_codecs=["h264", "hevc", "av1"]) as reader:
+            assert reader.metadata.decoder == "nvdec"
+
+    @pytest.mark.parametrize("codec", ["mpeg2video", "mpeg4", ""])
+    def test_codec_off_the_list_falls_back(self, flight, fake_nvdec, codec):
+        fake_nvdec(self._with_codec(codec))
+        with VideoReader(flight.video_path, nvdec_codecs=["h264", "hevc", "av1"]) as reader:
+            assert reader.metadata.decoder in ("opencv", "opencv-hw")
+            assert len(list(reader.stream(max_frames=3))) == 3
+
+    def test_reader_options_follow_config(self):
+        from src.core.config import load_config
+        from src.ingest.video_reader import reader_options
+
+        opts = reader_options(load_config())
+        assert opts["nvdec"] is True
+        assert opts["nvdec_allow_ts"] is False
+        assert "h264" in opts["nvdec_codecs"] and "mpeg2video" not in opts["nvdec_codecs"]
+
+    def test_cpu_preference_turns_nvdec_off(self):
+        from src.core.config import load_config
+        from src.ingest.video_reader import reader_options
+
+        assert reader_options(load_config(overrides=["device.prefer=cpu"]))["nvdec"] is False
+
+
 class TestVideoReader:
     def test_probe_reports_real_metadata(self, flight):
         meta = probe_video(flight.video_path)
