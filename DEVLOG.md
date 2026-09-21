@@ -278,6 +278,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex), **and it contains NaN vertex coordinates** (numpy `invalid value` warnings in the cross products during cleaning; `trimesh.split` then stalled) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
 | S4-6 | 4 | **pycolmap-cuda12's Poisson (Linux) breaks meshes the Windows pycolmap builds cleanly.** Same 447 k-point box cloud, depth 11, trim 10: box → 1.82 M faces, 121 743 fragments, 4 564 NaN vertices; laptop → 946 k faces, 30 pieces, 0 NaN, at 1, 3 and 8 threads alike. The cloud itself has no NaN coordinates or normals | **Worked around 2026-09-21**: the probe meshes with OpenMVS `ReconstructMesh` (Delaunay) on the COLMAP cloud imported with `InterfaceCOLMAP -p fused.ply` (reads `fused.ply.vis`): 659 k faces, ~2 faces/vertex, 21 s; TextureMesh then succeeds in 81 s. Poisson + `clean_mesh` stays as the fallback. Not reported upstream yet |
 | S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
+| S4-8 | 4 | **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -1424,3 +1425,43 @@ both forested banks and the river as an empty channel (water gives stereo nothin
 
 **Next:** box: `git pull`, fresh Stages 1–2 on Esri (expect `opencv` decode, 53-ish frames,
 `geo.txt` written), then the full probe; log timings + GPS metric; check S4-7.
+
+### Session — 2026-09-21 — ritesh14g (with Claude) — First clean end-to-end GPU run (Esri), dense sweep
+**Goal:** Full Stages 1–2 + Track A probe on the box with the S1-15 and S4-6 fixes.
+
+**Measured (box, H100 MIG 2g.20gb, 3 cores), `Esri_multiplexer_1.mp4`:** no `DOWNGRADE` in the
+probe; NVDEC refused the TS container as designed (3 log lines), Stage 2 completed and wrote
+`geo.txt` and all reports. Stages 1–2: **101.7 s** (laptop 107 s).
+
+| Step | Box GPU | Laptop CPU |
+|---|---|---|
+| SIFT extract | 10.2 s | 66 s |
+| Sequential match | 8.1 s | 219 s |
+| Incremental map | 14.1 s | 60 s |
+| Undistort (1920) | 29.8 s | — |
+| PatchMatch (CUDA) | **1133.3 s** | — |
+| Fusion | 22.3 s | — |
+| OpenMVS import / mesh / texture | 8.1 / 14.5 / 46.5 s | — |
+
+Sparse: 50 frames, **45 registered in 2 models**, reproj 1.231 px, focal held at 2248 px,
+**height above ground 106.2 m vs 110.8 m from KLV (−4.2%)**, camera-vs-GPS RMS 7.11 m (S4-1).
+Mesh: OpenMVS Delaunay, 338 958 vertices / 677 795 faces; textured OBJ 80 MB + 14 MB atlas.
+Probe total 1287 s, of which PatchMatch 88% (S4-8).
+
+**Created:**
+- `scripts/dense_sweep.sh` — five PatchMatch settings on copies of one sparse model, plus a
+  no-recompute measurement of the baseline cloud, then one comparison table.
+
+**Modified:**
+- `scripts/recon_probe.py` — `--pm-src-images`, `--pm-iterations`, `--pm-window-step`,
+  `--pm-no-geom` (fusion switches to photometric input), `--redo-dense`; `dense_stats()` reports
+  dense point count and GPS-aligned footprint (occupied 1 m cells); `metric_check` also returns the
+  similarity transform; undistort uses the thread budget.
+- `DEVLOG.md` — this entry, S4-8.
+
+**Tests:** not run — no `src/` or `tests/` change. `dense_sweep.sh` passes `bash -n`; its table
+code was run on local outputs.
+
+**Next:** box: `bash scripts/dense_sweep.sh data/interim/esri_gpu data/outputs/recon_probe/esri_gpu`;
+choose the dense setting; then build `src/recon/track_a_colmap.py` + config + Stage Lab panel +
+`stage4_eval.py`.

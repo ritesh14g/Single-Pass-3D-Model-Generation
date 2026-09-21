@@ -112,10 +112,11 @@ def umeyama(src: np.ndarray, dst: np.ndarray):
     return scale, rot, mu_d - scale * rot @ mu_s
 
 
-def metric_check(rec: pycolmap.Reconstruction, gps: dict[str, np.ndarray]) -> dict[str, float]:
+def metric_check(rec: pycolmap.Reconstruction, gps: dict[str, np.ndarray]):
+    """Fit the model to GPS (similarity) and measure it; returns (stats, transform or None)."""
     ims = [im for im in rec.images.values() if im.name in gps]
     if len(ims) < 3:  # a similarity fit needs three non-collinear positions
-        return {"gps_matched_images": len(ims)}
+        return {"gps_matched_images": len(ims)}, None
     cams = np.array([im.projection_center() for im in ims])
     ref = np.array([gps[im.name] for im in ims])
     scale, rot, trans = umeyama(cams, ref)
@@ -129,7 +130,26 @@ def metric_check(rec: pycolmap.Reconstruction, gps: dict[str, np.ndarray]) -> di
     return {
         "cam_vs_gps_rms_m": round(float(np.sqrt(((aligned - ref) ** 2).sum(1).mean())), 2),
         "height_above_ground_m": round(float(np.median(heights)), 1) if heights else float("nan"),
-    }
+    }, (scale, rot, trans)
+
+
+def dense_stats(fused: Path, transform, cell_m: float = 1.0) -> dict[str, float]:
+    """Point count and, when the model is GPS-aligned, the ground area the cloud covers.
+
+    Footprint = occupied ``cell_m`` x ``cell_m`` cells in the GPS east/north plane. It is
+    the completeness number the dense sweep trades against time.
+    """
+    from plyfile import PlyData
+
+    vertex = PlyData.read(str(fused))["vertex"]
+    xyz = np.c_[vertex["x"], vertex["y"], vertex["z"]].astype(np.float64)
+    stats: dict[str, float] = {"points": int(len(xyz))}
+    if transform is not None and len(xyz):
+        scale, rot, trans = transform
+        east_north = ((scale * (rot @ xyz.T)).T + trans)[:, :2]
+        cells = np.unique(np.floor(east_north / cell_m).astype(np.int64), axis=0)
+        stats["footprint_m2"] = round(float(len(cells)) * cell_m * cell_m, 0)
+    return stats
 
 
 def run_openmvs(bin_dir: Path, tool: str, work: Path, *args: str, threads: int) -> None:
@@ -254,6 +274,12 @@ def main() -> int:
     ap.add_argument("--openmvs-bin", type=Path, default=None, help="folder with OpenMVS executables")
     ap.add_argument("--sift-size", type=int, default=1600, help="max image side for SIFT")
     ap.add_argument("--dense-size", type=int, default=1920, help="max image side for dense stereo")
+    # PatchMatch cost ~ pixels x source images x iterations x (2 with geometric consistency).
+    # COLMAP's quality defaults took 1133 s for 45 frames on the MIG slice.
+    ap.add_argument("--pm-src-images", type=int, default=20, help="source views per reference image")
+    ap.add_argument("--pm-iterations", type=int, default=5)
+    ap.add_argument("--pm-window-step", type=int, default=1, help="2 samples every other pixel in the window")
+    ap.add_argument("--pm-no-geom", action="store_true", help="skip the geometric-consistency pass")
     ap.add_argument("--poisson-depth", type=int, default=11,
                     help="COLMAP's default 13 gave 5.4 M faces on 43 small frames and stalled texturing")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
@@ -262,6 +288,8 @@ def main() -> int:
     ap.add_argument("--no-texture", action="store_true")
     ap.add_argument("--reuse", action="store_true",
                     help="keep --out and reuse its sparse model and dense cloud; redo mesh and texture")
+    ap.add_argument("--redo-dense", action="store_true",
+                    help="with --reuse: keep the sparse model, recompute dense, mesh and texture")
     args = ap.parse_args()
 
     run_dir, out = args.run_dir.resolve(), args.out.resolve()
@@ -312,8 +340,10 @@ def main() -> int:
         "track_length": round(rec.compute_mean_track_length(), 2),
         "focal_px": round(float(next(iter(rec.cameras.values())).params[0]), 1),
     }
+    transform = None
     if geo_path.exists():
-        sparse_stats.update(metric_check(rec, read_geo(geo_path)))
+        metric, transform = metric_check(rec, read_geo(geo_path))
+        sparse_stats.update(metric)
     if "expected_agl_m" in hints:
         sparse_stats["expected_agl_m"] = round(hints["expected_agl_m"], 1)
     log(f"sparse {sparse_stats}")
@@ -322,26 +352,36 @@ def main() -> int:
     undist = out / "dense"
     fused = undist / "fused.ply"
     dense_engine = None
-    if args.reuse and fused.exists():
+    dense_params = {"size": args.dense_size, "src_images": args.pm_src_images,
+                    "iterations": args.pm_iterations, "window_step": args.pm_window_step,
+                    "geom_consistency": not args.pm_no_geom}
+    if args.reuse and fused.exists() and not args.redo_dense:
         dense_engine = "reused"
         note(f"reused dense cloud {fused}")
     else:
-        if undist.exists():
-            shutil.rmtree(undist)
+        for stale in (undist, out / "mvs"):
+            if stale.exists():
+                shutil.rmtree(stale)
         with timed("undistort"):
             pycolmap.undistort_images(undist, sparse_model, images,
-                                      undistort_options=_undistort_options(args.dense_size))
+                                      num_patch_match_src_images=args.pm_src_images,
+                                      undistort_options=_undistort_options(args.dense_size),
+                                      num_threads=threads)
     if dense_engine is None and use_cuda:
         try:
             pm = pycolmap.PatchMatchOptions()
             pm.max_image_size = args.dense_size
             pm.gpu_index = "0"
+            pm.num_iterations = args.pm_iterations
+            pm.window_step = args.pm_window_step
+            pm.geom_consistency = not args.pm_no_geom
             with timed("dense_patchmatch_gpu"):
                 pycolmap.patch_match_stereo(undist, options=pm)
             fusion = pycolmap.StereoFusionOptions()
             fusion.num_threads = threads
             with timed("dense_fusion"):
-                pycolmap.stereo_fusion(fused, undist, options=fusion, output_type="PLY")
+                pycolmap.stereo_fusion(fused, undist, options=fusion, output_type="PLY",
+                                       input_type="photometric" if args.pm_no_geom else "geometric")
             dense_engine = "colmap_patchmatch_cuda"
         except Exception as exc:  # noqa: BLE001
             note(f"DOWNGRADE dense: COLMAP PatchMatch on CUDA failed ({exc!r})")
@@ -358,6 +398,11 @@ def main() -> int:
                         "-o", str(mvs / "scene_dense.mvs"), threads=threads)
             shutil.copy(mvs / "scene_dense.ply", fused)
             dense_engine = "openmvs_cpu"
+
+    dense = {"params": "reused" if dense_engine == "reused" else dense_params}
+    if dense_engine and fused.exists():
+        dense.update(dense_stats(fused, transform))
+        log(f"dense {dense}")
 
     # ---- mesh ---------------------------------------------------------------
     # OpenMVS's Delaunay mesher is the default. On the box, pycolmap-cuda12's Poisson
@@ -413,7 +458,7 @@ def main() -> int:
 
     summary = {
         "environment": env, "telemetry_hints": hints, "sparse": sparse_stats,
-        "dense_engine": dense_engine, "mesher": mesher, "mesh": mesh_stats, "timings_s": TIMINGS,
+        "dense_engine": dense_engine, "dense": dense, "mesher": mesher, "mesh": mesh_stats, "timings_s": TIMINGS,
         "total_s": round(sum(TIMINGS.values()), 1), "notes": NOTES,
         "outputs": {k: str(v) for k, v in {"sparse": sparse_model, "dense": fused, "mesh": mesh,
                                            "textured": textured}.items() if v is not None and Path(v).exists()},
