@@ -1659,3 +1659,31 @@ floor; medians and worst cases in the summary, every window in `vggt_windows.jso
 **Next:** box: windows run. Decision rule: if 16/32-frame windows sit near Track A's residual and
 height within ~5%, build Track B as chunked VGGT + Sim(3) stitching + refinement BA; if not, VGGT
 serves Stage 3 depth only and Track A carries the poses.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — VGGT windows: accurate short, broken long; hybrid probe
+**Measured (box, sliding half-overlapping windows over Esri's 50 frames; Track A's own residual on
+the same frames in brackets):**
+
+| Window | GPS path | VGGT vs GPS | VGGT vs COLMAP cams | Height err median / worst | Focal err |
+|---|---|---|---|---|---|
+| 8 | 122 m | 1.40 m (0.92) | **0.70 m** (worst 2.02) | **−2.6%** / 16.0% | −0.7% |
+| 16 | 259 m | 4.67 m (2.71) | 4.51 m (worst 7.65) | +8.5% / 14.4% | −0.5% |
+| 32 | 531 m | 92.5 m (4.66) | **90.2 m** (worst 137.3) | +5.8% / 61.9% | −0.4% |
+
+VGGT is as good as Track A while a window's frames still share content (Esri's footprint is
+~190 m wide) and falls apart beyond that. Chaining 8-frame chunks over a 10-min flight (~100 links)
+would accumulate drift; the spec's chunk-stitch-refine plan is fragile here.
+
+**Decision (pending the depth measurement):** Track B = **VGGT depth on Track A's SfM poses**
+(§7.4 hybrid, "Track B depth fills"), not VGGT poses. Track A sparse is ~32 s on the box; VGGT depth
+~0.09 s/frame replaces ~13.6 s/frame of PatchMatch. Depth is scaled per frame by the Track A sparse
+points the frame observes (§6.3-style anchoring). Cost: VGGT runs at 518 px (~37 cm/px on Esri vs
+15 cm for Track A dense at 1280), so `accurate` keeps Track A dense.
+
+**Created:** `scripts/vggt_hybrid_probe.py` — 8-frame half-overlapping windows over the undistorted
+COLMAP workspace, per-frame anchoring on sparse points (plus a rotation-aware camera-fit scale for
+comparison), pixelwise comparison with COLMAP's geometric depth maps (median relative error, share
+within 5% / 10%, metric error), fused hybrid cloud + GPS footprint. Verified locally with random
+weights on 6 frames (≈900 anchors per frame); COLMAP depth-map reader round-trip tested.
+
+**Next:** box: hybrid probe against the kept 1920 px COLMAP depth maps.
