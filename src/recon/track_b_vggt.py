@@ -51,6 +51,25 @@ def windows_for(n: int, size: int) -> list[tuple[int, int, list[int]]]:
     return [(s, s + size, [i for i in range(s, s + size) if owner[i][0] == s]) for s in starts]
 
 
+def preprocess(paths: list[Path], width: int):
+    """VGGT's "crop" preprocessing at any width: RGB, bicubic resize to ``width`` (a multiple
+    of 14, VGGT's patch size), height scaled and rounded to a multiple of 14, values in [0, 1].
+    At 518 it matches ``vggt.utils.load_fn.load_and_preprocess_images`` for landscape frames.
+    It never centre-crops, so the pixel mapping (sx, sy) holds for any aspect ratio."""
+    import torch
+    from PIL import Image
+    from torchvision import transforms as tf
+
+    width = max(14, int(round(width / 14)) * 14)
+    to_tensor = tf.ToTensor()
+    out = []
+    for path in paths:
+        img = Image.open(path).convert("RGB")
+        height = max(14, int(round(img.size[1] * (width / img.size[0]) / 14)) * 14)
+        out.append(to_tensor(img.resize((width, height), Image.Resampling.BICUBIC)))
+    return torch.stack(out)
+
+
 def vggt_predictor(bcfg: Any, device: str) -> Predictor:
     """VGGT-1B from Hugging Face, loaded once per process."""
     repo = Path(str(bcfg.repo_dir))
@@ -60,7 +79,6 @@ def vggt_predictor(bcfg: Any, device: str) -> Predictor:
     try:
         import torch
         from vggt.models.vggt import VGGT
-        from vggt.utils.load_fn import load_and_preprocess_images
     except ImportError as exc:
         raise TrackBUnavailable(f"VGGT not importable ({exc}); clone it into {repo}") from exc
 
@@ -75,11 +93,10 @@ def vggt_predictor(bcfg: Any, device: str) -> Predictor:
     if device == "cuda":
         dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
 
+    width = int(bcfg.input_width)
+
     def predict(paths: list[Path]):
-        batch = load_and_preprocess_images([str(p) for p in paths])
-        if batch.shape[-2] > batch.shape[-1]:
-            # "crop" mode centre-crops portrait frames, which breaks the pixel mapping below.
-            raise TrackBUnavailable("portrait frames are not supported by the VGGT crop preprocessing")
+        batch = preprocess(paths, width)
         try:
             with torch.no_grad(), torch.autocast(device_type=device, dtype=dtype, enabled=device == "cuda"):
                 pred = model(batch.to(device))

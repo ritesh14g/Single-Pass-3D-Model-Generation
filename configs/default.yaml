@@ -413,6 +413,9 @@ recon:
     # VGGT on CPU is minutes per window; without CUDA the stage uses Track A dense.
     require_gpu: true
     window_frames: 8
+    # VGGT input width in px (multiple of 14). VGGT was trained at 518; wider gives finer
+    # depth sampling (~37 cm/px on Esri at 518) at roughly quadratic-plus cost.
+    input_width: 518
     # Share of least-confident VGGT pixels dropped per frame before fusion.
     drop_low_conf: 0.3
     anchor:

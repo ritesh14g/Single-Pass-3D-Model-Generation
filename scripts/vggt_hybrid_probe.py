@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from src.core.device import cpu_thread_budget, resolve_device  # noqa: E402
 from src.recon import alignment  # noqa: E402
+from src.recon.track_b_vggt import preprocess  # noqa: E402
 
 
 def log(msg: str) -> None:
@@ -70,6 +71,7 @@ def main() -> int:
     ap.add_argument("--random-weights", action="store_true")
     ap.add_argument("--vggt-repo", type=Path, default=ROOT / "tools" / "vggt")
     ap.add_argument("--window", type=int, default=8)
+    ap.add_argument("--widths", default="518", help="VGGT input widths to compare, e.g. 518,700,1036")
     ap.add_argument("--drop-low-conf", type=float, default=0.3, help="drop this fraction of least-confident pixels")
     ap.add_argument("--max-frames", type=int, default=0, help="limit frames (plumbing tests)")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
@@ -79,7 +81,6 @@ def main() -> int:
     import cv2
     import pycolmap
     import torch
-    from vggt.utils.load_fn import load_and_preprocess_images
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
     from vggt_probe import load_model, run_chunk
 
@@ -106,118 +107,136 @@ def main() -> int:
     log(f"{len(names)} frames, camera {cam.width}x{cam.height}, GPS fit {metric}")
 
     model, torch = load_model(args, device)
-    t_vggt, t_fuse = 0.0, 0.0
-    per_frame, cloud_pts, cloud_rgb = [], [], []
-    for start, stop, owned in windows_for(len(names), args.window):
-        batch = load_and_preprocess_images([str(args.colmap_dense / "images" / n) for n in names[start:stop]])
-        pred, seconds, _ = run_chunk(model, torch, batch, device, dtype)
-        t_vggt += seconds
-        started = time.perf_counter()
-        h, w = batch.shape[-2:]
-        sx, sy = w / cam.width, h / cam.height
-        extrinsic, _ = pose_encoding_to_extri_intri(pred["pose_enc"], (h, w))
-        ext = extrinsic[0].numpy().astype(np.float64)
 
-        # Window scale from cameras, rotation-aware (a straight flight line leaves the roll
-        # about the path undetermined by centres alone): R from paired orientations, then s.
-        rot_c = np.stack([images[i].cam_from_world().rotation.matrix() for i in range(start, stop)])
-        rot_v = ext[:, :, :3]
-        c_c = centres[start:stop]
-        c_v = np.stack([-e[:, :3].T @ e[:, 3] for e in ext])
-        u, _, vt = np.linalg.svd(sum(rc.T @ rv for rc, rv in zip(rot_c, rot_v)))
-        r_align = u @ vt
-        dc, dv = c_c - c_c.mean(0), (r_align @ (c_v - c_v.mean(0)).T).T
-        s_cams = float((dc * dv).sum() / max((dv * dv).sum(), 1e-12))
+    def run_width(width: int) -> dict:
+        t_vggt, t_fuse, peak_gb = 0.0, 0.0, 0.0
+        per_frame, cloud_pts, cloud_rgb = [], [], []
+        for start, stop, owned in windows_for(len(names), args.window):
+            batch = preprocess([args.colmap_dense / "images" / n for n in names[start:stop]], width)
+            pred, seconds, peak = run_chunk(model, torch, batch, device, dtype)
+            t_vggt += seconds
+            peak_gb = max(peak_gb, peak)
+            started = time.perf_counter()
+            h, w = batch.shape[-2:]
+            sx, sy = w / cam.width, h / cam.height
+            extrinsic, _ = pose_encoding_to_extri_intri(pred["pose_enc"], (h, w))
+            ext = extrinsic[0].numpy().astype(np.float64)
 
-        for i in owned:
-            k = i - start
-            im = images[i]
-            depth = pred["depth"][0, k, ..., 0].numpy().astype(np.float64)
-            conf = pred["depth_conf"][0, k].numpy()
-            keep = conf >= np.quantile(conf, args.drop_low_conf)
+            # Window scale from cameras, rotation-aware (a straight flight line leaves the roll
+            # about the path undetermined by centres alone): R from paired orientations, then s.
+            rot_c = np.stack([images[i].cam_from_world().rotation.matrix() for i in range(start, stop)])
+            rot_v = ext[:, :, :3]
+            c_c = centres[start:stop]
+            c_v = np.stack([-e[:, :3].T @ e[:, 3] for e in ext])
+            u, _, vt = np.linalg.svd(sum(rc.T @ rv for rc, rv in zip(rot_c, rot_v)))
+            r_align = u @ vt
+            dc, dv = c_c - c_c.mean(0), (r_align @ (c_v - c_v.mean(0)).T).T
+            s_cams = float((dc * dv).sum() / max((dv * dv).sum(), 1e-12))
 
-            # Per-frame anchoring on the sparse points this frame observes.
-            pose = im.cam_from_world()
-            r, t = pose.rotation.matrix(), np.asarray(pose.translation)
-            uv, z_true = [], []
-            for p2d in im.points2D:
-                if p2d.has_point3D() and p2d.point3D_id in points3d:
-                    xc = r @ points3d[p2d.point3D_id] + t
-                    if xc[2] > 0:
-                        uv.append(p2d.xy)
-                        z_true.append(xc[2])
-            row = {"frame": im.name, "anchors": len(uv), "s_cams": s_cams}
-            if len(uv) >= 10:
-                uv = np.array(uv)
-                px = np.clip((uv[:, 0] * sx).astype(int), 0, w - 1)
-                py = np.clip((uv[:, 1] * sy).astype(int), 0, h - 1)
-                ratio = np.array(z_true) / np.maximum(depth[py, px], 1e-9)
-                s_frame = float(np.median(ratio))
-                row["s_frame"] = s_frame
-                row["anchor_spread_pct"] = round(100 * float(np.median(np.abs(ratio / s_frame - 1))), 2)
-            else:
-                s_frame = s_cams
-                row["s_frame"] = None
+            for i in owned:
+                k = i - start
+                im = images[i]
+                depth = pred["depth"][0, k, ..., 0].numpy().astype(np.float64)
+                conf = pred["depth_conf"][0, k].numpy()
+                keep = conf >= np.quantile(conf, args.drop_low_conf)
 
-            dm_path = args.colmap_dense / "stereo" / "depth_maps" / f"{im.name}.geometric.bin"
-            if dm_path.exists():
-                truth = cv2.resize(read_colmap_array(dm_path), (w, h), interpolation=cv2.INTER_NEAREST)
-                valid = (truth > 0) & keep
-                row["colmap_valid_pct"] = round(100 * float((truth > 0).mean()), 1)
-                if valid.sum() > 100:
-                    for label, s in (("frame", s_frame), ("cams", s_cams)):
-                        rel = np.abs(s * depth[valid] - truth[valid]) / truth[valid]
-                        row[f"rel_err_median_pct_{label}"] = round(100 * float(np.median(rel)), 2)
-                        row[f"within_5pct_{label}"] = round(100 * float((rel < 0.05).mean()), 1)
-                        row[f"within_10pct_{label}"] = round(100 * float((rel < 0.10).mean()), 1)
-                        if to_metres:
-                            err_m = np.abs(s * depth[valid] - truth[valid]) * to_metres
-                            row[f"abs_err_median_m_{label}"] = round(float(np.median(err_m)), 2)
+                # Per-frame anchoring on the sparse points this frame observes.
+                pose = im.cam_from_world()
+                r, t = pose.rotation.matrix(), np.asarray(pose.translation)
+                uv, z_true = [], []
+                for p2d in im.points2D:
+                    if p2d.has_point3D() and p2d.point3D_id in points3d:
+                        xc = r @ points3d[p2d.point3D_id] + t
+                        if xc[2] > 0:
+                            uv.append(p2d.xy)
+                            z_true.append(xc[2])
+                row = {"frame": im.name, "anchors": len(uv), "s_cams": s_cams}
+                if to_metres:
+                    # Ground spacing of one depth pixel: depth / focal at this resolution.
+                    row["gsd_cm"] = round(100 * float(np.median(depth)) * (s_cams or 1) * to_metres / (fx * sx), 1)
+                if len(uv) >= 10:
+                    uv = np.array(uv)
+                    px = np.clip((uv[:, 0] * sx).astype(int), 0, w - 1)
+                    py = np.clip((uv[:, 1] * sy).astype(int), 0, h - 1)
+                    ratio = np.array(z_true) / np.maximum(depth[py, px], 1e-9)
+                    s_frame = float(np.median(ratio))
+                    row["s_frame"] = s_frame
+                    row["anchor_spread_pct"] = round(100 * float(np.median(np.abs(ratio / s_frame - 1))), 2)
+                else:
+                    s_frame = s_cams
+                    row["s_frame"] = None
 
-            # Back-project confident pixels with Track A's pose and intrinsics, VGGT's scaled depth.
-            ys, xs = np.nonzero(keep[::2, ::2])
-            ys, xs = ys * 2, xs * 2
-            z = s_frame * depth[ys, xs]
-            xc = np.stack([(xs / sx - cx) / fx * z, (ys / sy - cy) / fy * z, z], axis=1)
-            cloud_pts.append((r.T @ (xc - t).T).T)
-            rgb = (batch[k].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-            cloud_rgb.append(rgb[ys, xs])
-            per_frame.append(row)
-        t_fuse += time.perf_counter() - started
-        log(f"window {start}-{stop}: {seconds:.2f} s, s_cams {s_cams:.4f}")
+                dm_path = args.colmap_dense / "stereo" / "depth_maps" / f"{im.name}.geometric.bin"
+                if dm_path.exists():
+                    truth = cv2.resize(read_colmap_array(dm_path), (w, h), interpolation=cv2.INTER_NEAREST)
+                    valid = (truth > 0) & keep
+                    row["colmap_valid_pct"] = round(100 * float((truth > 0).mean()), 1)
+                    if valid.sum() > 100:
+                        for label, s in (("frame", s_frame), ("cams", s_cams)):
+                            rel = np.abs(s * depth[valid] - truth[valid]) / truth[valid]
+                            row[f"rel_err_median_pct_{label}"] = round(100 * float(np.median(rel)), 2)
+                            row[f"within_5pct_{label}"] = round(100 * float((rel < 0.05).mean()), 1)
+                            row[f"within_10pct_{label}"] = round(100 * float((rel < 0.10).mean()), 1)
+                            if to_metres:
+                                err_m = np.abs(s * depth[valid] - truth[valid]) * to_metres
+                                row[f"abs_err_median_m_{label}"] = round(float(np.median(err_m)), 2)
 
-    pts, rgb = np.concatenate(cloud_pts), np.concatenate(cloud_rgb)
-    from plyfile import PlyData, PlyElement
+                # Back-project confident pixels with Track A's pose and intrinsics, VGGT's scaled depth.
+                ys, xs = np.nonzero(keep[::2, ::2])
+                ys, xs = ys * 2, xs * 2
+                z = s_frame * depth[ys, xs]
+                xc = np.stack([(xs / sx - cx) / fx * z, (ys / sy - cy) / fy * z, z], axis=1)
+                cloud_pts.append((r.T @ (xc - t).T).T)
+                rgb = (batch[k].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                cloud_rgb.append(rgb[ys, xs])
+                per_frame.append(row)
+            t_fuse += time.perf_counter() - started
+            log(f"window {start}-{stop}: {seconds:.2f} s, s_cams {s_cams:.4f}")
 
-    vertex = np.empty(len(pts), dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"),
-                                       ("red", "u1"), ("green", "u1"), ("blue", "u1")])
-    for i, key in enumerate("xyz"):
-        vertex[key] = pts[:, i]
-    for i, key in enumerate(("red", "green", "blue")):
-        vertex[key] = rgb[:, i]
-    ply = args.out / "hybrid_cloud.ply"
-    PlyData([PlyElement.describe(vertex, "vertex")]).write(str(ply))
+        pts, rgb = np.concatenate(cloud_pts), np.concatenate(cloud_rgb)
+        from plyfile import PlyData, PlyElement
 
-    def med(key):
-        vals = [r[key] for r in per_frame if r.get(key) is not None]
-        return round(float(np.median(vals)), 2) if vals else None
+        vertex = np.empty(len(pts), dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"),
+                                           ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+        for i, key in enumerate("xyz"):
+            vertex[key] = pts[:, i]
+        for i, key in enumerate(("red", "green", "blue")):
+            vertex[key] = rgb[:, i]
+        ply = args.out / f"hybrid_cloud_{width}.ply"
+        PlyData([PlyElement.describe(vertex, "vertex")]).write(str(ply))
 
-    summary = {
-        "frames": len(names), "window": args.window, "device": device,
-        "vggt_seconds": round(t_vggt, 1), "vggt_s_per_frame": round(t_vggt / max(len(names), 1), 3),
-        "fuse_seconds": round(t_fuse, 1), "cloud_points": int(len(pts)),
-        "footprint_m2": (round(alignment.footprint_m2(pts, transform)) if transform is not None else None),
-        "colmap_dense_footprint_m2_for_reference": 60749,
-        "median": {k: med(k) for k in (
-            "anchors", "anchor_spread_pct", "colmap_valid_pct",
-            "rel_err_median_pct_frame", "within_5pct_frame", "within_10pct_frame", "abs_err_median_m_frame",
-            "rel_err_median_pct_cams", "within_5pct_cams", "within_10pct_cams", "abs_err_median_m_cams")},
-        "worst_frame_rel_err_pct": max((r.get("rel_err_median_pct_frame") or 0) for r in per_frame),
-        "gps_fit": metric,
-        "outputs": {"cloud": str(ply), "per_frame": str(args.out / "hybrid_frames.json")},
-    }
-    (args.out / "hybrid_frames.json").write_text(json.dumps(per_frame, indent=2))
-    (args.out / "hybrid_summary.json").write_text(json.dumps(summary, indent=2))
+        def med(key):
+            vals = [r[key] for r in per_frame if r.get(key) is not None]
+            return round(float(np.median(vals)), 2) if vals else None
+
+        summary = {
+            "width": width, "input_hw": [int(h), int(w)], "frames": len(names), "window": args.window,
+            "peak_gpu_gb": round(peak_gb, 2),
+            "vggt_seconds": round(t_vggt, 1), "vggt_s_per_frame": round(t_vggt / max(len(names), 1), 3),
+            "fuse_seconds": round(t_fuse, 1), "cloud_points": int(len(pts)),
+            "footprint_m2": (round(alignment.footprint_m2(pts, transform)) if transform is not None else None),
+            "colmap_dense_footprint_m2_for_reference": 60749,
+            "median": {k: med(k) for k in (
+                "gsd_cm", "anchors", "anchor_spread_pct", "colmap_valid_pct",
+                "rel_err_median_pct_frame", "within_5pct_frame", "within_10pct_frame", "abs_err_median_m_frame",
+                "rel_err_median_pct_cams", "within_5pct_cams", "within_10pct_cams", "abs_err_median_m_cams")},
+            "worst_frame_rel_err_pct": max((r.get("rel_err_median_pct_frame") or 0) for r in per_frame),
+            "cloud": str(ply),
+        }
+        (args.out / f"hybrid_frames_{width}.json").write_text(json.dumps(per_frame, indent=2))
+        return summary
+
+    results = {"gps_fit": metric, "device": device, "colmap_dense_footprint_m2_for_reference": 60749, "widths": {}}
+    for width in [int(v) for v in args.widths.split(",") if v.strip()]:
+        try:
+            results["widths"][width] = run_width(width)
+            log(f"width {width}: {results['widths'][width]['median']}")
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            results["widths"][width] = {"oom": True}
+            log(f"width {width}: out of GPU memory with {args.window}-frame windows")
+    (args.out / "hybrid_summary.json").write_text(json.dumps(results, indent=2))
+    summary = results
     print("\n===== PASTE EVERYTHING BELOW BACK TO CLAUDE =====")
     print(json.dumps(summary, indent=2))
     return 0
