@@ -1630,3 +1630,32 @@ judge 3D quality (§4); this run checks plumbing.
 
 **Next:** box: `git pull`, full pipeline on Esri (Stages 1–4, default preset) and record the scorecard;
 then Track B from the VGGT probe results.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — VGGT probe on the box: fast, focal right, long-range poses wrong
+**Measured (box, VGGT-1B, bf16, 518×294 input, Esri 50 frames):**
+
+| Chunk | Time | s/frame | Peak GPU |
+|---|---|---|---|
+| 8 | 1.26 s | 0.158 | 8.44 GB |
+| 16 | 1.70 s | 0.106 | 8.69 GB |
+| 32 | 2.78 s | 0.087 | 9.19 GB |
+| 50 | 4.36 s | 0.087 | 9.75 GB |
+
+~150× faster than Track A dense (13.6 s/frame) and far inside 20 GB. Weights: `facebook/VGGT-1B`,
+CC-BY-NC-4.0, not gated. **Focal 2245.8 px vs 2248 from KLV HFOV (−0.1%)** without telemetry.
+
+**But one 50-frame pass over the 800 m flight is geometrically wrong:** camera centres vs GPS
+**187.6 m** RMS (Track A: 7.1 m), vs COLMAP's cameras 179.5 m; height above ground 162.7 m vs
+110.8 m (+47%). Consistent with the spec's warning that feed-forward models degrade on large scenes
+(§7.2 prescribes chunking + Sim(3) stitching + BA). Not yet known whether short chunks are accurate.
+
+**Modified:** `scripts/vggt_probe.py` — `--windows` (default 8,16,32): slides half-overlapping
+windows along the flight and scores each (camera vs GPS, vs COLMAP, height error, focal error,
+window path length) plus **Track A's own camera-vs-GPS on the same frames** as the GPS-noise
+floor; medians and worst cases in the summary, every window in `vggt_windows.json`.
+
+**Tests:** not run — script only; windows path checked locally with random weights.
+
+**Next:** box: windows run. Decision rule: if 16/32-frame windows sit near Track A's residual and
+height within ~5%, build Track B as chunked VGGT + Sim(3) stitching + refinement BA; if not, VGGT
+serves Stage 3 depth only and Track A carries the poses.

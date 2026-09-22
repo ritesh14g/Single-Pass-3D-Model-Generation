@@ -116,11 +116,14 @@ def evaluate(pred, names, images_hw, orig_width, hints, gps, colmap):
         scale, rot, trans = umeyama(centres[matched], ref)
         aligned = (scale * (rot @ centres[matched].T)).T + trans
         out["cam_vs_gps_rms_m"] = round(float(np.sqrt(((aligned - ref) ** 2).sum(1).mean())), 2)
+        out["gps_path_m"] = round(float(np.linalg.norm(np.diff(ref, axis=0), axis=1).sum()), 1)
         h, w = depth.shape[1:]
         centre = depth[:, int(h * 0.4):int(h * 0.6), int(w * 0.4):int(w * 0.6)]
         out["height_above_ground_m"] = round(float(np.median(centre)) * scale, 1)
         if "expected_agl_m" in hints:
             out["expected_agl_m"] = round(hints["expected_agl_m"], 1)
+            out["height_error_pct"] = round(100 * (out["height_above_ground_m"] - hints["expected_agl_m"])
+                                            / hints["expected_agl_m"], 1)
 
     if colmap is not None:
         try:
@@ -137,6 +140,8 @@ def evaluate(pred, names, images_hw, orig_width, hints, gps, colmap):
                 s2, r2, t2 = umeyama(centres[common], col_metric)
                 vg = (s2 * (r2 @ centres[common].T)).T + t2
                 out["cam_vs_colmap_rms_m"] = round(float(np.sqrt(((vg - col_metric) ** 2).sum(1).mean())), 2)
+                # Track A's own residual on the same frames: the GPS-noise floor (S4-1).
+                out["colmap_vs_gps_rms_m"] = round(float(np.sqrt(((col_metric - ref) ** 2).sum(1).mean())), 2)
                 out["colmap_common_frames"] = len(common)
         except Exception as exc:  # noqa: BLE001
             note(f"COLMAP comparison skipped: {type(exc).__name__}: {exc}")
@@ -154,6 +159,8 @@ def main() -> int:
     ap.add_argument("--chunks", default="8,16,32,all", help="chunk sizes to time; 'all' = every frame")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     ap.add_argument("--cpu-frames", type=int, default=2, help="frames for the CPU smoke test")
+    ap.add_argument("--windows", default="8,16,32",
+                    help="sliding-window sizes to score along the flight (half-window stride); '' = off")
     args = ap.parse_args()
 
     sys.path.insert(0, str(args.vggt_repo.resolve()))
@@ -231,6 +238,43 @@ def main() -> int:
 
     summary = {"environment": env, "licence": lic, "preprocess_s": round(load_s, 1),
                "input_hw": list(images_hw), "chunks": runs, "notes": NOTES}
+
+    # Sliding windows: does VGGT hold up on short chunks (spec §7.2 chunking) even when a
+    # single pass over the whole flight does not?
+    sizes = [int(w) for w in args.windows.split(",") if w.strip()]
+    windows = {}
+    for w in sizes:
+        if w > len(images):
+            continue
+        rows = []
+        for start in range(0, len(images) - w + 1, max(w // 2, 1)):
+            try:
+                pred, _, _ = run_chunk(model, torch, images[start:start + w], device, dtype)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                break
+            q, *_ = evaluate(pred, names[start:start + w], images_hw, orig_width, hints, gps, args.colmap_sparse)
+            rows.append({"start": start, **{k: q.get(k) for k in (
+                "gps_path_m", "cam_vs_gps_rms_m", "colmap_vs_gps_rms_m", "cam_vs_colmap_rms_m",
+                "height_error_pct", "focal_error_pct")}})
+        if rows:
+            def med(key):
+                vals = [r[key] for r in rows if r.get(key) is not None]
+                return round(float(np.median(vals)), 2) if vals else None
+
+            def worst(key):
+                vals = [abs(r[key]) for r in rows if r.get(key) is not None]
+                return round(float(max(vals)), 2) if vals else None
+
+            windows[w] = {"count": len(rows),
+                          "median": {k: med(k) for k in ("gps_path_m", "cam_vs_gps_rms_m", "colmap_vs_gps_rms_m",
+                                                           "cam_vs_colmap_rms_m", "height_error_pct",
+                                                           "focal_error_pct")},
+                          "worst_abs": {k: worst(k) for k in ("cam_vs_colmap_rms_m", "height_error_pct")},
+                          "rows": rows}
+            log(f"windows of {w}: {windows[w]['median']}")
+    summary["windows"] = {w: {k: v for k, v in d.items() if k != "rows"} for w, d in windows.items()}
+    (args.out / "vggt_windows.json").write_text(json.dumps(windows, indent=2))
     if best is not None:
         n, pred = best
         quality, ext, intr, depth, conf = evaluate(pred, names[:n], images_hw, orig_width, hints, gps,
