@@ -1770,3 +1770,27 @@ takes `--widths`; box run of 518/700/1036 pending.
 
 **Next:** box: widths result → choose `input_width`; rerun Stages 1–4 on Esri for the merge and the
 mesh reduction.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — VGGT input width: 518 stays
+**Measured (box, hybrid probe, Esri 45 frames, vs COLMAP's 1920 px geometric depth, per-frame anchoring):**
+
+| Width | Depth px on ground | Median error | Within 5% | Worst frame | Anchor spread | VGGT time | Peak GPU |
+|---|---|---|---|---|---|---|---|
+| **518** | 34.1 cm | **1.04% (1.07 m)** | **99.1%** | 2.85% | 0.85% | 5.9 s | 8.45 GB |
+| 700 | 21.0 cm | 1.30% (1.36 m) | 97.0% | 5.14% | 1.19% | 9.3 s | 9.70 GB |
+| 1036 | 12.7 cm | 2.49% (2.57 m) | 76.0% | 5.86% | 2.17% | 22.5 s | 12.98 GB |
+
+Finer sampling costs accuracy: VGGT was trained at 518 and its depth degrades beyond it. With
+accuracy weighted 30% and the PS target at <= 1 m, **518 stays the default**; fine detail is the
+accurate preset (COLMAP dense 1920, ~10 cm). VGGT's own camera-fit scale collapses at larger widths
+(`_cams` error 18% at 700, 27% at 1036 vs 1.76% at 518) — more evidence for anchoring each frame on
+Track A's sparse points instead of trusting VGGT's cameras.
+
+**Dead end (§4):** ❌ VGGT above its 518 px training width for more detail (measured above).
+
+**Modified:** `configs/default.yaml` — measurements in the `input_width` comment.
+
+**Idea for later:** COLMAP dense only on Stage 3's Zone 1 (well-observed), hybrid elsewhere — detail
+where it can be verified, speed everywhere else.
+
+**Next:** box: full Stages 1–4 on Esri to confirm the SfM merge and hybrid mesh reduction.
