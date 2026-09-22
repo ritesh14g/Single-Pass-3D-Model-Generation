@@ -152,7 +152,9 @@ def _track_b_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
     used = dense.get("engine") == "vggt_hybrid"
     fell_back = [d for d in (r.get("downgrades") or []) if d.startswith("Track B")]
     ev.kpis.append(Kpi("track_b_used", g, "Track B depth used", used, "yes", PASS if used else WARN,
-                       f"{dense.get('vggt_seconds')} s of VGGT for {dense.get('frames')} frames" if used
+                       f"{dense.get('model')}: {dense.get('vggt_seconds')} s for {dense.get('frames')} frames"
+                       + (f" (VGGT-Omega unavailable: {dense['model_fallback']})" if dense.get("model_fallback") else "")
+                       if used
                        else ("fell back to Track A dense: " + fell_back[0].split(": ", 1)[-1] if fell_back else "")))
     if not used:
         return

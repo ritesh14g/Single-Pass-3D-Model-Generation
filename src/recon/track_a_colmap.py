@@ -367,6 +367,8 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
             with run.timed("dense_vggt"):
                 hybrid = track_b_vggt.depth_cloud(undist, fused, cfg, depth_dir=out_dir / "track_b_depth",
                                                   predictor=depth_predictor)
+            if hybrid.get("model_fallback"):
+                run.downgrade("VGGT-Omega", "VGGT-1B", hybrid["model_fallback"])
             return fused, {"mode": mode, "size": int(dcfg.max_image_size), **hybrid}, mvs_dir
         except Exception as exc:  # noqa: BLE001 - Track B never takes the run down (spec §7.4 auto)
             run.downgrade("Track B (VGGT depth)", "Track A dense", f"{type(exc).__name__}: {exc}")

@@ -418,9 +418,12 @@ recon:
     # frames (90 m RMS at 32). Box, Esri: depth within 1.04% of COLMAP's 1920 px dense
     # (99.1% of pixels within 5%) in 5.9 s vs 1133 s (DEVLOG). Any failure falls back to
     # Track A dense with a logged downgrade.
-    # vggt (VGGT-1B) or vggt_omega (VGGT-Ω). Omega is gated (FAIR non-commercial research
-    # licence, LIC-1): the machine must be logged in to Hugging Face with an approved account.
-    model: vggt
+    # vggt_omega (VGGT-Ω, default) or vggt (VGGT-1B). Box, Esri, vs COLMAP 1920 px depth:
+    # Omega 24 cm/px, 0.86% median error (0.89 m), worst frame 1.13%, 9.7 s, 5.9 GB;
+    # VGGT-1B 34 cm/px, 1.04% (1.07 m), worst 2.85%, 5.9 s, 8.5 GB. Omega is gated (FAIR
+    # non-commercial research licence, LIC-1): without an approved Hugging Face login on the
+    # machine, Track B falls back to VGGT-1B, logged.
+    model: vggt_omega
     # VGGT-1B: CC-BY-NC-4.0, not gated.
     weights: facebook/VGGT-1B
     # git clone https://github.com/facebookresearch/vggt tools/vggt

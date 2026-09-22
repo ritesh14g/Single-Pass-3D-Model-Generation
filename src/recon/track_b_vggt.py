@@ -194,11 +194,21 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
     import pycolmap
 
     bcfg = cfg.get_path("recon.track_b")
+    used_model, model_fallback = str(bcfg.model), None
     if predictor is None:
         device = resolve_device(str(cfg.get_path("device.prefer", "auto")))
         if device != "cuda" and bool(bcfg.require_gpu):
             raise TrackBUnavailable("no CUDA device (recon.track_b.require_gpu)")
-        predictor = make_predictor(bcfg, device)
+        try:
+            predictor = make_predictor(bcfg, device)
+        except TrackBUnavailable as exc:
+            if used_model != "vggt_omega":
+                raise
+            # Omega is gated; a machine without the approved login still gets VGGT-1B depth
+            # rather than dropping straight to Track A dense (~100x slower).
+            model_fallback = str(exc)
+            used_model = "vggt"
+            predictor = vggt_predictor(bcfg, device)
 
     rec = pycolmap.Reconstruction(str(Path(undist_dir) / "sparse"))
     # fused.ply.vis indexes images in image-id order (verified on the box's COLMAP output),
@@ -267,8 +277,9 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
     write_colmap_fused(fused_path, pts, normals, colours, vis)
     views = np.fromiter((len(v) for v in vis), dtype=np.int32, count=len(vis))
     return {
-        "engine": "vggt_hybrid", "model": str(bcfg.model),
-        "weights": str(bcfg.omega.checkpoint) if str(bcfg.model) == "vggt_omega" else str(bcfg.weights),
+        "engine": "vggt_hybrid", "model": used_model,
+        "weights": str(bcfg.omega.checkpoint) if used_model == "vggt_omega" else str(bcfg.weights),
+        **({"model_fallback": model_fallback} if model_fallback else {}),
         "window": int(bcfg.window_frames),
         "frames": n, "frames_anchored": len(frames), "frames_rejected": rejected,
         "anchors_median": float(np.median(anchor_counts)) if anchor_counts else 0.0,

@@ -72,7 +72,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
-| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B built as the §7.4 hybrid** (VGGT depth on Track A cameras; box probe: 1.04% depth error vs COLMAP, 5.9 s vs 1133 s); falls back to Track A dense. Refinement BA: planned. Box pipeline run pending |
+| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Refinement BA: planned |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -1828,3 +1828,45 @@ beyond training size costs accuracy). Licence: FAIR non-commercial research (LIC
 
 **Next:** box: `bash scripts/box_stage4_compare.sh` (needs a Hugging Face login on the box). Default
 model decided from Ω's depth error vs COLMAP and the Stage 4 scorecards.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Box comparison: VGGT-Ω becomes the default
+**Measured (box, `scripts/box_stage4_compare.sh`, Esri; Stages 1–2 once: ingest 49.7 s, condition
+50.4 s; Stage 4 from the same base):**
+
+| | VGGT-1B | **VGGT-Ω** |
+|---|---|---|
+| Probe: depth px on ground | 34.1 cm | **24.1 cm** |
+| Probe: median error vs COLMAP 1920 | 1.04% (1.07 m) | **0.86% (0.89 m)** |
+| Probe: within 5% / worst frame | 99.1% / 2.85% | **99.2% / 1.13%** |
+| Probe: VGGT time / peak GPU | 5.9 s / 8.45 GB | 9.7 s / **5.89 GB** |
+| Pipeline: Stage 4 score | 93.3 | 93.3 |
+| Pipeline: registered (incl. merge) | 48/50 | 46/50 |
+| Pipeline: SfM pieces / merged / frames added | 2 / 1 / +4 | 2 / 1 / +4 |
+| Pipeline: camera vs GPS / height | 6.42 m / −4.2% | 5.41 m / −4.3% |
+| Pipeline: points / footprint | 1.22 M / 116 639 m² | 2.00 M / 123 743 m² |
+| Pipeline: anchor spread / frames rejected | 0.93% / 0 | 0.71% / 1 (spread) |
+| Pipeline: mesh target → faces | 610 k → 609 k | 997 k → 996 k |
+| Pipeline: dense_vggt / mesh / texture | 19.0 / 46.0 / 33.1 s | 25.1 / 72.5 / 53.2 s |
+| Pipeline: Stage 4 / Stages 1–4 | 143.8 / 243.9 s | 199.8 / 299.9 s |
+
+**Both fixes confirmed on the box:** score 86.7 → **93.3**; the flight still splits in two SfM pieces,
+the smaller is now placed through GPS (+4 frames) and the "separate models" warning is gone; hybrid
+meshes are reduced by the sample rule (VGGT-1B: 943 k → 609 k faces; texture 51 → 33 s). Only fail:
+camera vs GPS (S4-1).
+
+**Decision:** default `recon.track_b.model: vggt_omega` — finer (1.4×) *and* more accurate, first depth
+figure under the PS's 1 m, less GPU memory; costs ~56 s more Stage 4 (bigger mesh). **Fallback chain
+Ω → VGGT-1B → Track A dense**: a machine without the gated Ω login gets VGGT-1B (logged downgrade,
+`model_fallback` in the report and scorecard) instead of the ~100× slower Track A dense.
+
+**Observation:** SfM is not bit-repeatable — identical Stage 1–2 input registered 46 vs 48 frames (GPU
+SIFT/matching and mapper randomness). Compare runs on scorecard bands, not exact counts.
+
+**Speed:** Stages 1–4 ≈ 300 s for 1.7 min of video → ~25–30 min projected for 10 min (§9 target 15).
+VGGT is ~10 s of it; the rest is CPU: decode + conditioning (100 s), mesh + texture (126 s).
+
+**Modified:** `src/recon/track_b_vggt.py` (Ω → VGGT-1B fallback), `src/recon/track_a_colmap.py`
+(downgrade logged), `src/qa/stage4_eval.py` (model + fallback in the Track B KPI), `configs/default.yaml`
+(default model + measurements), `tests/test_recon.py` (+1: gated Ω falls back to VGGT-1B).
+
+**Next:** Stage 5 (georeferencing + six export formats); S4-1; CPU speed.

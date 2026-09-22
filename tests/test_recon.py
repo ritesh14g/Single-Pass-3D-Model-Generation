@@ -513,3 +513,26 @@ def test_unknown_track_b_model_falls_back_cleanly():
     cfg = load_config(overrides=["recon.track_b.model=vggt_typo"])
     with pytest.raises(TrackBUnavailable, match="unknown recon.track_b.model"):
         make_predictor(cfg.recon.track_b, "cpu")
+
+
+def test_omega_unavailable_falls_back_to_vggt_1b(tiny_frames, monkeypatch):
+    """Omega is gated: without access the hybrid must still run, on VGGT-1B, and say so."""
+    pytest.importorskip("pycolmap")
+    from src.recon import track_a_colmap, track_b_vggt
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    out = root / "omega_fallback"
+
+    def no_omega(bcfg, device):
+        raise track_b_vggt.TrackBUnavailable("GatedRepoError: 401")
+
+    monkeypatch.setattr(track_b_vggt, "omega_predictor", no_omega)
+    monkeypatch.setattr(track_b_vggt, "vggt_predictor", lambda bcfg, device: _plane_predictor(out / "dense"))
+    cfg = load_config(overrides=["device.prefer=cpu", "recon.track_b.require_gpu=false",
+                                 "recon.track_b.model=vggt_omega", "recon.track_a.dense.max_image_size=320"])
+    outcome = run_track_a(images, out, cfg)
+    dense = outcome["metrics"]["dense"]
+    assert dense["engine"] == "vggt_hybrid" and dense["model"] == "vggt"
+    assert "GatedRepoError" in dense["model_fallback"]
+    assert any(d.startswith("VGGT-Omega -> VGGT-1B") for d in outcome["metrics"]["downgrades"])
