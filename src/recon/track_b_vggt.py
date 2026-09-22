@@ -70,6 +70,83 @@ def preprocess(paths: list[Path], width: int):
     return torch.stack(out)
 
 
+def preprocess_balanced(paths: list[Path], resolution: int = 512, patch: int = 16):
+    """VGGT-Omega's "balanced" sizing: about (resolution/patch)^2 patches per image whatever
+    the aspect ratio (16:9 at 512 -> 688x384), bicubic, values in [0, 1]. Omega also
+    centre-crops aspect ratios outside [0.5, 2]; drone frames are inside, and skipping the
+    crop keeps the pixel mapping exact for any frame."""
+    import torch
+    from PIL import Image
+    from torchvision import transforms as tf
+
+    to_tensor = tf.ToTensor()
+    tokens = (resolution // patch) ** 2
+    out = []
+    for path in paths:
+        img = Image.open(path).convert("RGB")
+        aspect = img.size[1] / max(img.size[0], 1)
+        w_patches = max(1, int(np.round(np.sqrt(tokens / aspect))))
+        h_patches = max(1, int(np.round(tokens / np.sqrt(tokens / aspect))))
+        out.append(to_tensor(img.resize((w_patches * patch, h_patches * patch), Image.Resampling.BICUBIC)))
+    return torch.stack(out)
+
+
+def omega_predictor(bcfg: Any, device: str) -> Predictor:
+    """VGGT-Omega (gated: needs an approved Hugging Face account on this machine)."""
+    ocfg = bcfg.omega
+    repo = Path(str(ocfg.repo_dir))
+    repo = repo if repo.is_absolute() else ROOT / repo
+    if str(repo) not in sys.path:
+        sys.path.insert(0, str(repo))
+    try:
+        import torch
+        from vggt_omega.models import VGGTOmega
+    except ImportError as exc:
+        raise TrackBUnavailable(f"VGGT-Omega not importable ({exc}); "
+                                f"git clone https://github.com/facebookresearch/vggt-omega {repo}") from exc
+    key = f"omega:{ocfg.checkpoint}@{device}"
+    if key not in _MODELS:
+        try:
+            from huggingface_hub import hf_hub_download
+
+            path = hf_hub_download(str(ocfg.weights_repo), str(ocfg.checkpoint))
+        except Exception as exc:  # noqa: BLE001 - gated repo, no token, no network
+            raise TrackBUnavailable(f"VGGT-Omega checkpoint unavailable ({type(exc).__name__}: {exc}); "
+                                    "log in with `huggingface-cli login` using the account that has access") from exc
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        if isinstance(state, dict):
+            state = state.get("model", state.get("state_dict", state))
+        model = VGGTOmega(autocast=device == "cuda")
+        model.load_state_dict(state, strict=True)
+        _MODELS[key] = model.to(device).eval()
+    model = _MODELS[key]
+    resolution = int(ocfg.image_resolution)
+
+    def predict(paths: list[Path]):
+        batch = preprocess_balanced(paths, resolution)
+        try:
+            with torch.inference_mode():
+                pred = model(batch.to(device))
+        except torch.cuda.OutOfMemoryError as exc:
+            torch.cuda.empty_cache()
+            raise TrackBUnavailable(f"VGGT-Omega out of GPU memory on a {len(paths)}-frame window") from exc
+        depth = pred["depth"][0, ..., 0].float().cpu().numpy()
+        conf = pred["depth_conf"][0].float().cpu().numpy()
+        rgb = (batch.permute(0, 2, 3, 1).numpy() * 255).clip(0, 255).astype(np.uint8)
+        return depth, conf, rgb
+
+    return predict
+
+
+def make_predictor(bcfg: Any, device: str) -> Predictor:
+    model = str(bcfg.model)
+    if model == "vggt_omega":
+        return omega_predictor(bcfg, device)
+    if model == "vggt":
+        return vggt_predictor(bcfg, device)
+    raise TrackBUnavailable(f"unknown recon.track_b.model {model!r} (vggt | vggt_omega)")
+
+
 def vggt_predictor(bcfg: Any, device: str) -> Predictor:
     """VGGT-1B from Hugging Face, loaded once per process."""
     repo = Path(str(bcfg.repo_dir))
@@ -121,7 +198,7 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
         device = resolve_device(str(cfg.get_path("device.prefer", "auto")))
         if device != "cuda" and bool(bcfg.require_gpu):
             raise TrackBUnavailable("no CUDA device (recon.track_b.require_gpu)")
-        predictor = vggt_predictor(bcfg, device)
+        predictor = make_predictor(bcfg, device)
 
     rec = pycolmap.Reconstruction(str(Path(undist_dir) / "sparse"))
     # fused.ply.vis indexes images in image-id order (verified on the box's COLMAP output),
@@ -190,7 +267,9 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
     write_colmap_fused(fused_path, pts, normals, colours, vis)
     views = np.fromiter((len(v) for v in vis), dtype=np.int32, count=len(vis))
     return {
-        "engine": "vggt_hybrid", "weights": str(bcfg.weights), "window": int(bcfg.window_frames),
+        "engine": "vggt_hybrid", "model": str(bcfg.model),
+        "weights": str(bcfg.omega.checkpoint) if str(bcfg.model) == "vggt_omega" else str(bcfg.weights),
+        "window": int(bcfg.window_frames),
         "frames": n, "frames_anchored": len(frames), "frames_rejected": rejected,
         "anchors_median": float(np.median(anchor_counts)) if anchor_counts else 0.0,
         "anchor_spread_median_pct": round(float(np.median(spreads)), 2) if spreads else None,

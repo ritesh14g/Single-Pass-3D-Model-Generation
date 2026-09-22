@@ -484,3 +484,32 @@ def test_merge_refuses_a_piece_gps_cannot_place(tiny_model):
     merged, info = merge_by_gps([a, b], gps, max_rms_m=25.0)
     assert info["merged"] == 0 and info["skipped"]
     assert len(posed(merged)) == len(posed(a))
+
+
+def test_omega_balanced_sizing_matches_the_reference(tmp_path):
+    """Our preprocessing must equal VGGT-Omega's own (skipped where it is not cloned)."""
+    import sys
+    from pathlib import Path
+
+    from src.recon.track_b_vggt import preprocess_balanced
+
+    repo = Path(__file__).resolve().parents[1] / "tools" / "vggt_omega"
+    if not (repo / "vggt_omega").is_dir():
+        pytest.skip("tools/vggt_omega not cloned")
+    sys.path.insert(0, str(repo))
+    from vggt_omega.utils.load_fn import load_and_preprocess_images
+
+    for w, h in [(1920, 1080), (640, 480), (1280, 715)]:
+        path = tmp_path / f"f_{w}.jpg"
+        cv2.imwrite(str(path), np.random.default_rng(w).integers(0, 255, (h, w, 3), dtype=np.uint8))
+        ours = preprocess_balanced([path], 512)
+        theirs = load_and_preprocess_images([str(path)], mode="balanced", image_resolution=512)
+        assert ours.shape == theirs.shape and float((ours - theirs).abs().max()) == 0.0
+
+
+def test_unknown_track_b_model_falls_back_cleanly():
+    from src.recon.track_b_vggt import TrackBUnavailable, make_predictor
+
+    cfg = load_config(overrides=["recon.track_b.model=vggt_typo"])
+    with pytest.raises(TrackBUnavailable, match="unknown recon.track_b.model"):
+        make_predictor(cfg.recon.track_b, "cpu")

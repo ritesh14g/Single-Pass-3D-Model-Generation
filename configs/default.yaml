@@ -418,8 +418,10 @@ recon:
     # frames (90 m RMS at 32). Box, Esri: depth within 1.04% of COLMAP's 1920 px dense
     # (99.1% of pixels within 5%) in 5.9 s vs 1133 s (DEVLOG). Any failure falls back to
     # Track A dense with a logged downgrade.
+    # vggt (VGGT-1B) or vggt_omega (VGGT-Ω). Omega is gated (FAIR non-commercial research
+    # licence, LIC-1): the machine must be logged in to Hugging Face with an approved account.
     model: vggt
-    # CC-BY-NC-4.0, not gated (LIC-1). VGGT-Omega needs approved Hugging Face access.
+    # VGGT-1B: CC-BY-NC-4.0, not gated.
     weights: facebook/VGGT-1B
     # git clone https://github.com/facebookresearch/vggt tools/vggt
     repo_dir: tools/vggt
@@ -447,6 +449,14 @@ recon:
     pixel_stride: 2
     # Per-frame scaled depth + confidence for Stage 3 zone classification.
     keep_confidence_maps: true
+    omega:
+      # git clone https://github.com/facebookresearch/vggt-omega tools/vggt_omega
+      repo_dir: tools/vggt_omega
+      weights_repo: facebook/VGGT-Omega
+      checkpoint: vggt_omega_1b_512.pt
+      # "balanced" sizing keeps ~(512/16)^2 = 1024 patches per frame: 688x384 on 16:9,
+      # 1.3x finer than VGGT-1B at 518 while still at Omega's training size.
+      image_resolution: 512
     # Measured on the H100 2g.20gb slice (window probe, box).
     gpu_s_per_frame: 0.13
   refine_ba:

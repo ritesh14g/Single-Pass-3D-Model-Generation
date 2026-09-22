@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from src.core.device import cpu_thread_budget, resolve_device  # noqa: E402
 from src.recon import alignment  # noqa: E402
-from src.recon.track_b_vggt import preprocess  # noqa: E402
+from src.recon.track_b_vggt import preprocess, preprocess_balanced  # noqa: E402
 
 
 def log(msg: str) -> None:
@@ -67,7 +67,11 @@ def main() -> int:
     ap.add_argument("--colmap-dense", type=Path, required=True,
                     help="COLMAP undistorted workspace: images/, sparse/, stereo/depth_maps/")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--model", choices=["vggt", "vggt_omega"], default="vggt",
+                    help="vggt_omega: --widths is Omega's image_resolution (512 -> 688x384 on 16:9)")
     ap.add_argument("--weights", default="facebook/VGGT-1B")
+    ap.add_argument("--omega-checkpoint", default="vggt_omega_1b_512.pt")
+    ap.add_argument("--omega-repo", type=Path, default=ROOT / "tools" / "vggt_omega")
     ap.add_argument("--random-weights", action="store_true")
     ap.add_argument("--vggt-repo", type=Path, default=ROOT / "tools" / "vggt")
     ap.add_argument("--window", type=int, default=8)
@@ -106,21 +110,58 @@ def main() -> int:
     to_metres = transform[0] if transform is not None else None
     log(f"{len(names)} frames, camera {cam.width}x{cam.height}, GPS fit {metric}")
 
-    model, torch = load_model(args, device)
+    if args.model == "vggt_omega":
+        sys.path.insert(0, str(args.omega_repo.resolve()))
+        from vggt_omega.models import VGGTOmega
+        from vggt_omega.utils.pose_enc import encoding_to_camera
+
+        model = VGGTOmega(autocast=device == "cuda")
+        if not args.random_weights:
+            from huggingface_hub import hf_hub_download
+
+            state = torch.load(hf_hub_download("facebook/VGGT-Omega", args.omega_checkpoint),
+                               map_location="cpu", weights_only=True)
+            if isinstance(state, dict):
+                state = state.get("model", state.get("state_dict", state))
+            model.load_state_dict(state, strict=True)
+        model = model.to(device).eval()
+        log(f"VGGT-Omega loaded ({args.omega_checkpoint}{', RANDOM WEIGHTS' if args.random_weights else ''})")
+    else:
+        model, torch = load_model(args, device)
+
+    def forward(paths, width):
+        """(depth [S,H,W], conf [S,H,W], extrinsics [S,3,4], batch, seconds, peak GB) for either model."""
+        if device == "cuda":
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+        t0 = time.perf_counter()
+        if args.model == "vggt_omega":
+            batch = preprocess_balanced(paths, width)
+            with torch.inference_mode():
+                pred = model(batch.to(device))
+            ext = encoding_to_camera(pred["pose_enc"], batch.shape[-2:])[0][0]
+        else:
+            batch = preprocess(paths, width)
+            pred, _, _ = run_chunk(model, torch, batch, device, dtype)
+            ext = pose_encoding_to_extri_intri(pred["pose_enc"], batch.shape[-2:])[0][0]
+        if device == "cuda":
+            torch.cuda.synchronize()
+        seconds = time.perf_counter() - t0
+        peak = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0.0
+        return (pred["depth"][0, ..., 0].float().cpu().numpy(), pred["depth_conf"][0].float().cpu().numpy(),
+                ext.float().cpu().numpy().astype(np.float64), batch, seconds, peak)
 
     def run_width(width: int) -> dict:
         t_vggt, t_fuse, peak_gb = 0.0, 0.0, 0.0
         per_frame, cloud_pts, cloud_rgb = [], [], []
         for start, stop, owned in windows_for(len(names), args.window):
-            batch = preprocess([args.colmap_dense / "images" / n for n in names[start:stop]], width)
-            pred, seconds, peak = run_chunk(model, torch, batch, device, dtype)
+            depth_all, conf_all, ext, batch, seconds, peak = forward(
+                [args.colmap_dense / "images" / n for n in names[start:stop]], width)
             t_vggt += seconds
             peak_gb = max(peak_gb, peak)
             started = time.perf_counter()
             h, w = batch.shape[-2:]
             sx, sy = w / cam.width, h / cam.height
-            extrinsic, _ = pose_encoding_to_extri_intri(pred["pose_enc"], (h, w))
-            ext = extrinsic[0].numpy().astype(np.float64)
 
             # Window scale from cameras, rotation-aware (a straight flight line leaves the roll
             # about the path undetermined by centres alone): R from paired orientations, then s.
@@ -136,8 +177,8 @@ def main() -> int:
             for i in owned:
                 k = i - start
                 im = images[i]
-                depth = pred["depth"][0, k, ..., 0].numpy().astype(np.float64)
-                conf = pred["depth_conf"][0, k].numpy()
+                depth = depth_all[k].astype(np.float64)
+                conf = conf_all[k]
                 keep = conf >= np.quantile(conf, args.drop_low_conf)
 
                 # Per-frame anchoring on the sparse points this frame observes.
@@ -210,7 +251,7 @@ def main() -> int:
             return round(float(np.median(vals)), 2) if vals else None
 
         summary = {
-            "width": width, "input_hw": [int(h), int(w)], "frames": len(names), "window": args.window,
+            "model": args.model, "width": width, "input_hw": [int(h), int(w)], "frames": len(names), "window": args.window,
             "peak_gpu_gb": round(peak_gb, 2),
             "vggt_seconds": round(t_vggt, 1), "vggt_s_per_frame": round(t_vggt / max(len(names), 1), 3),
             "fuse_seconds": round(t_fuse, 1), "cloud_points": int(len(pts)),

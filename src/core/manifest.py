@@ -60,7 +60,8 @@ STAGE_CONFIG_DEPS: dict[str, list[str]] = {
     "condition": ["condition"],
     "track_b": ["recon.track_b", "device"],
     "refine_ba": ["recon.refine_ba"],
-    "track_a": ["recon.track_a"],
+    # The hybrid runs inside track_a, so the Track B model and the run mode change its output too.
+    "track_a": ["recon.track_a", "recon.track_b", "run.mode", "device"],
     "fusion": ["fusion"],
     "geo": ["geo"],
     "export": ["export"],

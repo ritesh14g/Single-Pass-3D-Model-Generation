@@ -124,6 +124,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `scripts/vggt_probe.py` | 4 | Track B feasibility probe (VGGT) |
 | `src/recon/track_b_vggt.py` | 4 | Track B hybrid: VGGT depth in 8-frame windows, per-frame anchoring on Track A sparse points, multi-view consistency, COLMAP-format `fused.ply` + `.vis` |
 | `scripts/vggt_hybrid_probe.py` | 4 | Hybrid probe: VGGT depth vs COLMAP depth maps, pixel by pixel; compares input widths |
+| `scripts/stage4_report.py` | 4 | Compact Stage 1–4 report for run folders + probe JSON |
+| `scripts/box_stage4_compare.sh` | 4 | Box: Stages 1–2 once, Stage 4 with VGGT-Ω and VGGT-1B, Ω depth probe, one report |
 | `src/recon/merge.py` | 4 | Place disconnected SfM pieces through GPS; `posed()` filter for unregistered images |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
@@ -1794,3 +1796,35 @@ Track A's sparse points instead of trusting VGGT's cameras.
 where it can be verified, speed everywhere else.
 
 **Next:** box: full Stages 1–4 on Esri to confirm the SfM merge and hybrid mesh reduction.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — VGGT-Ω added to Track B
+**Goal:** The team now has approved Hugging Face access to `facebook/VGGT-Omega`; make it selectable
+in Track B and measure it before it can become the default.
+
+**Found (code read + random-weights runs):** `facebookresearch/vggt-omega`, class `VGGTOmega`
+(1.14 B params), 16-px patches, checkpoint `vggt_omega_1b_512.pt` (4.58 GB, `torch.load`, strict).
+Same outputs as VGGT-1B (`depth` [B,S,H,W,1], `depth_conf`, `pose_enc` decoded by
+`encoding_to_camera`). **"Balanced" sizing keeps ~1024 patches per frame: 688×384 on 16:9 — 1.3×
+finer than VGGT-1B at 518 while still at Ω's training size** (the VGGT-1B width sweep showed going
+beyond training size costs accuracy). Licence: FAIR non-commercial research (LIC-1).
+
+**Created:**
+- `scripts/stage4_report.py`, `scripts/box_stage4_compare.sh` — see §3.
+
+**Modified:**
+- `src/recon/track_b_vggt.py` — `preprocess_balanced()` (bit-identical to Ω's own on 1920×1080,
+  640×480, 1280×715; no aspect crop), `omega_predictor()` (checkpoint via `hf_hub_download`; a missing
+  login or approval raises `TrackBUnavailable` → Track A dense with the reason), `make_predictor()`;
+  report records `model`.
+- `configs/default.yaml` — `recon.track_b.model: vggt | vggt_omega` (default stays **vggt** until
+  measured) and `recon.track_b.omega.*`.
+- `scripts/vggt_hybrid_probe.py` — `--model vggt_omega`; one `forward()` for both models.
+- `src/core/manifest.py` — **bug:** track_a's staleness fingerprint covered only `recon.track_a`, so
+  a resumed run would reuse a Stage 4 result built with the other VGGT model or run mode. Now also
+  `recon.track_b`, `run.mode`, `device`.
+- `tests/test_recon.py` — Ω sizing equals the reference; unknown model name falls back cleanly.
+
+**Tests:** 378 passed / 0 failed (was 376; +2).
+
+**Next:** box: `bash scripts/box_stage4_compare.sh` (needs a Hugging Face login on the box). Default
+model decided from Ω's depth error vs COLMAP and the Stage 4 scorecards.
