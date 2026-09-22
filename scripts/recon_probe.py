@@ -366,10 +366,25 @@ def main() -> int:
                 shutil.rmtree(stale)
         # SfM needs heavy overlap to chain poses; dense stereo does not need every
         # overlapping view, so it can run on a spread-out subset at full resolution.
-        dense_names = sorted(im.name for im in rec.images.values())[::max(args.dense_every, 1)]
-        dense_params["frames"] = len(dense_names)
+        dense_model = sparse_model
+        dense_params["frames"] = rec.num_reg_images()
+        if args.dense_every > 1:
+            # The skipped frames must leave the model itself, not just the image list:
+            # undistort_images(image_names=) writes only those files but keeps every frame
+            # in the model, so PatchMatch's __auto__ source views point at missing images
+            # (both every-2 variants failed that way in sweep round 2).
+            subset = pycolmap.Reconstruction(str(sparse_model))
+            keep = set(sorted(im.name for im in subset.images.values())[::args.dense_every])
+            for frame_id in {im.frame_id for im in subset.images.values() if im.name not in keep}:
+                subset.deregister_frame(frame_id)
+            dense_model = out / "sparse_dense_subset"
+            if dense_model.exists():
+                shutil.rmtree(dense_model)
+            dense_model.mkdir()
+            subset.write(str(dense_model))
+            dense_params["frames"] = subset.num_reg_images()
         with timed("undistort"):
-            pycolmap.undistort_images(undist, sparse_model, images, image_names=dense_names,
+            pycolmap.undistort_images(undist, dense_model, images,
                                       num_patch_match_src_images=args.pm_src_images,
                                       undistort_options=_undistort_options(args.dense_size),
                                       num_threads=threads)

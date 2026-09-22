@@ -1,0 +1,3 @@
+# Round 2b: the two every-other-frame variants that failed in round 2 (subset bug, fixed).
+s1920_v8_geom_e2|--dense-size 1920 --pm-src-images 8 --dense-every 2
+s1280_v8_geom_e2|--dense-size 1280 --pm-src-images 8 --dense-every 2

@@ -1500,3 +1500,20 @@ budget of 4 min. Settings alone cannot close that; frame subsampling for dense i
 **Tests:** not run — scripts only. Subset undistort checked locally (22 of 43 frames, `__auto__, 8`).
 
 **Next:** box: round 2; pick the default; start `src/recon/track_a_colmap.py`.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Dense sweep round 2 (S4-8)
+**Measured (box):** 1920 px / 8 views / geom: **1033.7 s**, 413 511 points, 59 443 m², 609 860 faces.
+1920 / 12 / geom: 1112.9 s, 456 242 points, 60 695 m², 665 154 faces (≈ baseline at −2% time).
+**Source views are not the lever at full resolution** (20 → 8 saves 9% time, costs 10% points);
+pixel count is. Both `--dense-every 2` variants failed.
+
+**Dead end (also §4 material):** `undistort_images(image_names=...)` writes only the listed image
+files but keeps every frame in the undistorted model, so PatchMatch's `__auto__` source-view
+selection references images that do not exist (reproduced locally: model 43 frames, 22 files).
+**Fix:** deregister the skipped frames from a copy of the model (`deregister_frame`) and undistort
+that copy; verified 22 frames / 22 files / 22 `patch-match.cfg` references.
+
+**Modified:** `scripts/recon_probe.py` (subset model before undistort). **Created:**
+`scripts/dense_variants_round2b.txt`.
+
+**Next:** box: round 2b (the two every-2 variants).
