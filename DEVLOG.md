@@ -280,6 +280,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
 | S4-8 | 4 | **(presets chosen 2026-09-22; scale problem open)** **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
+| LIC-1 | 4 | **VGGT licence vs the PS domain.** Every VGGT checkpoint carries a no-military / no-espionage acceptable-use clause (VGGT License AUP §2; VGGT-1B is also CC-BY-NC-4.0; VGGT-Ω is FAIR non-commercial research). The PS is set by NTRO and lists military reconnaissance and border mapping among applications | **Team decision 2026-09-22 (ritesh14g):** use VGGT for the competition prototype; the PS names disaster management and treats military use as one optional application, and a selected project would move to an in-house model built with government support. State this position and the licence terms in the README (§11). Track A (COLMAP BSD, OpenMVS AGPL) stays the licence-clean floor |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -1541,3 +1542,26 @@ an OpenMVS densify built with CUDA on the box, and fusion `min_num_pixels` 5 →
 **Tests:** not run — no code change this entry.
 
 **Next:** build `src/recon/track_a_colmap.py` with these presets in `configs/`.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Track B probe (VGGT), licensing position
+**Goal:** Measure VGGT on the box before writing Track B, while Track A is turned into a module.
+
+**Found:** Hugging Face has `facebook/VGGT-1B` (CC-BY-NC-4.0, **not gated**, 5.03 GB),
+`facebook/VGGT-1B-Commercial` (manual approval), and `facebook/VGGT-Omega` (**manual approval**,
+FAIR non-commercial research licence, separate code at `facebookresearch/vggt-omega`, checkpoints
+`vggt_omega_1b_512.pt` etc.). All carry the VGGT acceptable-use policy (LIC-1). Probe uses VGGT-1B;
+VGGT-Ω needs a team member's approved HF access.
+
+**Created:** `scripts/vggt_probe.py` — loads frames once (VGGT "crop" preprocessing, 518 px wide:
+518×294 on 16:9), times chunks 8/16/32/all with a CUDA OOM guard, and scores the largest chunk:
+focal vs KLV HFOV, camera centres vs GPS (similarity fit), camera centres vs Track A's COLMAP cameras
+(both in metres), height above ground from the central depth vs KLV. Saves extrinsics, intrinsics,
+depth and confidence to `vggt_chunk.npz` for Track B development. CPU = 2-frame smoke test.
+
+**Verified locally:** `--random-weights`, 3 frames on the laptop CPU: every path runs (34 s for the
+forward pass); quality numbers meaningless by construction. `torchvision` 0.23.0+cpu, `einops`,
+`safetensors`, `huggingface_hub` installed into the laptop venv; `tools/vggt` cloned (git-ignored).
+
+**Open issues:** LIC-1 added (team position recorded).
+
+**Next:** box: VGGT probe on Esri; request VGGT-Ω access; build `src/recon/track_a_colmap.py`.
