@@ -29,12 +29,12 @@ condition:
 
 recon:
   track_a:
-    feature_quality: medium
-    pc_quality: low
-    mesh_octree_depth: 9
-    mesh_size: 120000
-    min_num_features: 6000
-    matcher_neighbors: 6
+    sift:
+      max_image_size: 1280
+    dense:
+      # ~20 cm/px on Esri; kept 107% of the default footprint at 71% of its time (S4-8).
+      max_image_size: 960
+      degrade_sizes: [640]
   track_b:
     chunk_frames: 96
     chunk_overlap: 12

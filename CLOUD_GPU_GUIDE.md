@@ -63,6 +63,7 @@ When it wanted the GPU and didn't get it, it logs a downgrade. It never crashes.
 | Stage 2 dynamic masking (`src/condition/dynamic_mask.py`) | YOLOv8-seg on `cuda:0`, FP16 | On a GPU error such as out-of-memory, the frame is retried on the CPU and later frames stay there. If the model is missing, it uses geometric masking only |
 | Thread pools (`device.cpu_threads: auto`) | — | OpenCV and torch threads are capped to the container's **cgroup CPU quota**. Notebook containers often see every host core, and would run 100+ threads on 3 cores |
 | Track B chunking | Reads the detected GPU memory | Uses `device.gpu_memory_gb` (now **20**) when no GPU is visible |
+| Track A (`src/recon/track_a_colmap.py`) | pycolmap-cuda12: SIFT, matching, PatchMatch dense on CUDA | pycolmap on CPU; dense via OpenMVS `DensifyPointCloud` (CPU); OpenMVS mesh → Poisson; texture → untextured mesh. Needs `pip install pycolmap-cuda12==4.2.0` and OpenMVS 2.4.0 in `tools/openmvs/bin` on the box |
 
 The run manifest records `device`, `gpu_name`, `gpu_memory_gb`, `mig`, `cpu_threads` and the
 `decoder` that was actually used. Check them after every run.

@@ -34,4 +34,4 @@ pygltflib>=1.16
 #   laptop / no GPU:  pycolmap==4.2.0          (CPU wheel; Windows, Linux, macOS)
 #   GPU box (Linux):  pycolmap-cuda12==4.2.0   (CUDA SIFT, matching, BA, PatchMatch stereo)
 # OpenMVS 2.4.0 binaries (texturing; CPU dense fallback) go in tools/openmvs/, not pip.
-# plyfile       # reading OpenMVS dense PLYs (per-point view lists) in QA
+plyfile>=1.0   # Track A reads dense PLYs (OpenMVS clouds carry per-point view lists)

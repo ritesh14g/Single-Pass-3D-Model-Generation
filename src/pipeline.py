@@ -56,6 +56,7 @@ from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
 from src.ingest.telemetry import TelemetryTable, load_telemetry
 from src.ingest.video_reader import VideoReader, reader_options
+from src.recon.track_a_colmap import run_track_a
 
 log = get_logger(__name__)
 
@@ -513,6 +514,11 @@ def environment_info(cfg: Config) -> dict[str, Any]:
     return info
 
 
+def _optional_artifact(manifest: RunManifest, stage: str, key: str) -> Path | None:
+    """An artifact that a stage writes only when its input allowed (``geo.txt`` needs GPS)."""
+    return manifest.artifact(stage, key) if manifest.has_artifact(stage, key) else None
+
+
 def run_pipeline(
     inputs: RunInputs,
     cfg: Config,
@@ -602,21 +608,54 @@ def run_pipeline(
                 )
         result.completed_stages.append("condition")
 
-    # -- Reconstruction, fusion, geo, export, QA ----------------------------
+    # -- Reconstruction: Track A (§7.1) --------------------------------------
+    # Track B and the refinement bridge are not built yet, so every run is the
+    # spec's pure-Track-A fallback; their time allowances go to Track A instead
+    # of sitting reserved for stages that will not run.
+    if should("track_a"):
+        if manifest.stages["condition"].status is not StageStatus.DONE:
+            raise RuntimeError("Track A needs a completed conditioning stage")
+        with budget.stage("track_a_mvs") as sb, manifest.stage("track_a") as st:
+            handed_over = 0.0
+            for unbuilt in ("track_b", "refine_ba"):
+                if unbuilt not in result.completed_stages and unbuilt not in budget.stage_times:
+                    handed_over += float(budget.stage_allotments.get(unbuilt, 0.0))
+                    budget.stage_times[unbuilt] = 0.0
+            sb.allotted_s += handed_over
+            outcome = run_track_a(
+                manifest.artifact("condition", "images"), st.dir, cfg,
+                masks_dir=_optional_artifact(manifest, "condition", "masks"),
+                geo_path=_optional_artifact(manifest, "condition", "geo"),
+                telemetry_path=_optional_artifact(manifest, "ingest", "telemetry"),
+                budget_stage=sb,
+            )
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics({**outcome["metrics"], "budget_handed_over_s": handed_over})
+            st.record_degradations(sb.degradations)
+            for downgrade in outcome["metrics"]["downgrades"]:
+                st.warn(f"track_a downgrade: {downgrade}")
+        result.completed_stages.append("track_a")
+
+    # -- Fusion, geo, export, QA ----------------------------------------------
     # These stages are wired but not yet implemented; each records why it did
     # not run so the manifest and QA report stay truthful about what produced
     # the outputs rather than silently showing fewer stages.
-    implemented = {"ingest", "condition"}
+    implemented = {"ingest", "condition", "track_a"}
     for spec in STAGES:
         for name in spec.manifest_stages:
             if name in result.completed_stages or manifest.stages[name].status is StageStatus.DONE:
                 continue
             if name in wanted and name in implemented:
                 continue
-            reason = (
-                f"Stage {spec.number} ({spec.title}, {spec.spec_ref}) is {spec.status.value}"
-                + ("" if name in implemented else "; not implemented yet")
-            )
+            if spec.is_built and name not in implemented:
+                reason = (f"{name} is not implemented yet; Stage {spec.number} "
+                          f"({spec.title}) ran without it")
+            else:
+                reason = (
+                    f"Stage {spec.number} ({spec.title}, {spec.spec_ref}) is {spec.status.value}"
+                    + ("" if name in implemented else "; not implemented yet")
+                )
             if not spec.is_built and name in implemented:
                 reason += " — not run by default; request it with --stage"
             manifest.mark_skipped(name, reason)

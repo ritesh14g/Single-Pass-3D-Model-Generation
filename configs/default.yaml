@@ -346,18 +346,58 @@ condition:
 # ---------------------------------------------------------------------------
 recon:
   track_a:
-    # OpenDroneMap is invoked as a subprocess (docker image or native binary).
-    docker_image: opendronemap/odm:gpu
-    runner: auto            # auto | docker | native
-    native_binary: null
-    feature_quality: high
-    pc_quality: medium
-    mesh_octree_depth: 11
-    mesh_size: 300000
-    min_num_features: 10000
-    matcher_neighbors: 8
-    use_gpu: true
-    extra_args: []
+    # Classical baseline (§7.1): pycolmap SfM + dense, OpenMVS mesh + texture.
+    # ODM was dropped (DEVLOG §4: needs a container runtime, CPU-bound on 3 cores).
+    # GPU first: pycolmap-cuda12 runs SIFT, matching, BA and PatchMatch on CUDA;
+    # without it SfM runs on CPU and dense falls back to OpenMVS DensifyPointCloud.
+    camera_model: SIMPLE_RADIAL
+    # Seed focal from telemetry HFOV and hold it fixed. On a constant-height nadir
+    # flight images + GPS only fix height/focal; a refined focal drifted to -17%
+    # height on Esri, the fixed one measured -4% (DEVLOG §4).
+    focal_from_telemetry: true
+    # Stage 2's dynamic-object masks keep features off moving objects.
+    use_dynamic_masks: true
+    sift:
+      max_image_size: 1600
+      max_num_features: 8192
+    matching:
+      sequential_overlap: 10
+      quadratic_overlap: true
+    mapper:
+      # Hard cap on incremental mapping (0 = none); the budget ladder backs it up.
+      max_runtime_s: 0
+    dense:
+      # Chosen by the S4-8 sweep on the box: keeps the geometric pass and all
+      # frames; resolution sets detail (~15 cm/px on Esri at 1280).
+      max_image_size: 1280
+      src_images: 8
+      iterations: 5
+      window_step: 1
+      geom_consistency: true
+      # Dense on every Nth frame. 1 = all: halving frames lost 82-86% coverage (§4).
+      every: 1
+      fusion_min_num_pixels: 5
+      # Projection for the budget: measured PatchMatch cost per frame at 1280 px
+      # on the H100 2g.20gb slice, scaled by pixel count for other sizes.
+      gpu_s_per_frame_at_1280: 13.6
+      # CPU fallback (OpenMVS): 9.2 s/frame at 0.31 MP on an i5-1135G7, scaled to 1280x720.
+      cpu_s_per_frame_at_1280: 27.0
+      # Budget ladder for dense: step down through these sizes when the projection overruns.
+      degrade_sizes: [960, 640]
+      # Stage time kept back for fusion, meshing and texturing (box: 22 + 23 + 47 s on Esri).
+      reserve_after_s: 120
+    mesh:
+      # openmvs (Delaunay) is the default: pycolmap-cuda12's Poisson shattered a
+      # clean cloud on Linux (S4-6). poisson + cleaning is the fallback.
+      mesher: openmvs
+      poisson_depth: 11
+      min_component_fraction: 0.01
+    texture:
+      enabled: true
+      export_type: obj
+    openmvs:
+      # auto = tools/openmvs/bin (Linux) or tools/openmvs/vc17/x64/Release (Windows).
+      bin_dir: auto
   track_b:
     model: vggt-omega       # vggt-omega | vggt | depth-anything
     weights: facebook/VGGT-Omega-1B-512
@@ -521,6 +561,25 @@ qa:
     gain_span_warn: 0.40
     gps_outlier_fraction_warn: 0.10
     gps_outlier_fraction_fail: 0.30
+  # Stage 4 (Track A) scorecard bands, read by src/qa/stage4_eval.py.
+  stage4:
+    # Share of conditioned frames SfM registered, and how many pieces the flight split into.
+    registered_fraction_pass: 0.90
+    registered_fraction_warn: 0.70
+    models_warn: 2
+    reproj_px_pass: 1.5
+    reproj_px_warn: 2.5
+    track_length_pass: 3.0
+    track_length_warn: 2.0
+    # Camera-centre RMS against GPS after a similarity fit. PS §1.4: spatial accuracy <= 1 m.
+    cam_vs_gps_rms_pass_m: 1.0
+    cam_vs_gps_rms_warn_m: 5.0
+    # Height above ground vs telemetry (KLV frame-centre elevation): the metric-scale check.
+    height_error_pass_pct: 5.0
+    height_error_warn_pct: 15.0
+    # A clean surface has ~2 faces per vertex; ~1 means fragments (S4-6).
+    faces_per_vertex_pass: 1.8
+    faces_per_vertex_warn: 1.4
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]

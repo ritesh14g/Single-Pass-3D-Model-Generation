@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from ui.stages import stage1_ingest, stage2_condition
+from ui.stages import stage1_ingest, stage2_condition, stage4_recon
 
 PANELS: dict[str, ModuleType] = {
     stage1_ingest.KEY: stage1_ingest,
     stage2_condition.KEY: stage2_condition,
+    stage4_recon.KEY: stage4_recon,
 }

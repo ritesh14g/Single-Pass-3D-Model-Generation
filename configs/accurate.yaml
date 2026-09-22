@@ -32,12 +32,12 @@ condition:
 
 recon:
   track_a:
-    feature_quality: ultra
-    pc_quality: high
-    mesh_octree_depth: 12
-    mesh_size: 800000
-    min_num_features: 20000
-    matcher_neighbors: 12
+    sift:
+      max_image_size: 2400
+    dense:
+      # ~10 cm/px on Esri; 99% of the COLMAP-default points in 98% of its time (S4-8).
+      max_image_size: 1920
+      src_images: 12
   track_b:
     chunk_frames: 160
     chunk_overlap: 24

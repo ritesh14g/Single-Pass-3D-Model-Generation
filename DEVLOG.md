@@ -72,7 +72,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
-| 4 | Reconstruction tracks | §7 | 🟡 probing | — | — | Track A engine: **pycolmap (GPU SfM + PatchMatch) → OpenMVS Delaunay mesh + texture**. GPU sparse/dense verified on the box; mesh+texture of the box cloud verified on the laptop (S4-6); full box run pending |
+| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. Track B + refinement BA: planned (VGGT probe on the box). Pipeline confirmation run on the box pending |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -114,6 +114,14 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `ui/stages/__init__.py` | UI | Panel registry + panel contract |
 | `ui/stages/stage1_ingest.py` | 1 | Stage 1 parameters and diagnostics |
 | `ui/stages/stage2_condition.py` | 2 | Stage 2 parameters (artifacts/illumination/dynamic/GPS) and diagnostics |
+| `src/recon/track_a_colmap.py` | 4 | Track A: SfM (focal from telemetry), dense (COLMAP CUDA / OpenMVS CPU), mesh, texture; GPU→CPU fallback per step; dense size from the budget projection |
+| `src/recon/alignment.py` | 4 | GPS similarity fit, camera-vs-GPS RMS, height above ground, footprint, telemetry focal/FOV hints |
+| `src/recon/openmvs.py` | 4 | OpenMVS tool lookup (`tools/openmvs`) and runner (absolute paths, log-tail errors) |
+| `src/recon/meshing.py` | 4 | PLY counts/reading, Poisson-fallback mesh cleaning |
+| `src/qa/stage4_eval.py` | 4 | Stage 4 KPIs (`qa.stage4` bands), timings and camera-track chart data |
+| `ui/stages/stage4_recon.py` | 4 | Stage 4 parameters, camera path vs GPS, time per step, output paths |
+| `tests/test_recon.py` | 4 | Alignment, dense budget ladder, masks, mesh cleaning, scorecard bands, CPU end-to-end |
+| `scripts/vggt_probe.py` | 4 | Track B feasibility probe (VGGT) |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
 | `.streamlit/config.toml` | UI | Streamlit server settings (upload cap 300 MB) |
@@ -129,7 +137,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `tests/fixtures.py` | test | Re-export of `src.qa.synthetic` |
 | `data/raw/demo_flight.*` | — | Local demo input (git-ignored) |
 
-Empty placeholders: `docker/`, `viewer/`, `src/recon/`, `src/fusion/`, `src/geo/`, `src/export/`.
+Empty placeholders: `docker/`, `viewer/`, `src/fusion/`, `src/geo/`, `src/export/`.
 
 ---
 
@@ -279,6 +287,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-6 | 4 | **pycolmap-cuda12's Poisson (Linux) breaks meshes the Windows pycolmap builds cleanly.** Same 447 k-point box cloud, depth 11, trim 10: box → 1.82 M faces, 121 743 fragments, 4 564 NaN vertices; laptop → 946 k faces, 30 pieces, 0 NaN, at 1, 3 and 8 threads alike. The cloud itself has no NaN coordinates or normals | **Worked around 2026-09-21**: the probe meshes with OpenMVS `ReconstructMesh` (Delaunay) on the COLMAP cloud imported with `InterfaceCOLMAP -p fused.ply` (reads `fused.ply.vis`): 659 k faces, ~2 faces/vertex, 21 s; TextureMesh then succeeds in 81 s. Poisson + `clean_mesh` stays as the fallback. Not reported upstream yet |
 | S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
 | S4-8 | 4 | **(presets chosen 2026-09-22; scale problem open)** **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
+| S4-9 | 4 | Dynamic-object masks reach SfM feature extraction but not dense fusion: moving objects can still leave depth in the cloud | Undistort the Stage 2 masks with the same camera model and pass them as `StereoFusionOptions.mask_path` (COLMAP) / `--mask-path` (OpenMVS) |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | LIC-1 | 4 | **VGGT licence vs the PS domain.** Every VGGT checkpoint carries a no-military / no-espionage acceptable-use clause (VGGT License AUP §2; VGGT-1B is also CC-BY-NC-4.0; VGGT-Ω is FAIR non-commercial research). The PS is set by NTRO and lists military reconnaissance and border mapping among applications | **Team decision 2026-09-22 (ritesh14g):** use VGGT for the competition prototype; the PS names disaster management and treats military use as one optional application, and a selected project would move to an in-house model built with government support. State this position and the licence terms in the README (§11). Track A (COLMAP BSD, OpenMVS AGPL) stays the licence-clean floor |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
@@ -1565,3 +1574,59 @@ forward pass); quality numbers meaningless by construction. `torchvision` 0.23.0
 **Open issues:** LIC-1 added (team position recorded).
 
 **Next:** box: VGGT probe on Esri; request VGGT-Ω access; build `src/recon/track_a_colmap.py`.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Stage 4 Track A module: BUILT
+**Goal:** Turn the probe into the Stage 4 Track A module with config, pipeline wiring, budget,
+evaluator, Stage Lab panel and tests (rules 3–6), and flip Stage 4 to BUILT.
+
+**Created:**
+- `src/recon/__init__.py`, `alignment.py`, `openmvs.py`, `meshing.py`, `track_a_colmap.py` — see §3.
+- `src/qa/stage4_eval.py` — 16 KPIs in four groups (sparse, metric vs telemetry, dense and mesh,
+  runtime); camera-vs-GPS uses the PS's ≤ 1 m target, so Esri's 7.1 m reads **fail** (S4-1).
+- `ui/stages/stage4_recon.py` — sidebar for the measured tunables, camera path (SfM aligned vs GPS),
+  time per step, output file paths.
+- `tests/test_recon.py` — 32 tests incl. a CPU end-to-end run on a 16-frame 320 px synthetic flight.
+
+**Modified:**
+- `configs/default.yaml` — `recon.track_a` rewritten (ODM keys removed): telemetry focal, masks,
+  SIFT/matching/mapper, dense presets and per-frame cost model (`gpu_s_per_frame_at_1280: 13.6`,
+  `cpu_s_per_frame_at_1280: 27`, `degrade_sizes`, `reserve_after_s: 120`), mesher, texture,
+  OpenMVS path; `qa.stage4` bands. `configs/fast.yaml` (960 px) / `accurate.yaml` (1920 px, 12 views).
+- `src/pipeline.py` — Track A stage: runs after conditioning under `budget.stage("track_a_mvs")`;
+  while Track B is unbuilt its allowance and refine_ba's (300 s) are handed to Track A; downgrades
+  become stage warnings; unbuilt manifest stages of a built stage say so in their skip reason.
+- `src/stages.py` — Stage 4 **BUILT** (Track A); summary says Track B is planned.
+- `ui/stages/__init__.py` — panel registered. `requirements.txt` — `plyfile` now required.
+- `tests/test_core.py` (preset assertion on the new keys), `tests/test_stage1_eval.py`,
+  `tests/test_stage2_eval.py` (their fixtures now request `ingest`+`condition` only: with Stage 4
+  built, a default run reconstructs, which took the suite from 70 s to > 10 min).
+
+**Decisions:**
+- **Dense resolution is chosen before the call, from a cost model.** PatchMatch is one GPU call and
+  cannot degrade halfway, so frames × s/frame × (px/1280)² is compared with the stage's remaining
+  time minus a reserve, stepping down `degrade_sizes` and logging each step. Frames smaller than the
+  target are costed at their own size. On the box, Esri at the default budget projects 612 s at
+  1280 px against ~385 s available, so **a default run densifies at 960 px** and logs it; the
+  `accurate` preset (budget 3600 s) keeps 1920 px.
+- **Focal from DJI SRT too:** `focal_mm` there is the 35 mm-equivalent OSD value, so
+  f_px = f × width / 36. The demo run used it (`telemetry_focal_35mm`).
+- **Dynamic masks reach SfM:** Stage 2's `<stem>_exclude.png` are inverted into COLMAP's
+  `<image>.png` convention (0 = no features). Not yet applied to fusion (masks are in distorted space).
+
+**Bugs found by the new tests (fixed):**
+- OpenMVS `ReconstructMesh` can clean a thin surface to nothing, **exit 0 and write no file**; Track A
+  then crashed reading it. An empty or missing mesh is now a failure that falls back to Poisson.
+- An empty Poisson mesh loads in `trimesh` as an empty `Scene`; `clean_mesh` now raises "empty mesh"
+  and Track A reports "dense point cloud only" instead of an `AttributeError`.
+
+**Measured (laptop CPU, pipeline `--stage track_a` on `demo_flight`):** 7 min 23 s; 43/43 registered,
+reproj 0.161 px, 1 155 951 dense points (OpenMVS CPU, 235.6 s), mesh 604 480 faces (2.0 per vertex),
+textured; scorecard **95.5/100** (10 pass, 1 warn = no GPU, 5 info). The demo is planar and cannot
+judge 3D quality (§4); this run checks plumbing.
+
+**Tests:** 364 passed / 0 failed (was 332; +32).
+
+**Open issues:** S4-9 added (fusion ignores dynamic masks). S4-1, S4-7, S4-8 still open.
+
+**Next:** box: `git pull`, full pipeline on Esri (Stages 1–4, default preset) and record the scorecard;
+then Track B from the VGGT probe results.

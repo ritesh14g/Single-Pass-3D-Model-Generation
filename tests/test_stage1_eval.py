@@ -28,7 +28,9 @@ def _run(tmp_path, telemetry="modern", **kwargs):
     video, sidecar, _ = generate_synthetic_flight(tmp_path / "in", telemetry=telemetry, **kwargs)
     cfg = load_config(overrides=["run.resume=false", "logging.level=ERROR"])
     run_dir = tmp_path / "run"
-    run_pipeline(RunInputs(video=video), cfg, run_dir=run_dir)
+    # Stages 1-2 only: Stage 4 is built too, and a CPU reconstruction of a 150-frame
+    # flight would add minutes to a test that is about ingest.
+    run_pipeline(RunInputs(video=video), cfg, run_dir=run_dir, stages=["ingest", "condition"])
     manifest = RunManifest.load(run_dir)
     outputs = IngestOutputs.load(run_dir / "ingest", manifest.stages["ingest"].metrics)
     truth = load_ground_truth(video)
@@ -42,9 +44,10 @@ def good_run(tmp_path_factory):
 
 class TestRegistry:
     def test_built_stages(self):
-        assert built_manifest_stages() == ["ingest", "condition"]
+        assert built_manifest_stages() == ["ingest", "condition", "track_b", "refine_ba", "track_a"]
         assert get_stage("ingest").status is BuildStatus.BUILT
         assert get_stage("condition").status is BuildStatus.BUILT
+        assert get_stage("recon").status is BuildStatus.BUILT
 
     def test_every_manifest_stage_belongs_to_exactly_one_spec_stage(self):
         from src.core.manifest import STAGE_ORDER
@@ -54,12 +57,13 @@ class TestRegistry:
 
 
 class TestStageOneRun:
-    def test_only_built_stages_run_by_default(self, good_run):
+    def test_only_requested_stages_run(self, good_run):
         manifest, *_ = good_run
         assert manifest.stages["ingest"].status is StageStatus.DONE
         assert manifest.stages["condition"].status is StageStatus.DONE
         assert manifest.stages["fusion"].status is StageStatus.SKIPPED
         assert "planned" in manifest.stages["fusion"].skip_reason
+        assert manifest.stages["track_a"].status is StageStatus.SKIPPED
 
     def test_telemetry_is_written_unfiltered(self, good_run):
         # GPS filtering is §5.6 (Stage 2); Stage 1 must record the input as parsed.

@@ -28,7 +28,7 @@ def conditioned_run(tmp_path_factory):
     video, _, _ = generate_synthetic_flight(tmp_path / "in", frames=60)
     cfg = load_config(overrides=["run.resume=false", "logging.level=ERROR"])
     run_dir = tmp_path / "run"
-    run_pipeline(RunInputs(video=video), cfg, run_dir=run_dir)
+    run_pipeline(RunInputs(video=video), cfg, run_dir=run_dir, stages=["ingest", "condition"])
     manifest = RunManifest.load(run_dir)
     outputs = ConditionOutputs.load(run_dir / "condition")
     evaluation = evaluate_condition(outputs, Config(manifest.config))

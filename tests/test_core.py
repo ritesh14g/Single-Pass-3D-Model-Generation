@@ -34,7 +34,7 @@ class TestConfig:
         default = load_config()
         assert fast.preset == "fast"
         # A preset changes what it names and inherits everything else.
-        assert fast.recon.track_a.pc_quality != default.recon.track_a.pc_quality
+        assert fast.recon.track_a.dense.max_image_size != default.recon.track_a.dense.max_image_size
         assert fast.fusion.zones.zone1_min_triangulation_deg == default.fusion.zones.zone1_min_triangulation_deg
 
     def test_cli_overrides_win(self):
