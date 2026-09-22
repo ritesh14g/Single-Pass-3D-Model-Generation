@@ -278,7 +278,7 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex), **and it contains NaN vertex coordinates** (numpy `invalid value` warnings in the cross products during cleaning; `trimesh.split` then stalled) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
 | S4-6 | 4 | **pycolmap-cuda12's Poisson (Linux) breaks meshes the Windows pycolmap builds cleanly.** Same 447 k-point box cloud, depth 11, trim 10: box → 1.82 M faces, 121 743 fragments, 4 564 NaN vertices; laptop → 946 k faces, 30 pieces, 0 NaN, at 1, 3 and 8 threads alike. The cloud itself has no NaN coordinates or normals | **Worked around 2026-09-21**: the probe meshes with OpenMVS `ReconstructMesh` (Delaunay) on the COLMAP cloud imported with `InterfaceCOLMAP -p fused.ply` (reads `fused.ply.vis`): 659 k faces, ~2 faces/vertex, 21 s; TextureMesh then succeeds in 81 s. Poisson + `clean_mesh` stays as the fallback. Not reported upstream yet |
 | S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
-| S4-8 | 4 | **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
+| S4-8 | 4 | **(presets chosen 2026-09-22; scale problem open)** **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -1517,3 +1517,27 @@ that copy; verified 22 frames / 22 files / 22 `patch-match.cfg` references.
 `scripts/dense_variants_round2b.txt`.
 
 **Next:** box: round 2b (the two every-2 variants).
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Dense sweep round 2b; dense presets chosen (S4-8)
+**Measured (box):** every-other-frame dense (23 of 45 frames) — 1920/8/geom: 436.2 s, 43 244 points,
+**8 284 m²** (−86% vs all frames); 1280/8/geom: 268.6 s, 39 209 points, **11 335 m²** (−82%).
+
+**Dead end (also §4):** ❌ **Dense stereo on a frame subset.** Stage 1 already selects for ~70–80%
+overlap, so halving frames leaves most surface seen by too few views, and fusion
+(`min_num_pixels` 5, `filter_min_num_consistent` 2) discards it. Coverage fell 5–7× while time
+fell only 2.4×. Dense needs every frame Stage 1 keeps. (`--dense-every` stays in the probe for
+footage selected with much higher overlap.)
+
+**Decision — Track A dense presets (all keep the geometric pass and all frames):**
+- default: 1280 px, 8 source views — 614 s here, footprint 105%, points 69% (~15 cm/px on Esri)
+- accurate: 1920 px, 12 source views — 1113 s, 100%, 99% (~10 cm/px)
+- fast: 960 px, 8 source views — 436 s, 107%, 54% (~20 cm/px)
+Source views are not a speed lever at full resolution (20 → 8: −9% time); pixel count is.
+
+**S4-8 stays open:** ~14 s/frame at the default → ~1 h of dense for a 10-min video vs the §9 4-min
+MVS budget. Remaining levers: Track B depth for all frames with MVS only on Zone 1 (spec hybrid),
+an OpenMVS densify built with CUDA on the box, and fusion `min_num_pixels` 5 → 3 (noise trade).
+
+**Tests:** not run — no code change this entry.
+
+**Next:** build `src/recon/track_a_colmap.py` with these presets in `configs/`.
