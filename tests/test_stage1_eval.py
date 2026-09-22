@@ -44,7 +44,9 @@ def good_run(tmp_path_factory):
 
 class TestRegistry:
     def test_built_stages(self):
-        assert built_manifest_stages() == ["ingest", "condition", "track_b", "refine_ba", "track_a", "geo", "export"]
+        assert built_manifest_stages() == ["preflight", "ingest", "condition", "track_b", "refine_ba", "track_a",
+                                           "geo", "export"]
+        assert get_stage("input_check").status is BuildStatus.BUILT
         assert get_stage("ingest").status is BuildStatus.BUILT
         assert get_stage("condition").status is BuildStatus.BUILT
         assert get_stage("recon").status is BuildStatus.BUILT

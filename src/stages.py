@@ -50,6 +50,13 @@ class StageSpec:
 
 STAGES: tuple[StageSpec, ...] = (
     StageSpec(
+        number=0, key="input_check", title="Input check", spec_ref="§1.3, §4",
+        summary="Accepts any drone video container/codec and any telemetry format; checks resolution, decoding, "
+                "GPS presence and sync, physical consistency and feasibility before the budget is spent.",
+        status=StageStatus.BUILT, execution_order=0,
+        manifest_stages=("preflight",), budget_keys=("preflight",),
+    ),
+    StageSpec(
         number=1, key="ingest", title="Ingest", spec_ref="§4",
         summary="Streaming video decode, telemetry parsing (SRT/CSV/EXIF), adaptive overlap-based frame selection with blur gate.",
         status=StageStatus.BUILT, execution_order=1,

@@ -24,8 +24,11 @@ rasterio>=1.3
 trimesh>=4
 pygltflib>=1.16
 
+av>=12        # PyAV: container/codec probing and keyframe sampling (Stage 0), I-frame detection (§5.3)
+
 # Optional — each has a logged fallback when absent
-# av            # PyAV: I-frame detection for keyframe preference (§5.3)
+# pyulog        # PX4 .ulg flight logs (Stage 0/1 telemetry)
+# pymavlink     # ArduPilot .bin / MAVLink .tlog logs (Stage 0/1 telemetry)
 # ultralytics   # YOLOv8-seg: semantic dynamic-object masking (§5.5)
 # torch         # Track B (§7.2); CUDA build on the GPU box
 # PyNvVideoCodec  # NVDEC GPU decode (§4.1); needs torch with CUDA. Falls back to OpenCV

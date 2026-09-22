@@ -35,6 +35,92 @@ device:
 # ---------------------------------------------------------------------------
 # Stage 1 — Ingest (§4)
 # ---------------------------------------------------------------------------
+# Stage 0 — input check (src/preflight/). Runs before ingest and proves the input can
+# produce every output; BLOCK stops the run (unless --accept-input), WARN is reported.
+preflight:
+  enabled: true
+  # Stop the pipeline on a blocking problem. The CLI's --accept-input turns this off per run.
+  block_on_fail: true
+  # Correct a telemetry time offset measured from video motion vs GPS speed, when confident.
+  apply_time_offset: true
+  sampling:
+    # Keyframes spread over the clip; a 10-minute 4K clip decodes in well under a minute.
+    max_samples: 180
+    width: 960
+    min_gap_s: 1.0
+    # Features are detected on a smaller copy; decoding and detection run on this many threads.
+    feature_width: 640
+    workers: 3
+  video:
+    # PS §1.3: drone video 1080p / 4K. Below 720p the input is refused.
+    good_short_side_px: 1080
+    min_short_side_px: 720
+    good_fps: 24
+    min_fps: 10
+    min_duration_s: 5
+    # PS §1.4: a 10-minute video in 15 minutes.
+    max_duration_s: 600
+    # Compressed bits per pixel per frame; drone originals are ~0.1-0.3, streams ~0.02.
+    good_bits_per_pixel: 0.05
+    min_bits_per_pixel: 0.02
+  quality:
+    # Variance of the Laplacian at the sampled width (960 px), below which a frame is blurred.
+    blur_sharpness_floor: 25
+    dark_brightness: 35
+    overexposed_share: 0.25
+    max_bad_exposure_share: 0.3
+    min_keypoints: 150
+    max_sky_share: 0.3
+    overlay_min_share: 0.002
+    letterbox_min_share: 0.02
+  telemetry:
+    # PS §1.3: GPS is mandatory. false = run scale-free with a warning instead of refusing.
+    require_gps: true
+    good_rate_hz: 5
+    min_rate_hz: 0.9
+    good_coverage: 0.95
+    min_coverage: 0.7
+    max_gap_s: 3.0
+    max_speed_mps: 70
+    # Speed is measured over this window, so a rounded 10 Hz log is not read as teleporting.
+    speed_window_s: 1.0
+    # Share of fixes on whole seconds that marks a 1 s timestamp resolution.
+    whole_second_share: 0.9
+  sync:
+    # Video motion (image shift per second) vs GPS ground speed, over this many seconds of offset.
+    max_search_s: 30
+    step_s: 0.1
+    min_points: 10
+    good_corr: 0.6
+    min_corr: 0.3
+    # The peak must beat the 90th percentile of the correlation at offsets more than 3 s away;
+    # an unrelated track correlates about equally well everywhere.
+    min_peak_margin: 0.05
+    # |offset| up to ok_lag_s passes; up to max_auto_lag_s is corrected; beyond that blocks.
+    ok_lag_s: 0.5
+    max_auto_lag_s: 5.0
+    # A larger offset is accepted (not refused) when the video's recording time and the log's
+    # clock say the same thing to within this many seconds.
+    clock_agreement_s: 2.0
+    # Timing is only measurable when the speed varies (coefficient of variation).
+    min_speed_cv: 0.15
+    hover_speed_mps: 0.5
+    max_contradiction: 0.2
+  authenticity:
+    # Share of feature matches consistent with one rigid scene (fundamental matrix, 1.5 px).
+    rigid_good: 0.6
+    rigid_min: 0.35
+    # The video's embedded location tag vs the GPS track.
+    location_match_m: 300
+    # Encoder / handler strings of editing and transcoding tools.
+    reencoders: [Lavf, HandBrake, Adobe, Premiere, DaVinci, Resolve, CapCut, "Final Cut", iMovie, Shotcut,
+                 Kdenlive, Filmora, x264, x265, VideoProc]
+  feasibility:
+    # Straight-line extent of the flight during the clip, below which there is no parallax.
+    min_path_m: 20
+    # Nadir ground sample distance above which <= 1 m accuracy is at risk.
+    max_gsd_m: 0.3
+
 ingest:
   video:
     # Try hardware decode first; fall back to software with a logged downgrade.
@@ -61,6 +147,29 @@ ingest:
     # clock, so it needs no alignment search and is the most trustworthy source
     # when present. It is absent from DJI footage and falls through harmlessly.
     sources: [klv, srt, csv, exif]
+    # Any telemetry file is accepted whatever its name or extension: the kind is sniffed from
+    # its content (src/ingest/formats.py). Streams inside the video (KLV, DJI subtitle track,
+    # GoPro GPMF) and sidecars (SRT, CSV/TXT, DJI flight record, GPX, KML, GeoJSON/JSON,
+    # PX4 ULog, ArduPilot .bin, MAVLink .tlog) all land in the same canonical table.
+    # Also look for a telemetry file with a different name in the video's folder (e.g. a DJI
+    # "telemetry.csv"). Only when the folder holds exactly one video.
+    scan_folder: true
+    # Video time 0 corresponds to telemetry time `time_offset_s` (s). null = work it out:
+    # per-frame sources are already on the video clock; flight logs use their recording flag,
+    # else their UTC clock against the video's creation time (time-zone offsets removed).
+    time_offset_s: null
+    # A log's UTC clock and the video's creation time are matched after removing a whole
+    # number of these (s): cameras often stamp local time labelled as UTC.
+    timezone_step_s: 900
+    # Largest leftover (s) after the time-zone step for the clocks to count as matching.
+    clock_match_tolerance_s: 120
+    # Flight logs covering the whole flight (motors on to off): the rows flagged as recording
+    # pick the segment that matches the video.
+    recording:
+      columns: [CUSTOM.isVideo, isVideo, is_video, recording, isRecording, video_recording, camera_recording]
+      true_values: [Recording, "true", "1", "yes", "on"]
+      duration_tolerance_s: 3.0
+      padding_s: 2.0
     # Accept a fix only if the reported horizontal accuracy is below this (m).
     # null disables the check (most DJI SRT variants do not report it).
     max_hdop: null
@@ -85,11 +194,15 @@ ingest:
     csv_column_map:
       # Canonical name -> list of accepted header spellings (case-insensitive,
       # matched after stripping non-alphanumerics). Extend, never hard-code.
-      t: [time, timestamp, datetime, time_s, elapsed]
+      # Wall-clock columns first: they tie the log to the video's clock.
+      t: [CUSTOM.updateTime, updateTime, datetime_utc, datetime(utc), gps_time_utc, time, timestamp, datetime,
+          time_s, elapsed]
       lat: [lat, latitude, gpslatitude, osd_lat]
       lon: [lon, long, longitude, gpslongitude, osd_lon]
-      alt_gps: [alt, altitude, gpsaltitude, osd_alt, height]
-      alt_baro: [baroalt, barometricaltitude, relativealtitude, osd_relalt]
+      # DJI/AirData: OSD.altitude is above sea level, OSD.height is above the takeoff point.
+      alt_gps: [alt, altitude, gpsaltitude, osd_alt, altitude_msl, altitude_above_seaLevel(meters)]
+      alt_baro: [baroalt, barometricaltitude, relativealtitude, osd_relalt, height, relative_height,
+                 height_above_takeoff(meters)]
       roll: [roll, gimbalroll, osd_roll]
       pitch: [pitch, gimbalpitch, osd_pitch]
       yaw: [yaw, heading, gimbalyaw, osd_yaw]
@@ -686,6 +799,7 @@ budget:
   enabled: true
   total_s: 900            # 15 minutes for a 10-minute video
   stages:
+    preflight: 60
     ingest: 60
     condition: 120
     track_b: 120

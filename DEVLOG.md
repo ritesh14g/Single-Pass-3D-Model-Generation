@@ -69,6 +69,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 
 | # | Stage | Spec | Status | Lab panel | Evaluator | Notes |
 |---|-------|------|--------|-----------|-----------|-------|
+| 0 | Input check | §1.3, §4 | 🟢 **BUILT** | `ui/stages/stage0_input_check.py` | `src/qa/stage0_eval.py` | Runs before ingest; PASS/WARN/BLOCK per check with a fix. Any container/codec FFmpeg reads; telemetry sniffed by content (KLV, SRT, embedded subtitle track, GoPro GPMF, CSV/TXT, DJI flight record, GPX, KML, GeoJSON/JSON, ULog, DataFlash, tlog). 13 sample clips triaged in 4-35 s each |
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
@@ -93,6 +94,14 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `src/core/manifest.py` | infra | Resumable run manifest; config fingerprint per stage |
 | `src/core/budget.py` | infra | §9 time budget, projection, degradation ladder |
 | `src/core/device.py` | infra | Device detection; VGGT-Ω chunk sizing from spec memory table |
+| `src/preflight/analyzer.py` | 0 | The input check: format, video requirements, telemetry, sync, physical consistency, feasibility |
+| `src/preflight/sampling.py` | 0 | Whole-video keyframe sampling: one demux pass, selected keyframes decoded in parallel |
+| `src/preflight/vision.py` | 0 | Per-frame quality, per-pair motion and rigid-scene share, burned-in overlays, letterbox |
+| `src/preflight/checks.py` | 0 | Check record (id, group, status, value, detail, fix) and the verdict rule |
+| `src/ingest/formats.py` | 0/1 | What a file really is, by content: container probe, telemetry sniffing and discovery |
+| `src/ingest/telemetry_formats.py` | 1 | GPX, KML, GeoJSON/JSON, PX4 ULog, ArduPilot `.bin`/`.tlog`, embedded DJI subtitle track, GoPro GPMF; clock alignment to the video |
+| `configs/cameras.yaml` | 0/4 | Known drone cameras → nominal horizontal FOV, for an intrinsics prior when telemetry has none |
+| `scripts/check_corpus.py` | 0 | Run the input check over a folder of clips; one line each |
 | `src/ingest/video_reader.py` | 1 | Streaming decode (grab-skip), HW decode attempt, keyframes via PyAV |
 | `src/ingest/telemetry.py` | 1 | DJI SRT (3 dialects) / CSV / TXT / EXIF parsing → `telemetry.parquet`; ENU helper |
 | `src/ingest/dji_flight_record.py` | 1 | Binary `DJIFlightRecord_*.txt` (v≤12) decoder; recording segments; video alignment |
@@ -2046,3 +2055,87 @@ before-after), so box pastes show the lag and the gate decision.
 it). DJI verification is still to do.
 
 **Next:** Stage 3 (occlusion zones and gap reporting), then Stage 6 (viewer and QA report), then the README.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — accuracy against real ground truth; Stage 0 input check
+**Two threads: what our accuracy really is (steps 1–3 of the S4-1 follow-up), and refusing bad input early.**
+
+#### A. Measured accuracy against USGS ground truth (Esri, laptop run)
+- **Step 1 — where the residual comes from.** Sliding-window similarity fits: the model matches GPS to
+  **1.1 m over any ~90 m stretch**, but each window's scale differs by ±5% from the global fit, i.e. the model
+  is locally right and globally bent/stretched. The bend is unchanged by the GPS-prior pass (§7.3 priors are
+  too weak against 128k reprojection residuals).
+- **Step 2 — pose-prior bundle adjustment sweep** (`create_pose_prior_bundle_adjuster`), judged on GPS fixes
+  **held out** of the adjustment: σ 0.5 m → held-out 2.75 m; **σ 0.05 m → 1.25 m** at +4% reprojection;
+  σ 0.02 m → 1.04 m at +14% (fit 0.75 m < held-out: overfitting starts). Caution: `compute_mean_reprojection_error`
+  reads cached point errors — call `update_point_3d_errors()` first or BA looks free. ❌ Huber on the prior made
+  it worse here (4.6 m). **Not enabled yet** — see the reference check below for why.
+- **Step 3 — independent reference.** USGS 3DEP 1 m lidar (FL_Peninsular_FDEM_Desoto_2018, EPT on AWS) and NAIP
+  imagery for the Esri site, converted NAD83(2011)/NAVD88 → WGS84(ITRF2014 @2017.7)/EGM96 with pyproj:
+  **dE −0.578, dN +0.621, dH +0.269 m** at this site.
+  - ❌ **Cloud-to-cloud ICP is useless here** and quietly so: a 3.8 m shift injected into our cloud was *not*
+    recovered (median nearest-neighbour distance moved 0.94 → 0.99 m) because lidar vegetation is a volume of
+    points. Any "0.4 m agreement" from that method is meaningless.
+  - ✅ **Surface-to-surface** (1 m DSMs, NCC of high-passed height maps per 100 m patch; heights on lidar
+    *open ground*) **recovers an injected 3.6 m shift correctly** and is what the numbers below use.
+  - **Esri as delivered: 2–14 m horizontal**, varying smoothly along the flight, and a cross-track height tilt.
+    Fitting one 7-parameter transform leaves **1.3 m horizontal / 1.7 m vertical**: the *shape* is good, the
+    *placement* is wrong — our model is **3.05% too small**, rotated 0.48°, tilted 0.83°.
+  - **The Esri KLV track itself is wrong**: putting our cameras where the lidar says they were, the KLV path is
+    7–13 m away and **2.3–2.9% short**. NAIP agrees independently (same drift pattern).
+- **Conclusion:** "camera centres vs GPS" measures agreement with the telemetry, not accuracy. On this clip the
+  telemetry is the limit; tightening GPS priors would pull the model *onto a wrong track*. DJI_0047 (real 10 Hz
+  log, same day, same lidar coverage) is the test that decides whether to enable step 2 — its laptop run is poor
+  (15.9 m, self-calibrated focal, 2 pieces, 86 min CPU) and needs a box run with today's fixes.
+
+#### B. Stage 0 — the input check (new; user request: "eliminate wasted time on bad input")
+**Accept everything readable, refuse the unusable, explain both.** `python -m src.cli check <video>`, and `run`
+does it first (blocking unless `--accept-input`). 4–35 s per clip; 24 s on a 104 s 4K clip on the laptop.
+- **Formats by content, never by extension** (`src/ingest/formats.py`): every MISB sample is an MPEG-2 TS named
+  `.ts`, `.mp4`, `.mpeg4` or `.H264`. Telemetry sniffed and read from KLV, DJI SRT, **a subtitle track inside the
+  MP4**, **GoPro GPMF**, CSV/TXT, DJI flight records, **GPX, KML, GeoJSON/JSON, PX4 ULog, ArduPilot `.bin`,
+  MAVLink `.tlog`**; found beside the video under any name (DJI's `telemetry.csv`). Unsupported input gets a
+  named reason and a fix (a still image is called a still image, not a decode failure).
+- **Real input flaws this found and fixed in ingest:** DJI logs cover the *whole flight* — the recording flag now
+  selects the segment matching the video (DJI_0002 has two; 0001/0732/0872 start 27–46 s in, which would have put
+  GPS minutes out of step); a log in **latin-1** (Spanish place names) used to fail to read entirely; DJI writes
+  **local time labelled as UTC**, so clock alignment removes whole time-zone steps; `OSD.altitude` vs `OSD.height`
+  now map to absolute vs above-takeoff.
+- **Checks** (each PASS/WARN/BLOCK + fix): decodable start to end; 1080p/4K, fps, duration, compression; sharpness,
+  exposure, texture, sky, burned-in OSD, letterbox; GPS present (PS-mandatory), rate, timestamp resolution,
+  coverage, gaps, speed, altitude datum, camera pitch (from slant range/frame centre for ISR, gimbal for DJI),
+  placeholder metadata; **sync**; **physical consistency**; parallax, GSD, known camera, budget.
+- **Sync measures the telemetry-to-video offset from the picture**: image motion vs GPS speed over a ±(clip/2)
+  search. It finds Esri's lag **independently of reconstruction: −1.3 s and −1.5 s** (S4-1 found −1.7…−1.9 s from
+  SfM), DJI_0047 −0.6 s, and DJI_0001 **−10.5 s** — corroborated by that file's own recording time (−10.9 s), so
+  it is corrected, not refused. Applied to ingest, so every later stage sees telemetry on the video's clock.
+- **"Not AI-generated" is answered honestly**: no detector claims proof. What is measured is physical consistency —
+  the share of matches fitting one rigid 3-D scene (fundamental matrix, or a homography where the ground is flat),
+  motion agreeing with GPS, and the file's own metadata (encoder, embedded location, date) agreeing with the
+  telemetry. The report says so in as many words.
+- **Camera table** (`configs/cameras.yaml`): a known drone gives a nominal FOV (Phantom 3/4 → 81.7°, matching
+  Esri's KLV 81.0°). Ingest writes it as `hfov_deg` with `hfov_source`; Track A *seeds* the focal length with a
+  nominal value and lets BA refine it, and still holds a sensor-measured FOV fixed.
+
+**Tuning that came out of the 13-clip sweep** (`scripts/check_corpus.py`): speed is measured over a 1 s window (a
+rounded 10 Hz log looked like 166 "impossible jumps"); the correlation clips the 5th–95th percentile (one bad
+frame pair at take-off flipped the lag by 10 s); a shallow camera angle correlates weakly with GPS by nature, so
+that is a warning, not a refusal; a gimbal held at one pitch is normal, only exactly-zero attitude and a constant
+ground height are called placeholders.
+
+**Created:** `src/preflight/{__init__,analyzer,sampling,vision,checks}.py`, `src/ingest/formats.py`,
+`src/ingest/telemetry_formats.py`, `src/qa/stage0_eval.py`, `ui/stages/stage0_input_check.py`,
+`configs/cameras.yaml`, `scripts/check_corpus.py`, `tests/test_preflight.py` (15 tests).
+**Modified:** `src/ingest/telemetry.py` (encodings, recording segments, wall clock, discovery-based loading),
+`src/cli.py` (`check`, `--telemetry`, `--accept-input`), `src/pipeline.py` (Stage 0, offset and camera into
+ingest), `src/core/manifest.py`, `src/stages.py`, `src/recon/{alignment,track_a_colmap}.py` (nominal FOV),
+`ui/lab.py` (the Lab accepts its own degraded test clips), `configs/default.yaml` (`preflight:`),
+`tests/test_stage1_eval.py`, `requirements.txt`.
+
+**Tests:** 413 passed / 0 failed (was 397; +15 Stage 0, +1 registry).
+
+**Open issues:** S0-1 the input check does not verify absolute position at all (that needs reference data —
+see A); S0-2 oblique/orbit footage correlates weakly with GPS speed, so the offset is only measurable on
+translating flight; S0-3 `--telemetry` accepts several files but only the first of each kind is merged.
+
+**Next:** box: DJI_0047 with the camera FOV prior and the measured offset, then decide on the σ 0.05 m
+pose-prior BA against lidar, not against GPS; then Stage 3, Stage 6.

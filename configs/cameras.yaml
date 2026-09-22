@@ -1,0 +1,34 @@
+# Known drone cameras, for an intrinsics prior when the telemetry carries no focal length
+# or field of view. Matched (case-insensitive substring) against the video's make/model tags,
+# the DJI camera code in the encoder/handler, and the flight log's aircraft-type column.
+#
+# focal_35mm: 35 mm-equivalent focal length of the stills mode (diagonal equivalence).
+# video_width_fraction: share of the sensor width the video mode uses (1.0 = full width).
+#   Horizontal FOV of the video = 2 * atan(17.3 * video_width_fraction / focal_35mm)
+#   (17.3 mm = half the width of a 4:3 frame whose diagonal is 43.27 mm).
+# These are nominal values: treat the result as a prior, not a calibration.
+cameras:
+  - {names: ["FC300X", "FC300S", "P3 Professional", "P3 Advanced", "Phantom 3"], model: "DJI Phantom 3 Pro/Adv (FC300X)", focal_35mm: 20, video_width_fraction: 1.0}
+  - {names: ["FC330", "P4", "Phantom 4"], model: "DJI Phantom 4 (FC330)", focal_35mm: 20, video_width_fraction: 1.0}
+  - {names: ["FC6310", "P4 Pro", "Phantom 4 Pro", "P4P"], model: "DJI Phantom 4 Pro (FC6310)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC6510", "P4 RTK", "Phantom 4 RTK"], model: "DJI Phantom 4 RTK (FC6310R)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC220", "Mavic Pro"], model: "DJI Mavic Pro (FC220)", focal_35mm: 26, video_width_fraction: 1.0}
+  - {names: ["FC2103", "Mavic Air"], model: "DJI Mavic Air (FC2103)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC3170", "Mavic Air 2"], model: "DJI Mavic Air 2 (FC3170)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC3411", "Air 2S"], model: "DJI Air 2S (FC3411)", focal_35mm: 22, video_width_fraction: 1.0}
+  - {names: ["L1D-20c", "Mavic 2 Pro"], model: "DJI Mavic 2 Pro (L1D-20c)", focal_35mm: 28, video_width_fraction: 1.0}
+  - {names: ["FC2204", "Mavic 2 Zoom"], model: "DJI Mavic 2 Zoom (FC2204, wide end)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC2403", "Mavic 2 Enterprise"], model: "DJI Mavic 2 Enterprise", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC7203", "FC7303", "Mini 2", "Mavic Mini"], model: "DJI Mini / Mini 2", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC3582", "Mini 3"], model: "DJI Mini 3 / 3 Pro (FC3582)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["FC8482", "Mini 4"], model: "DJI Mini 4 Pro (FC8482)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["L2D-20c", "Mavic 3"], model: "DJI Mavic 3 (Hasselblad L2D-20c)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["M3E", "Mavic 3E", "Mavic 3 Enterprise"], model: "DJI Mavic 3 Enterprise", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["ZH20", "H20", "Zenmuse H20"], model: "DJI Zenmuse H20 (wide)", focal_35mm: 24, video_width_fraction: 1.0}
+  - {names: ["ZENMUSE P1", "P1"], model: "DJI Zenmuse P1 (35 mm)", focal_35mm: 35, video_width_fraction: 1.0}
+  - {names: ["EVO II Pro", "XT705"], model: "Autel EVO II Pro", focal_35mm: 29, video_width_fraction: 1.0}
+  - {names: ["EVO II", "XT701"], model: "Autel EVO II", focal_35mm: 26, video_width_fraction: 1.0}
+  - {names: ["Skydio 2", "Skydio"], model: "Skydio 2", focal_35mm: 20, video_width_fraction: 1.0}
+  - {names: ["ANAFI", "Parrot"], model: "Parrot Anafi", focal_35mm: 23, video_width_fraction: 1.0}
+  # Action cameras: very wide, strongly distorted lenses. The prior is rough; say so.
+  - {names: ["GoPro", "HERO"], model: "GoPro HERO (Wide)", focal_35mm: 15, video_width_fraction: 1.0, fisheye: true}

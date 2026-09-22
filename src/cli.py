@@ -1,15 +1,19 @@
 """Command-line interface.
 
     python -m src.cli run data/raw/flight.mp4 --preset fast
+    python -m src.cli run data/raw/flight.mp4 --telemetry flight.csv
     python -m src.cli run data/raw/flight.mp4 --resume data/interim/flight_20260912_101500
+    python -m src.cli check data/raw/flight.mp4
     python -m src.cli inspect data/raw/flight.mp4
     python -m src.cli status data/interim/flight_20260912_101500
     python -m src.cli config --preset accurate --set budget.total_s=1800
 
-``inspect`` exists because the most expensive mistake on competition day is
-discovering at minute twelve of a fifteen-minute budget that the telemetry was
-in a dialect nothing parsed. It answers "what did you actually find in this
-input?" in a few seconds, without reconstructing anything.
+``check`` is Stage 0, the input check: it answers "can this input produce the outputs,
+and if not, why, and what would fix it?" in well under a minute. ``run`` performs the same
+check first and refuses a blocking input unless ``--accept-input`` is given, because the
+most expensive mistake on competition day is discovering at minute twelve of a
+fifteen-minute budget that the input was never going to work. ``inspect`` is the quick
+version: what was found in the file, without the analysis.
 """
 
 from __future__ import annotations
@@ -56,6 +60,12 @@ def cli() -> None:
               help="DJI SRT sidecar. Found automatically next to the video when omitted.")
 @click.option("--csv", "csv_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Flight-log CSV. Found automatically next to the video when omitted.")
+@click.option("--telemetry", "telemetry_paths", multiple=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Telemetry file in any supported format (KLV, SRT, CSV/TXT, DJI flight record, GPX, KML, "
+                   "GeoJSON/JSON, PX4 .ulg, ArduPilot .bin, MAVLink .tlog). Repeatable.")
+@click.option("--accept-input", is_flag=True,
+              help="Run even if the input check finds a blocking problem.")
 @click.option("--gcp", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Optional GCP file. The system is designed to work with zero GCPs.")
 @click.option("--out", "run_dir", type=click.Path(file_okay=False, path_type=Path),
@@ -68,10 +78,11 @@ def cli() -> None:
 @click.option("--mode", type=click.Choice(["A", "B", "hybrid", "auto"]),
               help="Reconstruction mode (spec §7.4). Overrides the config.")
 def run(
-    video: Path, preset, config_files, overrides, srt, csv_path, gcp,
+    video: Path, preset, config_files, overrides, srt, csv_path, telemetry_paths, accept_input, gcp,
     run_dir, resume_dir, stages, force, mode,
 ) -> None:
     """Run the pipeline on VIDEO."""
+    from src.preflight import InputRejected
     from src.pipeline import RunInputs, run_pipeline
 
     override_list = list(overrides)
@@ -82,14 +93,20 @@ def run(
     if resume_dir and run_dir:
         raise click.UsageError("--resume and --out are mutually exclusive")
 
-    inputs = RunInputs(video=video, srt=srt, csv=csv_path, gcp=gcp)
-    result = run_pipeline(
-        inputs=inputs,
-        cfg=cfg,
-        run_dir=resume_dir or run_dir,
-        stages=list(stages) or None,
-        force=force,
-    )
+    inputs = RunInputs(video=video, srt=srt, csv=csv_path, gcp=gcp, telemetry=list(telemetry_paths),
+                       accept_input=accept_input)
+    try:
+        result = run_pipeline(
+            inputs=inputs,
+            cfg=cfg,
+            run_dir=resume_dir or run_dir,
+            stages=list(stages) or None,
+            force=force,
+        )
+    except InputRejected as rejected:
+        click.echo()
+        click.echo(rejected.report.text())
+        raise click.ClickException(str(rejected)) from None
 
     click.echo()
     _echo_status(result.manifest)
@@ -108,6 +125,40 @@ def run(
         click.echo("\n  stages not run:")
         for name, reason in result.skipped_stages.items():
             click.echo(f"    - {name}: {reason}")
+
+
+@cli.command()
+@click.argument("video", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@_common_config_options
+@click.option("--srt", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--csv", "csv_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--telemetry", "telemetry_paths", multiple=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Telemetry file in any supported format. Repeatable.")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
+              help="Write input_report.json (and the sampled series) here.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a readable report.")
+def check(video: Path, preset, config_files, overrides, srt, csv_path, telemetry_paths, out_dir, as_json) -> None:
+    """Check VIDEO and its telemetry before running anything (Stage 0)."""
+    from src.preflight import analyze_input
+
+    cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
+    setup_logging(None, level="WARNING", jsonl=False)
+    report = analyze_input(video, cfg, telemetry_paths=list(telemetry_paths), srt=srt, csv=csv_path)
+    if out_dir:
+        report.save(out_dir)
+    if as_json:
+        click.echo(json.dumps(report.to_dict(), indent=2, default=str))
+    else:
+        colour = {"READY": "green", "READY_WITH_WARNINGS": "yellow", "BLOCKED": "red"}[report.verdict]
+        click.echo()
+        click.secho(report.text(), fg=None)
+        click.echo()
+        click.secho(f"  verdict: {report.verdict.replace('_', ' ').lower()}", fg=colour, bold=True)
+        if report.verdict == "BLOCKED":
+            click.echo("  Fix the blocking problems above, or run with --accept-input to process it anyway.")
+    if report.blocked:
+        raise SystemExit(2)
 
 
 @cli.command()

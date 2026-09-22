@@ -134,6 +134,9 @@ class TelemetryTable:
     source: str = "none"
     notes: list[str] = field(default_factory=list)
     wall_time: pd.Series | None = None
+    # How the telemetry clock was tied to the video's: {"method": "video_clock" | "recording_flag"
+    # | "wall_clock" | "offset" | "log_start", ...}. The input check reads it.
+    alignment: dict[str, Any] = field(default_factory=dict)
 
     # -- Construction -------------------------------------------------------
     @classmethod
@@ -265,8 +268,11 @@ class TelemetryTable:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         frame = self.frame.copy()
+        if "wall_time" in frame:
+            frame["wall_time"] = pd.to_datetime(frame["wall_time"], utc=True, errors="coerce")
         frame.attrs["source"] = self.source
         frame.attrs["notes"] = self.notes
+        frame.attrs["alignment"] = self.alignment
         frame.to_parquet(path, index=False)
         return path
 
@@ -277,6 +283,7 @@ class TelemetryTable:
             frame=frame,
             source=str(frame.attrs.get("source", "parquet")),
             notes=list(frame.attrs.get("notes", [])),
+            alignment=dict(frame.attrs.get("alignment", {}) or {}),
         )
 
     def merged_with(self, other: "TelemetryTable") -> "TelemetryTable":
@@ -302,7 +309,8 @@ class TelemetryTable:
         notes = list(self.notes)
         if added:
             notes.append(f"filled {', '.join(sorted(set(added)))} from {other.source}")
-        return TelemetryTable(frame=frame, source=f"{self.source}+{other.source}", notes=notes)
+        return TelemetryTable(frame=frame, source=f"{self.source}+{other.source}", notes=notes,
+                              alignment=self.alignment)
 
 
 # --------------------------------------------------------------------------
@@ -315,7 +323,12 @@ def parse_dji_srt(path: Path | str) -> TelemetryTable:
     and a block that yields nothing usable is skipped rather than fatal.
     """
     path = Path(path)
-    text = path.read_text(encoding="utf-8", errors="replace")
+    return parse_dji_srt_text(read_text_any(path), path.name)
+
+
+def parse_dji_srt_text(text: str, name: str, source_prefix: str = "srt") -> TelemetryTable:
+    """The SRT parser on text: a sidecar file, or a subtitle track demuxed from the video."""
+    path = Path(name)
     records: list[dict[str, Any]] = []
     unknown_keys: set[str] = set()
     blocks = _split_srt_blocks(text)
@@ -364,7 +377,9 @@ def parse_dji_srt(path: Path | str) -> TelemetryTable:
     if not records:
         return TelemetryTable.empty(f"{path.name} parsed to zero usable rows")
 
-    table = TelemetryTable.from_records(records, source=f"srt:{path.name}")
+    table = TelemetryTable.from_records(records, source=f"{source_prefix}:{path.name}")
+    # SRT cues are stamped on the video's own timeline.
+    table.alignment = {"method": "video_clock", "note": "per-frame subtitle cues on the video timeline"}
     table = _normalize_units(table)
     if unknown_keys:
         note = f"ignored unrecognised SRT keys: {', '.join(sorted(unknown_keys))}"
@@ -434,10 +449,29 @@ def _normalize_units(table: TelemetryTable) -> TelemetryTable:
 _CANONICAL_LOG_FIELDS = ("t", "lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm")
 
 
+def read_text_any(path: Path) -> str:
+    """Text in whatever encoding the tool that wrote it used (flight logs carry place names)."""
+    raw = Path(path).read_bytes()
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _read_table(path: Path, **kwargs: Any) -> pd.DataFrame:
+    import io
+
+    return pd.read_csv(io.StringIO(read_text_any(path)), sep=None, engine="python", **kwargs)
+
+
 def parse_flight_csv(
     path: Path | str,
     column_map: Mapping[str, Sequence[str]],
     headerless_order: Sequence[str] = ("lat", "lon", "alt_gps"),
+    video_duration_s: float | None = None,
+    recording: Mapping[str, Any] | None = None,
 ) -> TelemetryTable:
     """Parse a flight-log CSV/TXT, auto-detecting delimiter and columns.
 
@@ -449,7 +483,7 @@ def parse_flight_csv(
     """
     path = Path(path)
     try:
-        frame = pd.read_csv(path, sep=None, engine="python")
+        frame = _read_table(path)
     except Exception as exc:  # noqa: BLE001 - a malformed log is a downgrade, not a crash
         log_downgrade(log, f"flight log {path.name}", "next telemetry source", f"{type(exc).__name__}: {exc}")
         return TelemetryTable.empty(f"could not read {path.name}: {exc}")
@@ -457,7 +491,7 @@ def parse_flight_csv(
     headerless = _looks_headerless(frame.columns)
     if headerless:
         try:
-            frame = pd.read_csv(path, sep=None, engine="python", header=None)
+            frame = _read_table(path, header=None)
         except Exception as exc:  # noqa: BLE001
             log_downgrade(log, f"flight log {path.name}", "next telemetry source", f"{type(exc).__name__}: {exc}")
             return TelemetryTable.empty(f"could not read {path.name}: {exc}")
@@ -468,19 +502,9 @@ def parse_flight_csv(
     else:
         resolved = resolve_csv_columns(frame.columns, column_map)
 
-    if "lat" not in resolved or "lon" not in resolved:
-        note = f"{path.name} has no recognisable latitude/longitude columns (saw {list(frame.columns)[:12]})"
-        log_downgrade(log, f"flight log {path.name}", "next telemetry source", note)
-        return TelemetryTable.empty(note)
-
-    out = pd.DataFrame()
-    out["t"] = _csv_time_column(frame, resolved.get("t"), path)
-    for canonical in ("lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm"):
-        if canonical in resolved:
-            out[canonical] = pd.to_numeric(frame[resolved[canonical]], errors="coerce")
-
-    records = out.to_dict("records")
-    table = TelemetryTable.from_records(records, source=f"csv:{path.name}")
+    table = table_from_frame(frame, resolved, f"csv:{path.name}", path, video_duration_s, recording)
+    if table.is_empty:
+        return table
     if headerless:
         table.notes.append(f"no header row detected; columns assigned positionally as {list(resolved)}")
     else:
@@ -488,6 +512,93 @@ def parse_flight_csv(
     log_event(log, logging.INFO, f"parsed {len(table)} telemetry rows from {path.name}",
               source="csv", rows=len(table), resolved=resolved, headerless=headerless)
     return table
+
+
+def table_from_frame(
+    frame: pd.DataFrame,
+    resolved: Mapping[str, str],
+    source: str,
+    path: Path,
+    video_duration_s: float | None = None,
+    recording: Mapping[str, Any] | None = None,
+) -> TelemetryTable:
+    """Canonical telemetry from any tabular log (CSV, TXT, JSON) whose columns are resolved.
+
+    Timing: a wall-clock time column is kept as ``wall_time`` (so the log can be matched to
+    the video's own clock), and a recording flag (``CUSTOM.isVideo`` in DJI/AirData logs)
+    selects the recording that matches the video. Without either, the log is assumed to
+    start with the video, and the input check says so when the log is much longer.
+    """
+    if "lat" not in resolved or "lon" not in resolved:
+        note = f"{path.name} has no recognisable latitude/longitude columns (saw {list(frame.columns)[:12]})"
+        log_downgrade(log, f"flight log {path.name}", "next telemetry source", note)
+        return TelemetryTable.empty(note)
+
+    out = pd.DataFrame(index=frame.index)
+    out["t"], wall = _csv_time_column(frame, resolved.get("t"), path)
+    for canonical in ("lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm"):
+        if canonical in resolved:
+            out[canonical] = pd.to_numeric(frame[resolved[canonical]], errors="coerce")
+    if wall is not None:
+        out["wall_time"] = wall
+    keep = out["lat"].notna() & out["lon"].notna() & ~((out["lat"] == 0) & (out["lon"] == 0))
+    notes: list[str] = []
+    alignment: dict[str, Any] = {"method": "log_start", "note": "log assumed to start with the video"}
+    flag = _recording_column(frame, list((recording or {}).get("columns", [])))
+    if flag is not None and keep.any():
+        rec = _truthy(frame[flag], list((recording or {}).get("true_values", []))) & keep
+        window = _recording_window(out["t"].to_numpy(dtype=float), rec.to_numpy(), video_duration_s,
+                                   float((recording or {}).get("duration_tolerance_s", 3.0)))
+        if window is not None:
+            start, end, note = window
+            pad = float((recording or {}).get("padding_s", 2.0))
+            keep &= (out["t"] >= start - pad) & (out["t"] <= end + pad)
+            out["t"] = out["t"] - start
+            alignment = {"method": "recording_flag", "column": flag, "note": note}
+            notes.append(note)
+    out = out[keep]
+    table = TelemetryTable.from_records(out.to_dict("records"), source=source)
+    if table.is_empty:
+        return table
+    table.alignment = alignment
+    table.notes.extend(notes)
+    return table
+
+
+def _recording_column(frame: pd.DataFrame, spellings: Sequence[str]) -> str | None:
+    lookup = {_normalize_header(c): c for c in frame.columns}
+    for spelling in spellings:
+        key = _normalize_header(spelling)
+        for norm, original in lookup.items():
+            if norm == key or (len(key) >= 5 and norm.endswith(key)):
+                return original
+    return None
+
+
+def _truthy(series: pd.Series, true_values: Sequence[str]) -> pd.Series:
+    values = {str(v).strip().lower() for v in true_values} or {"recording", "true", "1", "yes"}
+    return series.astype(str).str.strip().str.lower().isin(values)
+
+
+def _recording_window(t: np.ndarray, rec: np.ndarray, video_duration_s: float | None,
+                      tolerance_s: float) -> tuple[float, float, str] | None:
+    """(start, end, note) of the recording that matches the video, or None when the log has none."""
+    if not rec.any():
+        return None
+    edges = np.flatnonzero(np.diff(np.r_[0, rec.astype(int), 0]))
+    segments = [(float(t[a]), float(t[b - 1])) for a, b in zip(edges[::2], edges[1::2])]
+    listing = ", ".join(f"#{i} {s:.1f}-{e:.1f} s ({e - s:.1f} s)" for i, (s, e) in enumerate(segments))
+    durations = np.array([e - s for s, e in segments])
+    if video_duration_s:
+        best = int(np.argmin(np.abs(durations - video_duration_s)))
+        gap = float(abs(durations[best] - video_duration_s))
+        start, end = segments[best]
+        if gap <= tolerance_s:
+            return start, end, f"recordings in log: {listing}; video ({video_duration_s:.1f} s) matched #{best}"
+        return start, end, (f"recordings in log: {listing}; none matches the video ({video_duration_s:.1f} s, "
+                            f"nearest #{best} is {gap:.1f} s off); using it, alignment uncertain")
+    best = int(np.argmax(durations))
+    return segments[best][0], segments[best][1], f"recordings in log: {listing}; video length unknown, using #{best}"
 
 
 def _looks_headerless(columns: Iterable[Any]) -> bool:
@@ -504,12 +615,12 @@ def _looks_headerless(columns: Iterable[Any]) -> bool:
     return numeric / len(values) >= 0.6
 
 
-def _csv_time_column(frame: pd.DataFrame, column: str | None, path: Path) -> pd.Series:
-    """Return elapsed seconds from whatever the log calls time."""
+def _csv_time_column(frame: pd.DataFrame, column: str | None, path: Path) -> tuple[pd.Series, pd.Series | None]:
+    """(elapsed seconds, wall-clock UTC times or None) from whatever the log calls time."""
     if column is None:
         rate_note = f"{path.name} has no time column; assuming rows are evenly spaced at 1 Hz"
         log_event(log, logging.WARNING, rate_note, path=str(path))
-        return pd.Series(np.arange(len(frame), dtype=float))
+        return pd.Series(np.arange(len(frame), dtype=float), index=frame.index), None
 
     raw = frame[column]
     numeric = pd.to_numeric(raw, errors="coerce")
@@ -518,17 +629,22 @@ def _csv_time_column(frame: pd.DataFrame, column: str | None, path: Path) -> pd.
         # Heuristic: a "time" column whose span exceeds a day of seconds is
         # almost certainly milliseconds since boot or an epoch stamp.
         span = float(values.max() - values.min())
+        wall = None
+        if values.min() > 9.4e8 and values.max() < 4.2e9:          # unix seconds
+            wall = pd.to_datetime(values, unit="s", utc=True)
+        elif values.min() > 9.4e11 and values.max() < 4.2e12:      # unix milliseconds
+            wall = pd.to_datetime(values, unit="ms", utc=True)
         if span > 86400:
             values = values / 1000.0
-        return values - values.min()
+        return values - values.min(), wall
 
-    parsed = pd.to_datetime(raw, errors="coerce")
+    parsed = pd.to_datetime(raw, errors="coerce", format="mixed", utc=True)
     if parsed.notna().mean() > 0.5:
-        return (parsed - parsed.min()).dt.total_seconds().astype(float)
+        return (parsed - parsed.min()).dt.total_seconds().astype(float), parsed
 
     log_event(log, logging.WARNING, f"could not interpret time column {column!r}; using row index",
               path=str(path))
-    return pd.Series(np.arange(len(frame), dtype=float))
+    return pd.Series(np.arange(len(frame), dtype=float), index=frame.index), None
 
 
 def _normalize_header(name: str) -> str:
@@ -685,6 +801,18 @@ def find_sidecar(video_path: Path, suffixes: Sequence[str]) -> Path | None:
     return None
 
 
+# Which sniffed telemetry kinds each configured source tier covers (§4.2 order).
+SOURCE_KINDS: dict[str, tuple[str, ...]] = {
+    "klv": ("klv",),
+    "srt": ("srt", "embedded_srt", "gpmf"),
+    "csv": ("dji_flight_record", "csv", "json", "geojson", "gpx", "kml", "ulog", "dataflash", "tlog"),
+}
+
+
+def _plain(value: Any) -> Any:
+    return value.to_dict() if hasattr(value, "to_dict") else value
+
+
 def load_telemetry(
     video_path: Path | str,
     cfg: Any,
@@ -693,69 +821,90 @@ def load_telemetry(
     frame_paths: Sequence[Path] | None = None,
     frame_timestamps: Sequence[float] | None = None,
     video_duration_s: float | None = None,
+    telemetry_paths: Sequence[Path | str] | None = None,
+    probe: Any = None,
 ) -> TelemetryTable:
     """Load telemetry by the §4.2 priority order, filling gaps from lower tiers.
 
-    The first source that yields GPS becomes primary; later sources only fill
-    columns the primary is missing. When every source comes up empty the result
-    is an empty table with ``scale_free`` set — a supported operating mode, not
-    an error.
+    Sources are discovered, not assumed: every file the user named, every stream inside
+    the video and every telemetry file next to it is sniffed by content
+    (``src.ingest.formats``) and read by its own reader; each result is re-timed so t = 0
+    is the first video frame (``align_to_video``). The first source that yields GPS becomes
+    primary; later sources only fill columns the primary is missing. When every source
+    comes up empty the result is an empty table with ``scale_free`` set — a supported
+    operating mode, not an error.
     """
+    from src.ingest.formats import discover_telemetry, probe_container
+    from src.ingest.telemetry_formats import align_to_video, parse_by_kind, video_start_utc
+
     video_path = Path(video_path)
-    sources = list(cfg.get_path("ingest.telemetry.sources", ["klv", "srt", "csv", "exif"]))
-    column_map = cfg.get_path("ingest.telemetry.csv_column_map", {})
-    if hasattr(column_map, "to_dict"):
-        column_map = column_map.to_dict()
-    headerless_order = list(cfg.get_path("ingest.telemetry.headerless_column_order", ["lat", "lon", "alt_gps"]))
+    tcfg = cfg.get_path("ingest.telemetry")
+    sources = list(tcfg.get("sources", ["klv", "srt", "csv", "exif"]))
+    column_map = _plain(tcfg.get("csv_column_map", {}))
+    headerless_order = list(tcfg.get("headerless_column_order", ["lat", "lon", "alt_gps"]))
+    recording = _plain(tcfg.get("recording", {}))
+    flight_record = _plain(tcfg.get("flight_record", {}))
+    klv_settings = _plain(tcfg.get("klv", {}))
+    explicit = [Path(x) for x in [srt_path, csv_path, *(telemetry_paths or [])] if x]
+    if probe is None:
+        probe = probe_container(video_path)
+    candidates = discover_telemetry(video_path, explicit, probe=probe, scan_folder=bool(tcfg.get("scan_folder", True)))
+    start_utc = video_start_utc(probe.tags) if probe is not None else None
+    duration = video_duration_s or (probe.duration_s if probe is not None else None)
+    offset = tcfg.get("time_offset_s")
+    skipped = [c for c in candidates if not c.supported]
+    for c in skipped:
+        log_event(log, logging.WARNING, f"telemetry {c.path or 'in video'} ({c.kind}) not usable: {c.note}",
+                  kind=c.kind, found_by=c.found_by)
 
     primary: TelemetryTable | None = None
     for source in sources:
-        table: TelemetryTable | None = None
-        if source == "srt":
-            path = Path(srt_path) if srt_path else find_sidecar(video_path, [".srt"])
-            if path is None:
-                log_event(log, logging.INFO, "no SRT sidecar found", video=video_path.name)
-            else:
-                table = parse_dji_srt(path)
-        elif source == "csv":
-            path = Path(csv_path) if csv_path else find_sidecar(video_path, [".csv", ".txt"])
-            if path is None:
-                log_event(log, logging.INFO, "no flight-log CSV/TXT found", video=video_path.name)
-            else:
-                # Imported here: dji_flight_record builds on TelemetryTable from this module.
-                from src.ingest.dji_flight_record import is_dji_flight_record, parse_dji_flight_record
-
-                if is_dji_flight_record(path):
-                    settings = cfg.get_path("ingest.telemetry.flight_record")
-                    settings = settings.to_dict() if hasattr(settings, "to_dict") else dict(settings)
-                    table = parse_dji_flight_record(path, video_duration_s=video_duration_s, **settings)
-                else:
-                    table = parse_flight_csv(path, column_map, headerless_order=headerless_order)
-        elif source == "klv":
-            # Imported here: klv builds on TelemetryTable from this module.
+        tables: list[TelemetryTable] = []
+        if source == "klv":
             from src.ingest.klv import load_klv_for_video
 
-            settings = cfg.get_path("ingest.telemetry.klv", {})
-            settings = settings.to_dict() if hasattr(settings, "to_dict") else dict(settings)
-            table = load_klv_for_video(video_path, settings)
+            table = load_klv_for_video(video_path, klv_settings)
             if table is None:
-                log_event(log, logging.INFO, "no KLV/STANAG 4609 metadata for this video",
-                          video=video_path.name)
+                for c in candidates:
+                    if c.kind == "klv" and c.path:
+                        table = parse_by_kind("klv", Path(c.path), video_path, column_map, duration, recording,
+                                              flight_record, headerless_order)
+                        break
+            if table is None:
+                log_event(log, logging.INFO, "no KLV/STANAG 4609 metadata for this video", video=video_path.name)
+            else:
+                table.alignment = table.alignment or {"method": "video_clock", "note": "KLV multiplexed with the video"}
+                tables.append(table)
+        elif source in SOURCE_KINDS:
+            kinds = SOURCE_KINDS[source]
+            chosen = [c for c in candidates if c.supported and c.kind in kinds]
+            if not chosen:
+                log_event(log, logging.INFO, f"no {source} telemetry found", video=video_path.name)
+            for c in chosen:
+                tables.append(parse_by_kind(c.kind, Path(c.path) if c.path else None, video_path, column_map,
+                                            duration, recording, flight_record, headerless_order))
         elif source == "exif":
             if frame_paths:
-                table = parse_exif(frame_paths, frame_timestamps)
+                tables.append(parse_exif(frame_paths, frame_timestamps))
         else:
             log_event(log, logging.WARNING, f"unknown telemetry source {source!r} in config; ignoring")
 
-        if table is None or table.is_empty:
-            continue
-        if primary is None:
-            primary = table
-        else:
-            primary = primary.merged_with(table)
-        if primary.has_gps and primary.has_baro and primary.has_attitude:
+        for table in tables:
+            if table is None or table.is_empty:
+                continue
+            table = align_to_video(table, start_utc, duration, offset, float(tcfg.get("timezone_step_s", 900)),
+                                   float(tcfg.get("clock_match_tolerance_s", 120)))
+            if table.is_empty:
+                continue
+            if primary is None:
+                primary = table
+            else:
+                primary = primary.merged_with(table)
+        if primary is not None and primary.has_gps and primary.has_baro and primary.has_attitude:
             break  # Nothing left for a lower-priority source to add.
 
+    if primary is not None and skipped:
+        primary.notes.extend(f"not used: {c.path or 'stream in video'} ({c.kind}): {c.note}" for c in skipped)
     if primary is None or primary.is_empty:
         log_event(
             log,

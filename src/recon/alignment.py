@@ -81,6 +81,8 @@ def telemetry_hints(telemetry_path: Path | None) -> dict[str, float]:
 
     if (hfov := median("hfov_deg")) is not None:
         hints["hfov_deg"] = hfov
+        if "hfov_source" in tel and tel["hfov_source"].notna().any():
+            hints["hfov_source"] = str(tel["hfov_source"].dropna().iloc[0])
     if (focal := median("focal_mm")) is not None:
         hints["focal_mm_35"] = focal
     if {"alt_gps", "frame_center_alt"} <= set(tel.columns) and tel["frame_center_alt"].notna().any():

@@ -240,8 +240,14 @@ def _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names, hints, thread
                 cam.params = [focal, cam.width / 2, cam.height / 2] + [0.0] * (len(cam.params) - 3)
                 cam.has_prior_focal_length = True
                 handle.update_camera(cam)
-                fix_focal = True
-                log_event(log, logging.INFO, f"focal seeded from {focal_source}: {focal:.0f} px, held fixed")
+                # A field of view measured by the sensor is held fixed; a nominal one from the
+                # camera table is only a starting point, so bundle adjustment may refine it.
+                nominal = "camera table" in str(hints.get("hfov_source", ""))
+                fix_focal = not nominal
+                if nominal:
+                    focal_source += "_nominal"
+                log_event(log, logging.INFO, f"focal seeded from {focal_source}: {focal:.0f} px, "
+                                             + ("refined by BA" if nominal else "held fixed"))
         finally:
             handle.close()
     if tcfg.focal_from_telemetry and not fix_focal:

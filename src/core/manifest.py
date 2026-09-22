@@ -42,6 +42,7 @@ SCHEMA_VERSION = 1
 # Ordered pipeline stages. Order matters: invalidating a stage invalidates
 # everything after it.
 STAGE_ORDER = [
+    "preflight",
     "ingest",
     "condition",
     "track_b",
@@ -56,7 +57,9 @@ STAGE_ORDER = [
 # Config subtrees each stage depends on. A change anywhere in these paths makes
 # a previously completed stage stale.
 STAGE_CONFIG_DEPS: dict[str, list[str]] = {
-    "ingest": ["ingest"],
+    "preflight": ["preflight", "ingest.telemetry"],
+    # The input check's measured telemetry offset feeds ingest, so ingest is stale when it changes.
+    "ingest": ["ingest", "preflight"],
     "condition": ["condition"],
     "track_b": ["recon.track_b", "device"],
     "refine_ba": ["recon.refine_ba"],

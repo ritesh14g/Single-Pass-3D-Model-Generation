@@ -136,7 +136,9 @@ def preset_picker(key: str) -> str:
 def execute(lab_input: LabInput, cfg: Config, manifest_stages: list[str], tag: str) -> Path:
     run_dir = RUNS_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{tag}"
     run_pipeline(
-        RunInputs(video=lab_input.video, srt=lab_input.srt, csv=lab_input.csv),
+        # The Lab's clips are deliberately degraded test material, so the Stage 0 gate reports
+        # on them but never refuses them here.
+        RunInputs(video=lab_input.video, srt=lab_input.srt, csv=lab_input.csv, accept_input=True),
         cfg, run_dir=run_dir, stages=manifest_stages, force=True,
     )
     return run_dir

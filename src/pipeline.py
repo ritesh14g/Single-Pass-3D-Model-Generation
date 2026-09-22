@@ -58,6 +58,7 @@ from src.ingest.telemetry import TelemetryTable, load_telemetry
 from src.ingest.video_reader import VideoReader, reader_options
 from src.export.stage import run_export
 from src.geo.stage import run_geo
+from src.preflight import InputRejected
 from src.recon.track_a_colmap import run_track_a
 
 log = get_logger(__name__)
@@ -73,6 +74,10 @@ class RunInputs:
     srt: Path | None = None
     csv: Path | None = None
     gcp: Path | None = None
+    # Telemetry files in any supported format; the kind is sniffed from the content.
+    telemetry: list[Path] = field(default_factory=list)
+    # Run even when the input check finds a blocking problem.
+    accept_input: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +85,8 @@ class RunInputs:
             "srt": str(self.srt) if self.srt else None,
             "csv": str(self.csv) if self.csv else None,
             "gcp": str(self.gcp) if self.gcp else None,
+            "telemetry": [str(p) for p in self.telemetry],
+            "accept_input": self.accept_input,
         }
 
 
@@ -101,8 +108,24 @@ class RunResult:
 # --------------------------------------------------------------------------
 # Stage 1 — Ingest
 # --------------------------------------------------------------------------
+def run_preflight(inputs: RunInputs, cfg: Config, out_dir: Path) -> dict[str, Any]:
+    """Stage 0 — check the input before spending the budget (spec §1.3; src/preflight)."""
+    from src.preflight import analyze_input
+
+    report = analyze_input(inputs.video, cfg, telemetry_paths=inputs.telemetry, srt=inputs.srt, csv=inputs.csv)
+    path = report.save(out_dir)
+    metrics = {"verdict": report.verdict, "checks": [c.to_dict() for c in report.checks],
+               "counts": {s: sum(1 for c in report.checks if c.status == s) for s in ("pass", "warn", "block", "info")},
+               "telemetry": report.telemetry, "sync": report.sync, "camera": report.camera,
+               "recommended": report.recommended, "timing_s": report.timing_s}
+    blocking = bool(cfg.get_path("preflight.block_on_fail", True)) and not inputs.accept_input
+    return {"artifacts": {"input_report": path}, "metrics": metrics, "report": report,
+            "reject": report.blocked and blocking}
+
+
 def run_ingest(
-    inputs: RunInputs, cfg: Config, out_dir: Path, budget_stage: Any = None
+    inputs: RunInputs, cfg: Config, out_dir: Path, budget_stage: Any = None,
+    telemetry_offset_s: float | None = None, camera: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decode, profile, select frames, and parse telemetry (spec §4).
 
@@ -141,9 +164,23 @@ def run_ingest(
     # be read from the frames that were actually kept.
     started = time.monotonic()
     telemetry = load_telemetry(
-        inputs.video, cfg, srt_path=inputs.srt, csv_path=inputs.csv,
+        inputs.video, cfg, srt_path=inputs.srt, csv_path=inputs.csv, telemetry_paths=inputs.telemetry,
         frame_timestamps=selection.timestamps, video_duration_s=metadata.duration_s,
     )
+    # The input check measured the telemetry-to-video offset from image motion vs GPS speed
+    # (Stage 0). Applying it here means every later stage sees telemetry on the video's clock.
+    offset = float(telemetry_offset_s or 0.0)
+    if offset and not telemetry.is_empty:
+        telemetry.frame["t"] = telemetry.frame["t"] - offset
+        telemetry.alignment = {**(telemetry.alignment or {}), "input_check_offset_s": offset}
+        telemetry.notes.append(f"shifted by {-offset:+.2f} s: offset measured by the input check")
+    # A known camera gives the reconstruction a field-of-view prior. Nominal, so it is marked
+    # as such: Track A seeds the focal length with it rather than holding it fixed.
+    hfov = (camera or {}).get("hfov_deg")
+    if hfov and not telemetry.is_empty and "hfov_deg" not in telemetry.frame:
+        telemetry.frame["hfov_deg"] = float(hfov)
+        telemetry.frame["hfov_source"] = str((camera or {}).get("source", "camera table"))
+        telemetry.notes.append(f"field of view {hfov:.1f}° from {camera.get('model')} ({camera.get('source')})")
     telemetry_path = telemetry.to_parquet(out_dir / "telemetry.parquet")
 
     # Telemetry resampled onto the kept frames — this is what every later stage
@@ -569,11 +606,29 @@ def run_pipeline(
             return False
         return manifest.should_run(name, force=force)
 
+    # -- Input check (Stage 0) ------------------------------------------------
+    if should("preflight") and bool(cfg.get_path("preflight.enabled", True)):
+        with budget.stage("preflight") as sb, manifest.stage("preflight") as st:  # noqa: F841
+            outcome = run_preflight(inputs, cfg, st.dir)
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics(outcome["metrics"])
+            counts = outcome["metrics"]["counts"]
+            if outcome["metrics"]["verdict"] != "READY":
+                st.warn(f"input check: {outcome['metrics']['verdict']} "
+                        f"({counts['block']} blocking, {counts['warn']} warnings)")
+        result.completed_stages.append("preflight")
+        # Raised outside the stage body so the report and its verdict are saved in the manifest.
+        if outcome["reject"]:
+            raise InputRejected(outcome["report"])
+    telemetry_offset_s = (manifest.stages["preflight"].metrics.get("recommended", {}) or {}).get("time_offset_s")
+
     # -- Ingest -------------------------------------------------------------
     selection: FrameSelection | None = None
     if should("ingest"):
         with budget.stage("ingest") as sb, manifest.stage("ingest") as st:
-            outcome = run_ingest(inputs, cfg, st.dir, budget_stage=sb)
+            outcome = run_ingest(inputs, cfg, st.dir, budget_stage=sb, telemetry_offset_s=telemetry_offset_s,
+                                 camera=manifest.stages["preflight"].metrics.get("camera"))
             for key, path in outcome["artifacts"].items():
                 st.add_artifact(key, path)
             st.add_metrics(outcome["metrics"])
