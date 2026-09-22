@@ -648,7 +648,10 @@ def run_pipeline(
                 continue
             if name in wanted and name in implemented:
                 continue
-            if spec.is_built and name not in implemented:
+            if name == "track_b" and "track_a" in result.completed_stages:
+                reason = ("Track B runs inside the track_a stage as the §7.4 hybrid (VGGT depth on "
+                          "Track A cameras; see track_a metrics.dense); VGGT poses are not used")
+            elif spec.is_built and name not in implemented:
                 reason = (f"{name} is not implemented yet; Stage {spec.number} "
                           f"({spec.title}) ran without it")
             else:

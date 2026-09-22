@@ -32,6 +32,8 @@ DEFAULTS = {
     "cam_vs_gps_rms_pass_m": 1.0, "cam_vs_gps_rms_warn_m": 5.0,
     "height_error_pass_pct": 5.0, "height_error_warn_pct": 15.0,
     "faces_per_vertex_pass": 1.8, "faces_per_vertex_warn": 1.4,
+    "anchor_spread_pass_pct": 2.0, "anchor_spread_warn_pct": 5.0,
+    "frames_anchored_pass": 0.90, "frames_anchored_warn": 0.70,
 }
 
 
@@ -76,6 +78,7 @@ def evaluate_track_a(outputs: TrackAOutputs, cfg: Any) -> StageEvaluation:
         return ev
     _sparse_kpis(ev, r, cfg)
     _metric_kpis(ev, r, cfg)
+    _track_b_kpis(ev, r, cfg)
     _dense_mesh_kpis(ev, r, cfg)
     _runtime_kpis(ev, r, outputs.degradations)
     return ev
@@ -130,14 +133,51 @@ def _metric_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
                            "telemetry carries no ground elevation to check scale against"))
 
 
+def _track_b_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
+    """The hybrid: VGGT depth on Track A's cameras (§7.4). Absent in mode A."""
+    g = "Track B (VGGT depth)"
+    dense = r.get("dense") or {}
+    mode = dense.get("mode", "auto")
+    if mode == "A":
+        ev.kpis.append(Kpi("track_b_used", g, "Track B", "off (mode A)", "-", INFO,
+                           "Track A dense only: the accurate preset"))
+        return
+    used = dense.get("engine") == "vggt_hybrid"
+    fell_back = [d for d in (r.get("downgrades") or []) if d.startswith("Track B")]
+    ev.kpis.append(Kpi("track_b_used", g, "Track B depth used", used, "yes", PASS if used else WARN,
+                       f"{dense.get('vggt_seconds')} s of VGGT for {dense.get('frames')} frames" if used
+                       else ("fell back to Track A dense: " + fell_back[0].split(": ", 1)[-1] if fell_back else "")))
+    if not used:
+        return
+    anchored = dense.get("frames_anchored", 0) / max(dense.get("frames") or 1, 1)
+    ev.kpis.append(Kpi("frames_anchored", g, "Frames with anchored depth", round(anchored, 3),
+                       f">= {_band(cfg, 'frames_anchored_pass'):.2f}",
+                       _higher_better(anchored, _band(cfg, "frames_anchored_pass"), _band(cfg, "frames_anchored_warn")),
+                       f"rejected: {dense.get('frames_rejected') or 'none'}"))
+    spread = dense.get("anchor_spread_median_pct")
+    if spread is not None:
+        ev.kpis.append(Kpi("anchor_spread_pct", g, "Anchor disagreement (median)", spread,
+                           f"<= {_band(cfg, 'anchor_spread_pass_pct')}%",
+                           _lower_better(float(spread), _band(cfg, "anchor_spread_pass_pct"),
+                                         _band(cfg, "anchor_spread_warn_pct")),
+                           f"how far the Track A points in a frame disagree with its scaled VGGT depth; "
+                           f"{dense.get('anchors_median'):.0f} anchors per frame", unit="%"))
+    ev.kpis.append(Kpi("views_per_point", g, "Views confirming each point", dense.get("views_per_point_median"),
+                       ">= 2", INFO, f"{dense.get('points_before_consistency', 0):,} back-projected, "
+                       f"{dense.get('points', 0):,} kept after the multi-view check"))
+
+
 def _dense_mesh_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
     g = "Dense and mesh"
     dense = r.get("dense") or {}
     engine = dense.get("engine")
-    ev.kpis.append(Kpi("dense_engine", g, "Dense reconstruction", engine or "none", "COLMAP on GPU or OpenMVS",
-                       PASS if engine else FAIL,
-                       f"{dense.get('size')} px, {dense.get('src_images')} source views, {dense.get('frames')} frames"
-                       if engine else "sparse model only"))
+    detail = "sparse model only"
+    if engine == "vggt_hybrid":
+        detail = f"VGGT depth (518 px) on Track A cameras, window {dense.get('window')}, {dense.get('frames')} frames"
+    elif engine:
+        detail = f"{dense.get('size')} px, {dense.get('src_images')} source views, {dense.get('frames')} frames"
+    ev.kpis.append(Kpi("dense_engine", g, "Dense reconstruction", engine or "none", "any dense engine",
+                       PASS if engine else FAIL, detail))
     if engine:
         ev.kpis.append(Kpi("dense_points", g, "Dense points", dense.get("points"), "-", INFO,
                            f"{(dense.get('points') or 0) / max(dense.get('frames') or 1, 1):,.0f} per frame"))

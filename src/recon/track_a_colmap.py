@@ -71,9 +71,11 @@ def run_track_a(
     geo_path: Path | None = None,
     telemetry_path: Path | None = None,
     budget_stage: Any = None,
+    depth_predictor: Any = None,
 ) -> dict[str, Any]:
     """Reconstruct the conditioned frames in ``images_dir`` into ``out_dir``.
 
+    ``depth_predictor`` replaces VGGT in the hybrid (tests); ``None`` loads VGGT.
     Returns ``{"artifacts": {key: path}, "metrics": {...}}`` for the manifest.
     """
     import pycolmap
@@ -130,11 +132,14 @@ def run_track_a(
                 100 * (metrics["height_above_ground_m"] - hints["expected_agl_m"]) / hints["expected_agl_m"], 1)
 
     artifacts: dict[str, Path] = {"sparse": sparse_dir / str(_best_model_id(sparse_dir, rec))}
-    fused, dense_info, mvs_dir = _dense(pycolmap, tcfg, rec, artifacts["sparse"], images_dir, out_dir,
-                                        threads, use_cuda, bin_dir, budget_stage, run)
+    fused, dense_info, mvs_dir = _dense(pycolmap, cfg, tcfg, rec, artifacts["sparse"], images_dir, out_dir,
+                                        threads, use_cuda, bin_dir, budget_stage, run,
+                                        depth_predictor=depth_predictor)
     metrics["dense"] = dense_info
     if fused is not None:
         artifacts["dense"] = fused
+        if (out_dir / "track_b_depth").is_dir():
+            artifacts["track_b_depth"] = out_dir / "track_b_depth"
         points = meshing.read_ply_xyz(fused)
         dense_info["points"] = int(len(points))
         area = alignment.footprint_m2(points, transform)
@@ -280,20 +285,25 @@ def _gpu_then_cpu(pycolmap, name: str, fn, use_cuda: bool, run: _Run):
 
 
 # -- dense ------------------------------------------------------------------
-def _dense(pycolmap, tcfg, rec, sparse_model, images_dir, out_dir, threads, use_cuda, bin_dir,
-           budget_stage, run):
-    """Returns (fused cloud or None, info, OpenMVS working folder)."""
+def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads, use_cuda, bin_dir,
+           budget_stage, run, depth_predictor=None):
+    """Returns (fused cloud or None, info, OpenMVS working folder).
+
+    run.mode A: Track A dense. auto / hybrid / B: VGGT depth on these cameras first
+    (Track B, ``track_b_vggt``), falling back to Track A dense on any failure.
+    """
     dcfg = tcfg.dense
     undist = out_dir / "dense"
     mvs_dir = out_dir / "mvs"
-    for stale in (undist, mvs_dir):
+    for stale in (undist, mvs_dir, out_dir / "track_b_depth"):
         if stale.exists():
             shutil.rmtree(stale)
+    mode = str(cfg.get_path("run.mode", "auto"))
     engine_gpu = use_cuda
-    if not engine_gpu and bin_dir is None:
+    if mode == "A" and not engine_gpu and bin_dir is None:
         run.downgrade("dense reconstruction", "sparse model only",
                       "no CUDA for COLMAP PatchMatch and no OpenMVS for the CPU path")
-        return None, {"engine": None}, mvs_dir
+        return None, {"engine": None, "mode": mode}, mvs_dir
 
     dense_model = sparse_model
     frames = rec.num_reg_images()
@@ -312,16 +322,35 @@ def _dense(pycolmap, tcfg, rec, sparse_model, images_dir, out_dir, threads, use_
         subset.write(str(dense_model))
         frames = subset.num_reg_images()
 
-    camera = next(iter(rec.cameras.values()))
-    size = _budgeted_size(dcfg, frames, engine_gpu, budget_stage, native_px=max(camera.width, camera.height))
-    info: dict[str, Any] = {"size": size, "src_images": int(dcfg.src_images), "iterations": int(dcfg.iterations),
-                            "geom_consistency": bool(dcfg.geom_consistency), "frames": frames}
+    # Undistort once at the configured size: the images feed VGGT, PatchMatch (which
+    # downsamples further when the budget asks) and the texture.
     undistort = pycolmap.UndistortCameraOptions()
-    undistort.max_image_size = size
+    undistort.max_image_size = int(dcfg.max_image_size)
     with run.timed("undistort"):
         pycolmap.undistort_images(undist, dense_model, images_dir, num_patch_match_src_images=int(dcfg.src_images),
                                   undistort_options=undistort, num_threads=threads)
     fused = undist / "fused.ply"
+
+    if mode != "A":
+        from src.recon import track_b_vggt
+
+        try:
+            with run.timed("dense_vggt"):
+                hybrid = track_b_vggt.depth_cloud(undist, fused, cfg, depth_dir=out_dir / "track_b_depth",
+                                                  predictor=depth_predictor)
+            return fused, {"mode": mode, "size": int(dcfg.max_image_size), **hybrid}, mvs_dir
+        except Exception as exc:  # noqa: BLE001 - Track B never takes the run down (spec §7.4 auto)
+            run.downgrade("Track B (VGGT depth)", "Track A dense", f"{type(exc).__name__}: {exc}")
+        if not engine_gpu and bin_dir is None:
+            run.downgrade("dense reconstruction", "sparse model only",
+                          "no CUDA for COLMAP PatchMatch and no OpenMVS for the CPU path")
+            return None, {"engine": None, "mode": mode}, mvs_dir
+
+    camera = next(iter(rec.cameras.values()))
+    size = _budgeted_size(dcfg, frames, engine_gpu, budget_stage, native_px=max(camera.width, camera.height))
+    info: dict[str, Any] = {"mode": mode, "size": size, "src_images": int(dcfg.src_images),
+                            "iterations": int(dcfg.iterations), "geom_consistency": bool(dcfg.geom_consistency),
+                            "frames": frames}
 
     if engine_gpu:
         try:

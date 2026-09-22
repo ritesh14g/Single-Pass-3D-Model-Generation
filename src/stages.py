@@ -69,8 +69,8 @@ STAGES: tuple[StageSpec, ...] = (
     ),
     StageSpec(
         number=4, key="recon", title="Reconstruction tracks", spec_ref="§7",
-        summary="Track A built (pycolmap SfM + dense on GPU, OpenMVS mesh + texture). "
-                "Track B (VGGT chunked) and refinement BA with regression gate: planned.",
+        summary="Track A (pycolmap SfM + dense on GPU, OpenMVS mesh + texture) and Track B as the "
+                "§7.4 hybrid (VGGT depth on Track A cameras). Refinement BA with regression gate: planned.",
         status=StageStatus.BUILT, execution_order=3,
         manifest_stages=("track_b", "refine_ba", "track_a"), budget_keys=("track_b", "refine_ba", "track_a_mvs"),
     ),

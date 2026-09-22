@@ -399,27 +399,38 @@ recon:
       # auto = tools/openmvs/bin (Linux) or tools/openmvs/vc17/x64/Release (Windows).
       bin_dir: auto
   track_b:
-    model: vggt-omega       # vggt-omega | vggt | depth-anything
-    weights: facebook/VGGT-Omega-1B-512
-    fallback_model: depth-anything
-    input_width: 512
-    # Sized from the official peak-memory table in spec §7.2. Conservative
-    # default; tune upward only after profiling the real instance.
-    chunk_frames: 128
-    chunk_overlap: 16
-    amp_dtype: bf16
-    alignment:
-      # Sim(3) on shared frames, then colored ICP refinement.
-      ransac_iterations: 2000
-      inlier_threshold_m: 0.5
-      icp_max_correspondence_m: 0.3
-      icp_iterations: 50
-    loop_closure:
-      enabled: true
-      descriptor: netvlad
-      min_revisit_gap_frames: 120
-      similarity_threshold: 0.75
+    # Hybrid (§7.4 "Track B depth fills"): VGGT depth on Track A's SfM cameras, used by
+    # run.mode auto / hybrid / B; mode A uses Track A dense instead. VGGT's own poses are
+    # not used: they match COLMAP to 0.7 m over 8-frame windows but break beyond ~16
+    # frames (90 m RMS at 32). Box, Esri: depth within 1.04% of COLMAP's 1920 px dense
+    # (99.1% of pixels within 5%) in 5.9 s vs 1133 s (DEVLOG). Any failure falls back to
+    # Track A dense with a logged downgrade.
+    model: vggt
+    # CC-BY-NC-4.0, not gated (LIC-1). VGGT-Omega needs approved Hugging Face access.
+    weights: facebook/VGGT-1B
+    # git clone https://github.com/facebookresearch/vggt tools/vggt
+    repo_dir: tools/vggt
+    # VGGT on CPU is minutes per window; without CUDA the stage uses Track A dense.
+    require_gpu: true
+    window_frames: 8
+    # Share of least-confident VGGT pixels dropped per frame before fusion.
+    drop_low_conf: 0.3
+    anchor:
+      # Per-frame depth scale from the Track A sparse points the frame observes.
+      min_points: 10
+      # Median |z_sparse / (s * z_vggt) - 1| above this rejects the frame (box median 0.85%).
+      max_spread_pct: 5.0
+    consistency:
+      # A point is kept when its source view and this many more agree on its depth.
+      neighbours: 3
+      rel_tolerance: 0.03
+      min_extra_views: 1
+    # Fuse every Nth pixel of the 518-px depth maps.
+    pixel_stride: 2
+    # Per-frame scaled depth + confidence for Stage 3 zone classification.
     keep_confidence_maps: true
+    # Measured on the H100 2g.20gb slice (window probe, box).
+    gpu_s_per_frame: 0.13
   refine_ba:
     enabled: true
     max_iterations: 100
@@ -580,6 +591,12 @@ qa:
     # A clean surface has ~2 faces per vertex; ~1 means fragments (S4-6).
     faces_per_vertex_pass: 1.8
     faces_per_vertex_warn: 1.4
+    # Track B hybrid: median disagreement between a frame's Track A points and its scaled
+    # VGGT depth (box, Esri: 0.85%), and the share of frames whose depth was anchored.
+    anchor_spread_pass_pct: 2.0
+    anchor_spread_warn_pct: 5.0
+    frames_anchored_pass: 0.90
+    frames_anchored_warn: 0.70
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]

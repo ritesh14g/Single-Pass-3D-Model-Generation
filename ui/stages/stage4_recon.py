@@ -37,6 +37,21 @@ def render_params(cfg: Config) -> dict[str, Any]:
             "SIFT image size (px)", [960, 1280, 1600, 2400, 3200], int(t["sift"]["max_image_size"]))
         values["recon.track_a.matching.sequential_overlap"] = st.slider(
             "Sequential overlap (neighbours matched)", 3, 30, int(t["matching"]["sequential_overlap"]))
+    with st.sidebar.expander("Mode and Track B (VGGT depth)", expanded=True):
+        modes = ["auto", "hybrid", "A"]
+        current = str(cfg.get_path("run.mode"))
+        values["run.mode"] = st.radio(
+            "Mode", modes, index=modes.index(current) if current in modes else 0, horizontal=True,
+            help="auto/hybrid: VGGT depth on Track A cameras (~0.1 s/frame, ~37 cm/px on Esri), falling "
+                 "back to Track A dense on failure. A: Track A dense only (slow, full detail).")
+        b = cfg.get_path("recon.track_b")
+        values["recon.track_b.window_frames"] = st.slider(
+            "VGGT window (frames)", 4, 16, int(b["window_frames"]),
+            help="8 matched COLMAP to 0.7 m on Esri; 32 broke (90 m).")
+        values["recon.track_b.drop_low_conf"] = st.slider(
+            "Drop least-confident pixels", 0.0, 0.8, float(b["drop_low_conf"]), 0.05)
+        values["recon.track_b.consistency.rel_tolerance"] = st.slider(
+            "Multi-view agreement tolerance", 0.01, 0.10, float(b["consistency"]["rel_tolerance"]), 0.005)
     with st.sidebar.expander("Dense (MVS)", expanded=True):
         d = t["dense"]
         values["recon.track_a.dense.max_image_size"] = st.select_slider(

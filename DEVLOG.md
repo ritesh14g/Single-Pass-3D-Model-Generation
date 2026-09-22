@@ -72,7 +72,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
-| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. Track B + refinement BA: planned (VGGT probe on the box). Pipeline confirmation run on the box pending |
+| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B built as the §7.4 hybrid** (VGGT depth on Track A cameras; box probe: 1.04% depth error vs COLMAP, 5.9 s vs 1133 s); falls back to Track A dense. Refinement BA: planned. Box pipeline run pending |
 | 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -122,6 +122,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `ui/stages/stage4_recon.py` | 4 | Stage 4 parameters, camera path vs GPS, time per step, output paths |
 | `tests/test_recon.py` | 4 | Alignment, dense budget ladder, masks, mesh cleaning, scorecard bands, CPU end-to-end |
 | `scripts/vggt_probe.py` | 4 | Track B feasibility probe (VGGT) |
+| `src/recon/track_b_vggt.py` | 4 | Track B hybrid: VGGT depth in 8-frame windows, per-frame anchoring on Track A sparse points, multi-view consistency, COLMAP-format `fused.ply` + `.vis` |
+| `scripts/vggt_hybrid_probe.py` | 4 | Hybrid probe: VGGT depth vs COLMAP depth maps, pixel by pixel |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
 | `.streamlit/config.toml` | UI | Streamlit server settings (upload cap 300 MB) |
@@ -1687,3 +1689,43 @@ within 5% / 10%, metric error), fused hybrid cloud + GPS footprint. Verified loc
 weights on 6 frames (≈900 anchors per frame); COLMAP depth-map reader round-trip tested.
 
 **Next:** box: hybrid probe against the kept 1920 px COLMAP depth maps.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Track B built as the hybrid (VGGT depth on Track A cameras)
+**Measured (box, hybrid probe, Esri 45 frames, 8-frame windows, per-frame anchoring):** VGGT 5.9 s
+(0.13 s/frame) + 0.8 s fusion; **median depth error vs COLMAP's 1920 px geometric depth 1.04%**
+(1.07 m at ~111 m), 99.1% of pixels within 5%, 99.9% within 10%, worst frame 2.85%; anchors 982 per
+frame, anchor disagreement 0.85%. Camera-fit scale instead of per-frame anchoring: 1.76% / 96.5%.
+Cloud 1.2 M points, footprint **115 555 m²** vs 60 749 m² for COLMAP dense — the extra area is where
+COLMAP had no depth (it covered 57.6% of pixels: water, uniform canopy, edges), so it is **not verified**
+and is exactly Stage 3's Zone 2.
+
+**Created:** `src/recon/track_b_vggt.py` — see §3. Visibility index convention verified on the box's
+COLMAP output: `fused.ply.vis` indexes images in **image-id order** (100% of points project into their
+listed images vs 8% for file order). A point is kept when its source frame and ≥ 1 of the ±3
+neighbouring frames agree on its depth within 3% (COLMAP's own points: median 4 views).
+
+**Modified:**
+- `src/recon/track_a_colmap.py` — dense step: `run.mode` A → Track A dense; auto/hybrid/B → Track B
+  first, any exception → logged downgrade to Track A dense. Undistort once at `dense.max_image_size`
+  (feeds VGGT, PatchMatch and texture); the budget projection now applies only when COLMAP dense runs.
+  Per-frame depth + confidence saved to `track_a/track_b_depth/*.npz` for Stage 3. `depth_predictor`
+  injection point for tests.
+- `configs/default.yaml` — `recon.track_b` rewritten (VGGT-1B, repo_dir, require_gpu, window 8,
+  anchoring, consistency, stride, 0.13 s/frame); old chunk/stitch/loop-closure keys removed (nothing
+  read them; the measurements ruled that design out). `qa.stage4` anchor-spread and frames-anchored
+  bands. `configs/accurate.yaml` → `run.mode: A` (1920 px detail); `fast.yaml` track_b block removed.
+- `src/qa/stage4_eval.py` — "Track B (VGGT depth)" KPI group: used / fell back (with reason), frames
+  anchored, anchor disagreement, views per point; mode A reports INFO, not a penalty.
+- `ui/stages/stage4_recon.py` — mode selector and VGGT window / confidence / tolerance controls.
+- `src/pipeline.py` — track_b's skip reason says it ran inside track_a as the hybrid.
+- `tests/test_recon.py` — windows cover every frame once; `.vis` round trip; hybrid on the synthetic
+  flight with a plane-depth stand-in for VGGT at a wrong 3.7× scale (anchoring recovers it, spread
+  < 2%, points confirmed by ≥ 2 views, depth maps saved); VGGT crash → Track A dense; mode A never calls
+  VGGT; scorecard cases.
+
+**Bug found by the new tests (fixed):** the `.vis` writer mixed uint32 counts with signed aranges,
+which numpy promotes to float64 → `IndexError`. Offsets are int64 now.
+
+**Tests:** 374 passed / 0 failed (was 364; +10). Suite 131 s (the hybrid tests run real SfM).
+
+**Next:** box: full Stages 1–4 on Esri (default = hybrid), paste the Stage 4 scorecard.

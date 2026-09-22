@@ -7,6 +7,11 @@
 
 preset: accurate
 
+run:
+  # Track A dense at 1920 px (~10 cm/px on Esri) rather than the hybrid's VGGT depth
+  # (~37 cm/px). The hybrid is the default and fast mode; this is the detail benchmark.
+  mode: A
+
 ingest:
   video:
     max_width: null          # native resolution
@@ -38,11 +43,6 @@ recon:
       # ~10 cm/px on Esri; 99% of the COLMAP-default points in 98% of its time (S4-8).
       max_image_size: 1920
       src_images: 12
-  track_b:
-    chunk_frames: 160
-    chunk_overlap: 24
-    loop_closure:
-      enabled: true
   refine_ba:
     max_iterations: 300
     time_budget_s: 600

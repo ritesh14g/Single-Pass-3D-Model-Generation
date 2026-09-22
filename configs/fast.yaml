@@ -35,12 +35,6 @@ recon:
       # ~20 cm/px on Esri; kept 107% of the default footprint at 71% of its time (S4-8).
       max_image_size: 960
       degrade_sizes: [640]
-  track_b:
-    chunk_frames: 96
-    chunk_overlap: 12
-    loop_closure:
-      # Revisit detection costs a global descriptor pass over every frame.
-      enabled: false
   refine_ba:
     max_iterations: 40
     time_budget_s: 90

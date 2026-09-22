@@ -162,8 +162,10 @@ GOOD = {
     "track_length": 3.4, "focal_px": 2248.0, "focal_source": "telemetry_hfov", "using_cuda": True,
     "gps_matched_frames": 49, "cam_vs_gps_rms_m": 0.8, "height_above_ground_m": 108.0,
     "expected_agl_m": 110.8, "height_error_pct": -2.5,
-    "dense": {"engine": "colmap_patchmatch_cuda", "size": 1280, "src_images": 8, "frames": 49,
-              "points": 300000, "footprint_m2": 60000},
+    "dense": {"mode": "auto", "engine": "vggt_hybrid", "window": 8, "frames": 49, "frames_anchored": 49,
+              "frames_rejected": {}, "anchors_median": 980.0, "anchor_spread_median_pct": 0.85,
+              "points_before_consistency": 1500000, "views_per_point_median": 3.0, "vggt_seconds": 6.4,
+              "points": 1200000, "footprint_m2": 110000},
     "mesh": {"mesher": "openmvs_delaunay", "vertices": 300000, "faces": 600000, "faces_per_vertex": 2.0},
     "textured": True, "timings_s": {"sparse_map": 14.0, "dense_patchmatch": 600.0}, "downgrades": [],
 }
@@ -179,6 +181,23 @@ class TestScorecard:
         ev = evaluate_track_a(TrackAOutputs(report=GOOD), cfg)
         assert ev.counts()["fail"] == 0 and ev.counts()["warn"] == 0
         assert ev.score == 100.0
+
+    def test_mode_a_is_not_penalised_for_skipping_track_b(self, cfg):
+        report = {**GOOD, "dense": {"mode": "A", "engine": "colmap_patchmatch_cuda", "size": 1920,
+                                    "src_images": 12, "frames": 49, "points": 450000}}
+        ev = evaluate_track_a(TrackAOutputs(report=report), cfg)
+        assert _status(report, "track_b_used", cfg) == INFO and ev.score == 100.0
+
+    def test_track_b_fallback_warns_and_says_why(self, cfg):
+        report = {**GOOD, "dense": {"mode": "auto", "engine": "colmap_patchmatch_cuda", "frames": 49},
+                  "downgrades": ["Track B (VGGT depth) -> Track A dense: TrackBUnavailable: no CUDA device"]}
+        kpi = {k.key: k for k in evaluate_track_a(TrackAOutputs(report=report), cfg).kpis}["track_b_used"]
+        assert kpi.status == WARN and "no CUDA device" in kpi.detail
+
+    @pytest.mark.parametrize("spread,status", [(0.85, PASS), (3.0, WARN), (7.0, FAIL)])
+    def test_anchor_spread_band(self, cfg, spread, status):
+        report = {**GOOD, "dense": {**GOOD["dense"], "anchor_spread_median_pct": spread}}
+        assert _status(report, "anchor_spread_pct", cfg) == status
 
     def test_missing_report_fails(self, cfg):
         ev = evaluate_track_a(TrackAOutputs(report={}), cfg)
@@ -274,3 +293,128 @@ def test_track_a_runs_end_to_end_on_cpu(tiny_frames):
         assert artifacts["dense"].exists()
     ev = evaluate_track_a(TrackAOutputs.load(root / "track_a"), cfg)
     assert ev.score is not None
+
+
+# -- Track B hybrid (VGGT depth on Track A cameras) --------------------------------
+def test_windows_cover_every_frame_once():
+    from src.recon.track_b_vggt import windows_for
+
+    for n, size in [(45, 8), (10, 8), (8, 8), (3, 8), (100, 6)]:
+        windows = windows_for(n, size)
+        owned = sorted(i for _, _, own in windows for i in own)
+        assert owned == list(range(n))
+        assert all(stop - start == min(size, n) for start, stop, _ in windows)
+
+
+def test_fused_vis_round_trips(tmp_path):
+    import struct
+
+    from plyfile import PlyData
+
+    from src.recon.track_b_vggt import write_colmap_fused
+
+    pts = np.arange(12, dtype=float).reshape(4, 3)
+    vis = [[0], [1, 2], [3, 0, 5], [7]]
+    write_colmap_fused(tmp_path / "fused.ply", pts, np.ones((4, 3)), np.zeros((4, 3), np.uint8), vis)
+    raw = (tmp_path / "fused.ply.vis").read_bytes()
+    n, back, off = struct.unpack_from("<Q", raw)[0], [], 8
+    for _ in range(n):
+        k = struct.unpack_from("<I", raw, off)[0]
+        back.append(list(struct.unpack_from(f"<{k}I", raw, off + 4)))
+        off += 4 + 4 * k
+    assert back == vis and off == len(raw)
+    v = PlyData.read(str(tmp_path / "fused.ply"))["vertex"]
+    assert [p.name for p in v.properties] == ["x", "y", "z", "nx", "ny", "nz", "red", "green", "blue"]
+    assert np.allclose(np.c_[v["x"], v["y"], v["z"]], pts)
+
+
+def _plane_predictor(undist, true_scale=3.7):
+    """Stands in for VGGT on the synthetic (planar) flight: the true depth of the SfM ground
+    plane, divided by an unknown scale the anchoring has to recover."""
+    import pycolmap
+
+    rec = pycolmap.Reconstruction(str(undist / "sparse"))
+    by_name = {im.name: im for im in rec.images.values()}
+    cam = next(iter(rec.cameras.values()))
+    fx, fy, cx, cy = (float(v) for v in cam.params[:4])
+    xyz = np.array([p.xyz for p in rec.points3D.values()])
+    centre = np.median(xyz, axis=0)
+    normal = np.linalg.svd(xyz - centre)[2][2]
+    h, w = 90, 120
+
+    def predict(paths):
+        depths, rgbs = [], []
+        for path in paths:
+            pose = by_name[path.name].cam_from_world()
+            rot, trans = pose.rotation.matrix(), np.asarray(pose.translation)
+            n_cam = rot @ normal
+            d_cam = float(n_cam @ (rot @ centre + trans))
+            ys, xs = np.mgrid[0:h, 0:w]
+            rays = np.stack([(xs * cam.width / w - cx) / fx, (ys * cam.height / h - cy) / fy, np.ones((h, w))], -1)
+            depths.append(d_cam / (rays @ n_cam) / true_scale)
+            rgbs.append(cv2.resize(cv2.imread(str(path)), (w, h))[..., ::-1])
+        return np.stack(depths), np.ones((len(paths), h, w)), np.stack(rgbs).astype(np.uint8)
+
+    return predict
+
+
+def test_hybrid_depth_is_anchored_fused_and_meshed(tiny_frames):
+    pytest.importorskip("pycolmap")
+    from src.recon import track_a_colmap
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    cfg = load_config(overrides=["device.prefer=cpu", "recon.track_a.dense.max_image_size=320"])
+    out = root / "hybrid"
+    real_dense = track_a_colmap._dense
+
+    def dense_with_plane(*args, **kwargs):
+        undist = out / "dense"
+        kwargs["depth_predictor"] = lambda paths: _plane_predictor(undist)(paths)
+        return real_dense(*args, **kwargs)
+
+    track_a_colmap._dense = dense_with_plane
+    try:
+        outcome = run_track_a(images, out, cfg)
+    finally:
+        track_a_colmap._dense = real_dense
+    dense = outcome["metrics"]["dense"]
+    assert dense["engine"] == "vggt_hybrid", outcome["metrics"]["downgrades"]
+    assert dense["frames_anchored"] >= 0.8 * dense["frames"]
+    assert dense["anchor_spread_median_pct"] < 2.0          # the unknown 3.7x scale was recovered
+    assert dense["points"] > 1000 and dense["views_per_point_median"] >= 2
+    assert (out / "dense" / "fused.ply.vis").exists()
+    assert any((out / "track_b_depth").glob("*.npz"))       # confidence maps kept for Stage 3
+    if openmvs.find_bin_dir("auto") is not None:
+        assert outcome["metrics"]["mesh"]["mesher"] in ("openmvs_delaunay", "colmap_poisson", None)
+
+
+def test_hybrid_falls_back_to_track_a_dense(tiny_frames):
+    pytest.importorskip("pycolmap")
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    cfg = load_config(overrides=["device.prefer=cpu", "recon.track_a.dense.max_image_size=320"])
+
+    def broken(paths):
+        raise RuntimeError("simulated VGGT crash")
+
+    outcome = run_track_a(images, root / "fallback", cfg, depth_predictor=broken)
+    assert any(d.startswith("Track B (VGGT depth) -> Track A dense") for d in outcome["metrics"]["downgrades"])
+    if openmvs.find_bin_dir("auto") is not None:
+        assert outcome["metrics"]["dense"]["engine"] == "openmvs_cpu"
+
+
+def test_mode_a_never_calls_vggt(tiny_frames):
+    pytest.importorskip("pycolmap")
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    cfg = load_config(overrides=["device.prefer=cpu", "run.mode=A", "recon.track_a.dense.max_image_size=320"])
+
+    def must_not_run(paths):
+        raise AssertionError("VGGT called in mode A")
+
+    outcome = run_track_a(images, root / "mode_a", cfg, depth_predictor=must_not_run)
+    assert not any("Track B" in d for d in outcome["metrics"]["downgrades"])
+    assert outcome["metrics"]["dense"].get("mode") == "A"
