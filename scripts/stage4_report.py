@@ -35,6 +35,9 @@ def run_report(run_dir: Path) -> dict:
         "models": report.get("models"), "models_merged": report.get("models_merged"),
         "frames_added_by_merge": report.get("frames_added_by_merge"),
         "cam_vs_gps_rms_m": report.get("cam_vs_gps_rms_m"), "height_error_pct": report.get("height_error_pct"),
+        "gps_refinement": {k: (report.get("gps_refinement") or {}).get(k) for k in (
+            "kept", "skipped", "time_offset_s", "gps_rms_before_m", "gps_rms_after_m", "reproj_before_px",
+            "reproj_after_px", "registered_before", "registered_after")},
         "dense": {k: dense.get(k) for k in ("engine", "model", "points", "footprint_m2", "anchor_spread_median_pct",
                                              "views_per_point_median", "vggt_seconds", "frames_rejected")},
         "mesh": {k: mesh.get(k) for k in ("mesher", "target_faces", "faces", "faces_per_vertex")},

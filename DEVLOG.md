@@ -2018,3 +2018,31 @@ timestamp resolution, not the method. DJI SRT is per frame, so it should get wel
 0.5 m GPS noise; synced geo interpolation).
 
 **Next:** box: full Stages 1–5 run to confirm on GPU; then Stage 3, Stage 6.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — S4-1 confirmed on the box (Stages 1–5, Esri)
+**Box run `esri_full2` (GPU, VGGT-Ω hybrid), compared with the previous box run:**
+
+| | before (`da7330f`) | now |
+|---|---|---|
+| Stage 4 score | 93.3 | **96.9** (15 pass / 1 warn / 0 fail) |
+| Stage 5 score | 89.3 | **92.9** |
+| Camera vs GPS (Stage 4) | 6.5 m | **3.19 m** (warn band) |
+| Georeferencing RMS (Stage 5) | 6.39 m (vertical 3.87) | **3.075 m** (horizontal 2.736, vertical **1.403**); 49/49 RANSAC inliers |
+| Height above ground vs telemetry | −4.1% | **−1.4%** |
+| Ground plane (orthometric) | 16.1 m | **10.17 m** — KLV frame-centre elevation is 6.11 m, so 4 m off instead of 10 |
+| Visible ground reconstructed | 72.6% | 70.9% (gap is still mostly the river) |
+| Total runtime | 325 s | 366 s (`sparse_map_gps` 24.7 s; `gps_time_sync` < 0.1 s) |
+
+Registered 49/50; 2 SfM pieces merged (+4 frames); all six formats written (FBX 52.9 MB). Mesh 82 s and
+texture 64 s (CPU, OpenMVS) are still the largest cost → S4-8.
+
+**Decisions:** keep the camera-vs-GPS warn band as is. 3.2 m is what whole-second KLV timestamps allow,
+and the scorecard should say so rather than hide it.
+
+**Modified:** `scripts/stage4_report.py` — prints the `gps_refinement` block (kept / offset /
+before-after), so box pastes show the lag and the gate decision.
+
+**Open issues:** the time lag is not printed in the scorecard summary of this run (the report now shows
+it). DJI verification is still to do.
+
+**Next:** Stage 3 (occlusion zones and gap reporting), then Stage 6 (viewer and QA report), then the README.
