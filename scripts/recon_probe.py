@@ -280,6 +280,8 @@ def main() -> int:
     ap.add_argument("--pm-iterations", type=int, default=5)
     ap.add_argument("--pm-window-step", type=int, default=1, help="2 samples every other pixel in the window")
     ap.add_argument("--pm-no-geom", action="store_true", help="skip the geometric-consistency pass")
+    ap.add_argument("--dense-every", type=int, default=1,
+                    help="dense stereo on every Nth registered frame (SfM keeps them all)")
     ap.add_argument("--poisson-depth", type=int, default=11,
                     help="COLMAP's default 13 gave 5.4 M faces on 43 small frames and stalled texturing")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
@@ -354,7 +356,7 @@ def main() -> int:
     dense_engine = None
     dense_params = {"size": args.dense_size, "src_images": args.pm_src_images,
                     "iterations": args.pm_iterations, "window_step": args.pm_window_step,
-                    "geom_consistency": not args.pm_no_geom}
+                    "geom_consistency": not args.pm_no_geom, "every": args.dense_every}
     if args.reuse and fused.exists() and not args.redo_dense:
         dense_engine = "reused"
         note(f"reused dense cloud {fused}")
@@ -362,8 +364,12 @@ def main() -> int:
         for stale in (undist, out / "mvs"):
             if stale.exists():
                 shutil.rmtree(stale)
+        # SfM needs heavy overlap to chain poses; dense stereo does not need every
+        # overlapping view, so it can run on a spread-out subset at full resolution.
+        dense_names = sorted(im.name for im in rec.images.values())[::max(args.dense_every, 1)]
+        dense_params["frames"] = len(dense_names)
         with timed("undistort"):
-            pycolmap.undistort_images(undist, sparse_model, images,
+            pycolmap.undistort_images(undist, sparse_model, images, image_names=dense_names,
                                       num_patch_match_src_images=args.pm_src_images,
                                       undistort_options=_undistort_options(args.dense_size),
                                       num_threads=threads)

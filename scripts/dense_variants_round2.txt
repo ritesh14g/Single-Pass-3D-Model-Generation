@@ -1,0 +1,7 @@
+# Round 2 of the S4-8 dense sweep: can full resolution (1920 px, ~10 cm/px on Esri)
+# be kept while cutting time? Round 1 always cut size and views together.
+# name|probe flags  (most informative first; later ones can be skipped)
+s1920_v8_geom|--dense-size 1920 --pm-src-images 8
+s1920_v8_geom_e2|--dense-size 1920 --pm-src-images 8 --dense-every 2
+s1280_v8_geom_e2|--dense-size 1280 --pm-src-images 8 --dense-every 2
+s1920_v12_geom|--dense-size 1920 --pm-src-images 12

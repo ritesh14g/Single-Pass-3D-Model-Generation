@@ -1465,3 +1465,38 @@ code was run on local outputs.
 **Next:** box: `bash scripts/dense_sweep.sh data/interim/esri_gpu data/outputs/recon_probe/esri_gpu`;
 choose the dense setting; then build `src/recon/track_a_colmap.py` + config + Stage Lab panel +
 `stage4_eval.py`.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Dense sweep round 1 (S4-8)
+**Measured (box, Esri, one sparse model, 45 frames):**
+
+| Variant | PatchMatch s | Points | Footprint m² | Mesh faces |
+|---|---|---|---|---|
+| baseline 1920 px, 20 views, geom | 1133.3 | 460 224 | 60 749 | 677 795 |
+| 1280, 8 views, geom | 614.2 | 318 485 | 63 631 | 482 890 |
+| 960, 8 views, geom | 436.2 | 249 719 | 64 872 | 377 474 |
+| 1280, 8 views, no geom | 281.3 | 284 931 | 59 578 | 412 525 |
+| 1280, 8 views, 3 iter, window step 2 | 165.0 | 215 729 | 51 864 | 330 775 |
+| 960, 6 views, 3 iter, no geom | 115.4 | 182 640 | 53 226 | 270 691 |
+
+**Reading:** coverage survives 1280/960 with the geometric pass (+5–7%); detail does not (points
+−31% / −46%: ~15 / ~20 cm per pixel against ~10 cm at 1920 on Esri at 111 m AGL). Iteration and
+window-step cuts lose 12–15% coverage. Dropping the geometric pass is not free: it is the filter
+that removes wrong depths. Caveat: footprint cannot tell real extra ground from stray points, so the
+coverage gain with fewer views is not proven to be real. Every round-1 variant changed size and
+views together, so the cost of full resolution with fewer views is unknown.
+
+**Provisional default:** 1280 px, 8 views, geometric pass — pending round 2.
+
+**Scale problem:** 614 s for a 1.7-min clip → ~1 h of dense for a 10-min video against the §9 MVS
+budget of 4 min. Settings alone cannot close that; frame subsampling for dense is the next lever.
+
+**Modified:**
+- `scripts/recon_probe.py` — `--dense-every N`: SfM keeps all frames, dense stereo runs on every Nth
+  registered frame (`undistort_images(image_names=)`); frame count in `dense.params`.
+- `scripts/dense_sweep.sh` — optional variants file, `SKIP_BASELINE=1`, `frames` column.
+
+**Created:** `scripts/dense_variants_round2.txt` — 1920/8, 1920/8 every 2, 1280/8 every 2, 1920/12.
+
+**Tests:** not run — scripts only. Subset undistort checked locally (22 of 43 frames, `__auto__, 8`).
+
+**Next:** box: round 2; pick the default; start `src/recon/track_a_colmap.py`.

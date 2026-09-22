@@ -6,11 +6,16 @@
 # geometric pass) took 1133 s for 45 frames on the 2g.20gb MIG slice; the spec's MVS
 # budget is 4 min for a 10-min video.
 #
-#   bash scripts/dense_sweep.sh data/interim/esri_gpu data/outputs/recon_probe/esri_gpu
+#   bash scripts/dense_sweep.sh data/interim/esri_gpu data/outputs/recon_probe/esri_gpu [variants.txt]
+#
+# variants.txt (optional) replaces the built-in list: one "name|probe flags" per line,
+# '#' comments allowed. SKIP_BASELINE=1 skips re-measuring the baseline cloud. The
+# table lists every variant already in <base>_sweep, so runs accumulate.
 set -euo pipefail
 
 RUN_DIR=${1:?run dir of src.cli run}
 BASE=${2:?probe output that holds the sparse model}
+VARIANTS_FILE=${3:-}
 SWEEP=${BASE}_sweep
 OMVS=${OMVS:-tools/openmvs/bin}
 PY=${PY:-.venv/bin/python}
@@ -24,9 +29,15 @@ VARIANTS=(
   "s960_v6_i3_nogeom|--dense-size 960 --pm-src-images 6 --pm-iterations 3 --pm-no-geom"
 )
 
-echo "== baseline: measure the existing dense cloud (no recompute)"
-"$PY" scripts/recon_probe.py --run-dir "$RUN_DIR" --out "$BASE" --openmvs-bin "$OMVS" \
-  --reuse --no-texture > /dev/null 2>&1 || echo "baseline measurement failed (see $BASE/probe.log)"
+if [[ -n "$VARIANTS_FILE" ]]; then
+  mapfile -t VARIANTS < <(grep -Ev '^[[:space:]]*(#|$)' "$VARIANTS_FILE")
+fi
+
+if [[ "${SKIP_BASELINE:-0}" != "1" ]]; then
+  echo "== baseline: measure the existing dense cloud (no recompute)"
+  "$PY" scripts/recon_probe.py --run-dir "$RUN_DIR" --out "$BASE" --openmvs-bin "$OMVS" \
+    --reuse --no-texture > /dev/null 2>&1 || echo "baseline measurement failed (see $BASE/probe.log)"
+fi
 
 mkdir -p "$SWEEP"
 for entry in "${VARIANTS[@]}"; do
@@ -49,7 +60,7 @@ base, sweep = Path(sys.argv[1]), Path(sys.argv[2])
 rows = [("baseline_1920_v20", base)] + [(d.name, d) for d in sorted(sweep.iterdir()) if d.is_dir()]
 baseline_patchmatch_s = 1133.3  # measured 2026-09-21; the baseline measurement above reuses its cloud
 print("\n===== PASTE EVERYTHING BELOW BACK TO CLAUDE =====")
-print(f"{'variant':22s} {'patchmatch_s':>12s} {'fusion_s':>9s} {'points':>9s} {'footprint_m2':>12s} {'mesh_faces':>10s}  notes")
+print(f"{'variant':22s} {'frames':>6s} {'patchmatch_s':>12s} {'fusion_s':>9s} {'points':>9s} {'footprint_m2':>12s} {'mesh_faces':>10s}  notes")
 for name, d in rows:
     f = d / "probe_summary.json"
     if not f.exists():
@@ -59,7 +70,8 @@ for name, d in rows:
     t, dense, mesh = s["timings_s"], s.get("dense", {}), s.get("mesh", {})
     pm = t.get("dense_patchmatch_gpu", baseline_patchmatch_s if d == base else float("nan"))
     notes = "; ".join(n for n in s.get("notes", []) if "DOWNGRADE" in n)
-    print(f"{name:22s} {pm:12.1f} {t.get('dense_fusion', float('nan')):9.1f} "
+    params = dense.get("params") if isinstance(dense.get("params"), dict) else {}
+    print(f"{name:22s} {str(params.get('frames', '-')):>6s} {pm:12.1f}{t.get('dense_fusion', float('nan')):9.1f} "
           f"{dense.get('points', 0):9d} {dense.get('footprint_m2', float('nan')):12.0f} "
           f"{mesh.get('faces', 0):10d}  {notes}")
 EOF
