@@ -73,7 +73,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
 | 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Refinement BA: planned |
-| 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the laptop demo (FBX via headless Blender), coverage %, `metadata.json`. Box run on Esri pending |
+| 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the box (Esri, FBX via headless Blender 4.2.3): Stage 5 **89.3**, coverage **72.6%**, 22 s |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
 ---
@@ -325,7 +325,7 @@ These remain, in priority order; each links its open issue:
 | S5-1 | 5 | DJI SRT/CSV altitude datum is **assumed** ellipsoidal (spec §8.1); if the competition drone's `abs_alt` is MSL, heights are off by the geoid undulation (−86 m at Bengaluru) | Check one competition clip's `abs_alt` against a known ground height; set `geo.vertical.gps_altitude_datum`. The assumption is flagged in `metadata.json` |
 | S5-2 | 5 | Orthophoto is binned from the dense cloud's colours (~0.5 m on Esri), not rendered from the textured mesh (~15 cm texels) | Render the textured mesh top-down (orthographic) into the ortho grid |
 | S5-3 | 5 | GCP file (`geo.gcp.file`) accepted by config but not used; LAS points are all class 1 (unclassified) | GCPs as weighted pairs in the similarity fit; ground vs above-ground classes from the DSM |
-| S5-4 | 5 | Coverage % is only meaningful on real footage (demo: 36% of a 47 m² footprint) | Record Esri's number from the box run |
+| ~~S5-4~~ | 5 | ~~Coverage % unmeasured on real footage~~ | **Closed 2026-09-22:** Esri 72.6% (124 178 of 171 045 m² seen). The gap is mostly the river and scene edges (no multi-view-consistent depth); Stage 3 must report it as unobserved/unreconstructable, not fill it |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | LIC-1 | 4 | **VGGT licence vs the PS domain.** Every VGGT checkpoint carries a no-military / no-espionage acceptable-use clause (VGGT License AUP §2; VGGT-1B is also CC-BY-NC-4.0; VGGT-Ω is FAIR non-commercial research). The PS is set by NTRO and lists military reconnaissance and border mapping among applications | **Team decision 2026-09-22 (ritesh14g):** use VGGT for the competition prototype; the PS names disaster management and treats military use as one optional application, and a selected project would move to an in-house model built with government support. State this position and the licence terms in the README (§11). Track A (COLMAP BSD, OpenMVS AGPL) stays the licence-clean floor |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
@@ -1956,3 +1956,25 @@ synthetic scene, S5-4).
 
 **Next:** box: Blender for Linux into `tools/`, full Stages 1–5 on Esri; then the Stage 4 backlog (§4b),
 Stage 3, Stage 6.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Stages 1–5 on the box (Esri)
+**Measured (`scripts/box_full_run.sh`, default preset, VGGT-Ω hybrid):** ingest 50.4 s, condition 46.9,
+track_a 205.2, **geo 0.5, export 21.9** → **324.9 s** for 1.7 min of video. Stage 4 **93.3** (only fail:
+camera vs GPS 6.47 m); 48/50 registered, 2 SfM pieces, 1 merged (+4 frames); height −4.1%; 2.13 M points,
+anchor spread 0.72%; mesh 1.06 M faces (target 1.065 M). Stage 5 **89.3**: EPSG:32617+5773, EGM96
+orthometric; camera vs GPS 6.387 m RMS (**horizontal 5.078, vertical 3.874**; inliers-only 5.893; 47/48
+RANSAC inliers); track collinearity 0.286 (no ground constraint needed); **all six formats written and
+re-opened**: OBJ 129.9 MB textured, PLY/LAS 2.13 M points (LAS CRS "WGS 84 / UTM zone 17N + EGM96 height"),
+DSM + ortho 892×1721 at 0.5 m (37% of the bounding-box cells valid — the curved path leaves the rectangle
+mostly outside the flight; 93 284 cells gap-filled), glb 80.8 MB with offset [415100, 3017100, 0],
+confidence glb, **FBX 51.2 MB**. Coverage **72.6%** (warn).
+
+**Sanity check:** ground plane (median dense height) **16.1 m orthometric**; KLV frame-centre elevation is
+~6 m and the scene is forest, so ~10 m of canopy above the ground is plausible.
+
+**S4-1 sharpened:** 3.9 m of the residual is **vertical**, while KLV altitude spans only 116.6–117.2 m over
+the flight — telemetry (altitude resolution / timing), not only SfM, is suspect.
+
+**Tests:** not run (no code change).
+
+**Next:** Stage 4 backlog §4b item 1 (S4-1: time-offset sweep and altitude check), then §7.3 GPS-prior BA.
