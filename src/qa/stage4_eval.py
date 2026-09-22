@@ -92,9 +92,16 @@ def _sparse_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
                        _higher_better(frac, _band(cfg, "registered_fraction_pass"), _band(cfg, "registered_fraction_warn")),
                        f"{r.get('registered')} of {r.get('frames_in')} conditioned frames"))
     models = int(r.get("models", 1))
-    status = PASS if models <= 1 else WARN if models <= _band(cfg, "models_warn") else FAIL
-    ev.kpis.append(Kpi("models", g, "Separate models", models, "1", status,
-                       "the flight split into disconnected pieces; only the largest is used" if models > 1 else ""))
+    merged = int(r.get("models_merged", 0))
+    unplaced = models - merged  # pieces still separate after the GPS merge
+    status = PASS if unplaced <= 1 else WARN if unplaced <= _band(cfg, "models_warn") else FAIL
+    detail = ""
+    if merged:
+        detail = (f"SfM split the flight into {models} pieces; {merged} placed through GPS "
+                  f"(+{r.get('frames_added_by_merge', 0)} frames, piece GPS fit {r.get('merge_piece_gps_rms_m')} m)")
+    elif models > 1:
+        detail = "the flight split into disconnected pieces; only the largest is used"
+    ev.kpis.append(Kpi("models", g, "Separate models", unplaced, "1", status, detail))
     reproj = float(r.get("reproj_px", float("nan")))
     ev.kpis.append(Kpi("reproj_px", g, "Mean reprojection error", reproj, f"<= {_band(cfg, 'reproj_px_pass')} px",
                        _lower_better(reproj, _band(cfg, "reproj_px_pass"), _band(cfg, "reproj_px_warn")), unit="px"))
@@ -237,8 +244,8 @@ def camera_track(outputs: TrackAOutputs, geo_path: Path | None) -> pd.DataFrame:
         return pd.DataFrame(columns=["east", "north", "source", "frame"])
     rec = max(models, key=lambda m: m.num_reg_images())
     gps = alignment.read_geo_enu(geo_path)
-    names = sorted(im.name for im in rec.images.values())
-    by_name = {im.name: im for im in rec.images.values()}
+    names = sorted(im.name for im in rec.images.values() if im.has_pose)
+    by_name = {im.name: im for im in rec.images.values() if im.has_pose}
     centres = np.array([by_name[n].projection_center() for n in names])
     _, transform = alignment.metric_check(names, centres, np.empty((0, 3)), gps)
     rows = [{"east": g[0], "north": g[1], "source": "GPS", "frame": n} for n, g in gps.items()]

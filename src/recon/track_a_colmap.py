@@ -32,6 +32,7 @@ import numpy as np
 from src.core.device import cpu_thread_budget, resolve_device
 from src.core.logging import get_logger, log_downgrade, log_event
 from src.recon import alignment, meshing, openmvs
+from src.recon.merge import merge_by_gps, posed
 
 log = get_logger(__name__)
 
@@ -104,10 +105,27 @@ def run_track_a(
     hints = alignment.telemetry_hints(telemetry_path)
     gps = alignment.read_geo_enu(geo_path) if geo_path and Path(geo_path).exists() else {}
 
-    rec, sparse_dir, focal_source = _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names,
-                                            hints, threads, use_cuda, run)
-    reg_names = sorted(im.name for im in rec.images.values())
-    by_name = {im.name: im for im in rec.images.values()}
+    models, sparse_dir, focal_source = _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names,
+                                               hints, threads, use_cuda, run)
+    rec = max(models, key=lambda r: r.num_reg_images())
+    sparse_model = sparse_dir / str(_best_model_id(sparse_dir, rec))
+    merge_info: dict[str, Any] = {"models": len(models), "merged": 0, "frames_added": 0}
+    if len(models) > 1 and tcfg.merge.enabled and gps:
+        # SfM split the flight; place the other pieces through GPS instead of dropping them.
+        with run.timed("sparse_merge"):
+            rec, merge_info = merge_by_gps(models, gps, min_frames=int(tcfg.merge.min_gps_frames),
+                                           max_rms_m=float(tcfg.merge.max_piece_gps_rms_m))
+        if merge_info["merged"]:
+            sparse_model = sparse_dir / "merged"
+            sparse_model.mkdir(exist_ok=True)
+            rec.write(str(sparse_model))
+        for reason in merge_info.get("skipped", []):
+            run.downgrade("SfM piece", "dropped", reason)
+    elif len(models) > 1:
+        run.downgrade("SfM pieces", f"largest of {len(models)} only",
+                      "no GPS to place the others" if not gps else "recon.track_a.merge.enabled is off")
+    reg_names = sorted(im.name for im in posed(rec))
+    by_name = {im.name: im for im in posed(rec)}
     centres = np.array([by_name[n].projection_center() for n in reg_names])
     sparse_points = np.array([p.xyz for p in rec.points3D.values()])
     metric, transform = alignment.metric_check(reg_names, centres, sparse_points, gps)
@@ -116,7 +134,10 @@ def run_track_a(
         "frames_in": len(names),
         "registered": rec.num_reg_images(),
         "registered_fraction": round(rec.num_reg_images() / len(names), 3),
-        "models": len(list(p for p in sparse_dir.iterdir() if p.is_dir())),
+        "models": len(models),
+        "models_merged": merge_info["merged"],
+        "frames_added_by_merge": merge_info["frames_added"],
+        **({"merge_piece_gps_rms_m": merge_info["piece_gps_rms_m"]} if merge_info.get("piece_gps_rms_m") else {}),
         "sparse_points": rec.num_points3D(),
         "reproj_px": round(float(rec.compute_mean_reprojection_error()), 3),
         "track_length": round(float(rec.compute_mean_track_length()), 2),
@@ -131,7 +152,7 @@ def run_track_a(
             metrics["height_error_pct"] = round(
                 100 * (metrics["height_above_ground_m"] - hints["expected_agl_m"]) / hints["expected_agl_m"], 1)
 
-    artifacts: dict[str, Path] = {"sparse": sparse_dir / str(_best_model_id(sparse_dir, rec))}
+    artifacts: dict[str, Path] = {"sparse": sparse_model}
     fused, dense_info, mvs_dir = _dense(pycolmap, cfg, tcfg, rec, artifacts["sparse"], images_dir, out_dir,
                                         threads, use_cuda, bin_dir, budget_stage, run,
                                         depth_predictor=depth_predictor)
@@ -146,7 +167,16 @@ def run_track_a(
         if area is not None:
             dense_info["footprint_m2"] = round(area)
 
-        mesh, mesh_info = _mesh(pycolmap, tcfg, fused, out_dir, mvs_dir, threads, bin_dir, run)
+        # The hybrid back-projects each patch of ground from every overlapping frame (views per
+        # point ~5 on Esri), so the raw Delaunay mesh triangulates near-duplicates. One vertex per
+        # real surface sample loses ~no shape (Esri, 659k -> 300k faces: median 10 cm, 95% 21 cm
+        # upper bounds) and halves texturing time.
+        target_faces = 0
+        per_sample = float(tcfg.mesh.hybrid_faces_per_sample)
+        if dense_info.get("engine") == "vggt_hybrid" and per_sample > 0 and dense_info.get("views_per_point_median"):
+            target_faces = int(per_sample * dense_info["points"] / dense_info["views_per_point_median"])
+        mesh, mesh_info = _mesh(pycolmap, tcfg, fused, out_dir, mvs_dir, threads, bin_dir, run,
+                                target_faces=target_faces)
         metrics["mesh"] = mesh_info
         if mesh is not None:
             artifacts["mesh"] = mesh
@@ -232,8 +262,7 @@ def _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names, hints, thread
         recs = pycolmap.incremental_mapping(db, images_dir, sparse_dir, options=mapper)
     if not recs:
         raise TrackAError("SfM produced no model: too few matches between the conditioned frames")
-    rec = max(recs.values(), key=lambda r: r.num_reg_images())
-    return rec, sparse_dir, focal_source
+    return list(recs.values()), sparse_dir, focal_source
 
 
 def _colmap_masks(images_dir: Path, masks_dir: Path | None, out_dir: Path, names: list[str]) -> Path | None:
@@ -312,8 +341,8 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
         # The skipped frames must leave the model itself: undistort_images(image_names=)
         # keeps every frame, so PatchMatch's __auto__ source views point at missing files.
         subset = pycolmap.Reconstruction(str(sparse_model))
-        keep = set(sorted(im.name for im in subset.images.values())[::every])
-        for frame_id in {im.frame_id for im in subset.images.values() if im.name not in keep}:
+        keep = set(sorted(im.name for im in posed(subset))[::every])
+        for frame_id in {im.frame_id for im in posed(subset) if im.name not in keep}:
             subset.deregister_frame(frame_id)
         dense_model = out_dir / "sparse_dense_subset"
         if dense_model.exists():
@@ -419,7 +448,7 @@ def _budgeted_size(dcfg, frames: int, gpu: bool, budget_stage, native_px: int) -
 
 
 # -- mesh and texture -------------------------------------------------------
-def _mesh(pycolmap, tcfg, fused, out_dir, mvs_dir, threads, bin_dir, run):
+def _mesh(pycolmap, tcfg, fused, out_dir, mvs_dir, threads, bin_dir, run, target_faces: int = 0):
     mcfg = tcfg.mesh
     mesh = out_dir / "mesh.ply"
     scene_dense = mvs_dir / "scene_dense.mvs"
@@ -430,15 +459,17 @@ def _mesh(pycolmap, tcfg, fused, out_dir, mvs_dir, threads, bin_dir, run):
                     openmvs.run_tool(bin_dir, "InterfaceCOLMAP", mvs_dir, "-i", str(fused.parent), "-p", str(fused),
                                      "-o", str(scene_dense), "--image-folder", str(fused.parent / "images"),
                                      threads=threads)
+            extra = ["--target-face-num", str(target_faces)] if target_faces > 0 else []
             with run.timed("mesh_openmvs"):
                 openmvs.run_tool(bin_dir, "ReconstructMesh", mvs_dir, "-i", str(scene_dense), "-o", str(mesh),
-                                 threads=threads)
+                                 *extra, threads=threads)
             # ReconstructMesh can clean a thin surface down to nothing, exit 0 and write no
             # file (seen on a tiny flat synthetic scene); that is a failure, not a mesh.
             counts = meshing.ply_counts(mesh) if mesh.exists() else {}
             if not counts.get("faces"):
                 raise openmvs.OpenMvsError("ReconstructMesh produced an empty mesh")
-            return mesh, {"mesher": "openmvs_delaunay", **counts, **_face_ratio(counts)}
+            return mesh, {"mesher": "openmvs_delaunay", "target_faces": target_faces, **counts,
+                          **_face_ratio(counts)}
         except openmvs.OpenMvsError as exc:
             run.downgrade("OpenMVS ReconstructMesh", "pycolmap Poisson", str(exc))
     raw = out_dir / "mesh_poisson.ply"

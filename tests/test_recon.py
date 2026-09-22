@@ -386,7 +386,12 @@ def test_hybrid_depth_is_anchored_fused_and_meshed(tiny_frames):
     assert (out / "dense" / "fused.ply.vis").exists()
     assert any((out / "track_b_depth").glob("*.npz"))       # confidence maps kept for Stage 3
     if openmvs.find_bin_dir("auto") is not None:
-        assert outcome["metrics"]["mesh"]["mesher"] in ("openmvs_delaunay", "colmap_poisson", None)
+        mesh = outcome["metrics"]["mesh"]
+        assert mesh["mesher"] in ("openmvs_delaunay", "colmap_poisson", None)
+        if mesh["mesher"] == "openmvs_delaunay":
+            # one vertex per unique surface sample: points / views per point, x2 faces
+            expected = int(2.0 * dense["points"] / dense["views_per_point_median"])
+            assert mesh["target_faces"] == expected
 
 
 def test_hybrid_falls_back_to_track_a_dense(tiny_frames):
@@ -418,3 +423,64 @@ def test_mode_a_never_calls_vggt(tiny_frames):
     outcome = run_track_a(images, root / "mode_a", cfg, depth_predictor=must_not_run)
     assert not any("Track B" in d for d in outcome["metrics"]["downgrades"])
     assert outcome["metrics"]["dense"].get("mode") == "A"
+
+
+# -- merging SfM pieces through GPS ----------------------------------------------
+@pytest.fixture(scope="module")
+def tiny_model(tiny_frames):
+    pytest.importorskip("pycolmap")
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    cfg = load_config(overrides=["device.prefer=cpu", "run.mode=A", "recon.track_a.texture.enabled=false",
+                                 "recon.track_a.dense.max_image_size=320"])
+    outcome = run_track_a(images, root / "for_merge", cfg)
+    import pycolmap
+
+    return pycolmap.Reconstruction(str(outcome["artifacts"]["sparse"]))
+
+
+def _split(model, gps_scale=7.3):
+    import pycolmap
+
+    from src.recon.merge import posed
+
+    names = sorted(im.name for im in posed(model))
+    gps = {im.name: np.asarray(im.projection_center()) * gps_scale + np.array([100.0, -40.0, 3.0])
+           for im in posed(model)}
+
+    def piece(keep):
+        r = pycolmap.Reconstruction(model)
+        for im in list(r.images.values()):
+            if im.name not in keep:
+                r.deregister_frame(im.frame_id)
+        return r
+
+    half = set(names[: len(names) // 2])
+    a, b = piece(half), piece(set(names) - half)
+    b.transform(pycolmap.Sim3d(0.37, pycolmap.Rotation3d(np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1.0]])),
+                               np.array([5.0, 9.0, -2.0])))
+    return names, gps, a, b
+
+
+def test_merge_places_a_moved_piece_back_exactly(tiny_model):
+    from src.recon.merge import merge_by_gps, posed
+
+    names, gps, a, b = _split(tiny_model)
+    merged, info = merge_by_gps([a, b], gps)
+    got = {im.name: np.asarray(im.projection_center()) for im in posed(merged)}
+    assert info["merged"] == 1 and len(got) == len(names)
+    for name, centre in got.items():
+        assert np.allclose(centre, tiny_model.find_image_with_name(name).projection_center(), atol=1e-6)
+
+
+def test_merge_refuses_a_piece_gps_cannot_place(tiny_model):
+    from src.recon.merge import merge_by_gps, posed
+
+    names, gps, a, b = _split(tiny_model)
+    rng = np.random.default_rng(1)
+    for im in posed(b):  # wreck the GPS of the second piece only
+        gps[im.name] = gps[im.name] + rng.normal(0, 200.0, 3)
+    merged, info = merge_by_gps([a, b], gps, max_rms_m=25.0)
+    assert info["merged"] == 0 and info["skipped"]
+    assert len(posed(merged)) == len(posed(a))

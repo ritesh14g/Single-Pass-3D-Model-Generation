@@ -366,6 +366,14 @@ recon:
     mapper:
       # Hard cap on incremental mapping (0 = none); the budget ladder backs it up.
       max_runtime_s: 0
+    merge:
+      # When SfM splits the flight into pieces (they share no images), place the smaller
+      # pieces through GPS instead of dropping them (box, Esri: 42 of 50 frames kept of 2
+      # pieces). The seam is only as good as the pieces' GPS fits.
+      enabled: true
+      min_gps_frames: 3
+      # A piece whose own GPS fit is worse than this is dropped rather than misplaced.
+      max_piece_gps_rms_m: 25.0
     dense:
       # Chosen by the S4-8 sweep on the box: keeps the geometric pass and all
       # frames; resolution sets detail (~15 cm/px on Esri at 1280).
@@ -390,6 +398,11 @@ recon:
       # openmvs (Delaunay) is the default: pycolmap-cuda12's Poisson shattered a
       # clean cloud on Linux (S4-6). poisson + cleaning is the fallback.
       mesher: openmvs
+      # Hybrid only: reduce the mesh to this many faces per unique surface sample
+      # (dense points / views per point). 0 = keep every face. Texturing time is ~linear in
+      # faces (laptop, 3 threads: 105 s at 659k vs 49 s at 300k) and the reduced surface
+      # stays within ~10 cm median / 21 cm 95% of the full one on Esri.
+      hybrid_faces_per_sample: 2.0
       poisson_depth: 11
       min_component_fraction: 0.01
     texture:

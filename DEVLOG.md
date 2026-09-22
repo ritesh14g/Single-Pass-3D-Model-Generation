@@ -123,7 +123,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `tests/test_recon.py` | 4 | Alignment, dense budget ladder, masks, mesh cleaning, scorecard bands, CPU end-to-end |
 | `scripts/vggt_probe.py` | 4 | Track B feasibility probe (VGGT) |
 | `src/recon/track_b_vggt.py` | 4 | Track B hybrid: VGGT depth in 8-frame windows, per-frame anchoring on Track A sparse points, multi-view consistency, COLMAP-format `fused.ply` + `.vis` |
-| `scripts/vggt_hybrid_probe.py` | 4 | Hybrid probe: VGGT depth vs COLMAP depth maps, pixel by pixel |
+| `scripts/vggt_hybrid_probe.py` | 4 | Hybrid probe: VGGT depth vs COLMAP depth maps, pixel by pixel; compares input widths |
+| `src/recon/merge.py` | 4 | Place disconnected SfM pieces through GPS; `posed()` filter for unregistered images |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
 | `.streamlit/config.toml` | UI | Streamlit server settings (upload cap 300 MB) |
@@ -1729,3 +1730,43 @@ which numpy promotes to float64 → `IndexError`. Offsets are int64 now.
 **Tests:** 374 passed / 0 failed (was 364; +10). Suite 131 s (the hybrid tests run real SfM).
 
 **Next:** box: full Stages 1–4 on Esri (default = hybrid), paste the Stage 4 scorecard.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — First full hybrid run on the box; SfM merge; mesh reduction; VGGT width
+**Measured (box, `src.cli run` Esri, default preset = hybrid):** Stage 4 **149 s** (was ~1290 s as the
+Track A probe): sparse 31.4 s, undistort 10.0, **dense_vggt 16.8 (VGGT 6.2)**, import 2.0,
+mesh 38.2, texture 50.6. Score **86.7** (12 pass / 2 warn / 1 fail / 5 info), no downgrades.
+Height −4.7%, anchor disagreement 0.83%, 1 075 250 points confirmed by a median 5 views,
+footprint 91 356 m², mesh 942 774 faces (2.0 per vertex), textured. Fail: camera vs GPS 5.65 m
+(S4-1). Warns: **42 of 50 frames in 2 SfM pieces** — Stage 1 logged 16+ `reduce_frames`
+degradations (CPU decode of 4K MPEG-2 TS on 3 cores, NVDEC refused per S1-15), widening the frame
+spacing until SfM lost the chain; the laptop, decoding faster, got 52/53 in one piece.
+
+**Fix 1 — keep every SfM piece (`src/recon/merge.py`, `recon.track_a.merge`):** pieces share no
+images, so COLMAP cannot merge them; each is fitted to GPS on its own and moved into the main piece's
+frame by `main_from_gps · gps_from_piece`, cameras and points copied in (a frame the main piece
+holds unregistered is re-posed). Pieces with < 3 GPS frames or a GPS fit worse than 25 m are
+dropped with a downgrade. The seam is as good as the two GPS fits; each piece's residual is reported.
+Tested: a real model cut in half with one half moved by a similarity comes back exactly (0 error,
+all frames); a piece with wrecked GPS is refused; the laptop's real 2-piece Esri result merged with
+no duplicates (its 7-frame piece was a subset of the 52-frame one). Scorecard "Separate models" now
+counts pieces left unplaced after the merge.
+- Also found: a model can hold **unregistered images**, and `projection_center()` on one aborts in
+  COLMAP. Every camera-position read in Track A/B, the merge and the evaluator now filters posed
+  images; Track B keeps `.vis` indices over all images (image-id order) and depth only for posed ones.
+
+**Fix 2 — mesh reduction in hybrid mode (`recon.track_a.mesh.hybrid_faces_per_sample: 2.0`):**
+the hybrid back-projects each ground patch from every overlapping frame, so the Delaunay mesh
+triangulates near-duplicates. Target faces = 2 × points / views per point (Esri: ~430 k from 943 k).
+Measured on the box's GPU cloud (laptop, 3 threads): reduce 659 k → 300 k faces costs +3.7 s of
+meshing and cuts texturing **104.6 → 48.8 s**; the reduced surface stays within **10.1 cm median,
+20.8 cm 95%, 25.8 cm 99%** of the full one (upper bounds: sampling spacing 21 cm); texture atlas
+13.5 → 11.3 MB (colour detail kept), OBJ 80 → 35 MB. COLMAP dense (mode A) is not reduced.
+
+**VGGT input width:** `recon.track_b.input_width` (default 518) with own preprocessing,
+bit-identical to VGGT's at 518 (max abs diff 0.0) and without the centre crop. The hybrid probe
+takes `--widths`; box run of 518/700/1036 pending.
+
+**Tests:** 376 passed / 0 failed (was 374; +2 merge tests, mesh-target assertion added).
+
+**Next:** box: widths result → choose `input_width`; rerun Stages 1–4 on Esri for the merge and the
+mesh reduction.

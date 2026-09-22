@@ -124,15 +124,17 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
         predictor = vggt_predictor(bcfg, device)
 
     rec = pycolmap.Reconstruction(str(Path(undist_dir) / "sparse"))
-    # fused.ply.vis indexes images in image-id order (verified on the box's COLMAP output).
+    # fused.ply.vis indexes images in image-id order (verified on the box's COLMAP output),
+    # counting every image in the model; only posed ones get depth.
     images = [rec.images[i] for i in sorted(rec.images)]
-    n = len(images)
+    order = [i for i, im in enumerate(images) if im.has_pose]
+    n = len(order)
     if n < 2:
         raise TrackBUnavailable(f"only {n} registered frame(s)")
     cam = next(iter(rec.cameras.values()))
     fx, fy, cx, cy = (float(v) for v in cam.params[:4])  # PINHOLE after undistortion
-    poses = [(im.cam_from_world().rotation.matrix(), np.asarray(im.cam_from_world().translation))
-             for im in images]
+    poses = {i: (images[i].cam_from_world().rotation.matrix(), np.asarray(images[i].cam_from_world().translation))
+             for i in order}
     points3d = {pid: np.asarray(p.xyz) for pid, p in rec.points3D.items()}
     if depth_dir is not None:
         Path(depth_dir).mkdir(parents=True, exist_ok=True)
@@ -141,14 +143,16 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
     rejected: dict[str, int] = {}
     spreads, anchor_counts = [], []
     vggt_s = 0.0
-    for start, stop, owned in windows_for(n, int(bcfg.window_frames)):
+    for start, stop, owned_pos in windows_for(n, int(bcfg.window_frames)):
         started = time.perf_counter()
-        depth, conf, rgb = predictor([Path(undist_dir) / "images" / images[i].name for i in range(start, stop)])
+        window = order[start:stop]
+        owned = [order[p] for p in owned_pos]
+        depth, conf, rgb = predictor([Path(undist_dir) / "images" / images[i].name for i in window])
         vggt_s += time.perf_counter() - started
         h, w = depth.shape[1:]
         sx, sy = w / cam.width, h / cam.height
         for i in owned:
-            k = i - start
+            k = window.index(i)
             rot, trans = poses[i]
             uv, z_true = [], []
             for p2d in images[i].points2D:
@@ -203,6 +207,7 @@ def _fuse(frames, poses, intrinsics, bcfg):
     reach = int(bcfg.consistency.neighbours)
     need = int(bcfg.consistency.min_extra_views)
     order = sorted(frames)
+    rank = {i: r for r, i in enumerate(order)}
     out_pts, out_nrm, out_rgb, out_vis = [], [], [], []
     before = 0
     for i in order:
@@ -214,7 +219,7 @@ def _fuse(frames, poses, intrinsics, bcfg):
         cam_pts = np.stack([(xs / f["sx"] - cx) / fx * z, (ys / f["sy"] - cy) / fy * z, z], axis=1)
         world = (rot.T @ (cam_pts - trans).T).T
         before += len(world)
-        neighbours = [j for j in order if j != i and abs(j - i) <= reach]
+        neighbours = [j for j in order if j != i and abs(rank[j] - rank[i]) <= reach]
         agree = np.zeros((len(world), len(neighbours)), dtype=bool)
         for c, j in enumerate(neighbours):
             g = frames[j]
