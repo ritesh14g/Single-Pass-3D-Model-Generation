@@ -536,3 +536,48 @@ def test_omega_unavailable_falls_back_to_vggt_1b(tiny_frames, monkeypatch):
     assert dense["engine"] == "vggt_hybrid" and dense["model"] == "vggt"
     assert "GatedRepoError" in dense["model_fallback"]
     assert any(d.startswith("VGGT-Omega -> VGGT-1B") for d in outcome["metrics"]["downgrades"])
+
+
+# -- GPS time sync + priors (S4-1) -------------------------------------------------
+def _track_and_cameras(true_shift_s, jitter_m=0.0, seed=0):
+    from src.recon.gps_sync import GpsTrack
+
+    rng = np.random.default_rng(seed)
+    t = np.arange(0.0, 100.0, 1.0)
+    # a curved flight at ~10 m/s near Florida, fixes once per second
+    east = 10 * t + 30 * np.sin(t / 15)
+    north = 60 * np.sin(t / 25)
+    lat0, lon0 = 27.27, -81.86
+    lat = lat0 + np.degrees(north / 6378137.0)
+    lon = lon0 + np.degrees(east / (6378137.0 * math.cos(math.radians(lat0))))
+    track = GpsTrack(t, lat, lon, np.full(len(t), 117.0))
+    frame_t = np.linspace(3, 95, 40)
+    truth = track.enu(frame_t + true_shift_s) + rng.normal(0, jitter_m, (40, 3))
+    rot = np.array([[0.0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    centres = (truth @ rot.T) / 7.0 + 3.0  # an SfM model: rotated, scaled, shifted
+    return track, frame_t, centres
+
+
+@pytest.mark.parametrize("shift", [-1.7, 0.0, 1.2])
+def test_time_offset_is_recovered(shift):
+    from src.recon.gps_sync import estimate_offset
+
+    track, frame_t, centres = _track_and_cameras(shift, jitter_m=0.5)
+    est = estimate_offset(centres, frame_t, track, search_s=3.0, step_s=0.05)
+    assert est["best_s"] == pytest.approx(shift, abs=0.15)
+    assert not est["at_search_edge"]
+    if abs(shift) > 1:
+        assert est["improvement_pct"] > 10
+
+
+def test_synced_geo_is_the_track_at_shifted_times(tmp_path):
+    from src.recon.gps_sync import frame_times, write_geo
+
+    track, _, _ = _track_and_cameras(0.0)
+    pd.DataFrame({"index": [0, 30, 60], "timestamp_s": [0.0, 1.0, 2.0]}).to_parquet(tmp_path / "frames.parquet")
+    times = frame_times(tmp_path / "frames.parquet")
+    assert times == {"frame_000000.jpg": 0.0, "frame_000030.jpg": 1.0, "frame_000060.jpg": 2.0}
+    path = write_geo(tmp_path / "geo.txt", sorted(times), times, track, offset_s=-0.5)
+    rows = [ln.split() for ln in path.read_text().splitlines()[1:]]
+    lla = track.lonlatalt(np.array([0.0, 1.0, 2.0]) - 0.5)
+    assert np.allclose([[float(r[1]), float(r[2])] for r in rows], lla[:, :2], atol=1e-9)

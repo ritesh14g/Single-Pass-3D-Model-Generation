@@ -73,6 +73,8 @@ def run_track_a(
     telemetry_path: Path | None = None,
     budget_stage: Any = None,
     depth_predictor: Any = None,
+    frames_path: Path | None = None,
+    gps_track_path: Path | None = None,
 ) -> dict[str, Any]:
     """Reconstruct the conditioned frames in ``images_dir`` into ``out_dir``.
 
@@ -105,25 +107,25 @@ def run_track_a(
     hints = alignment.telemetry_hints(telemetry_path)
     gps = alignment.read_geo_enu(geo_path) if geo_path and Path(geo_path).exists() else {}
 
-    models, sparse_dir, focal_source = _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names,
-                                               hints, threads, use_cuda, run)
-    rec = max(models, key=lambda r: r.num_reg_images())
-    sparse_model = sparse_dir / str(_best_model_id(sparse_dir, rec))
-    merge_info: dict[str, Any] = {"models": len(models), "merged": 0, "frames_added": 0}
-    if len(models) > 1 and tcfg.merge.enabled and gps:
-        # SfM split the flight; place the other pieces through GPS instead of dropping them.
-        with run.timed("sparse_merge"):
-            rec, merge_info = merge_by_gps(models, gps, min_frames=int(tcfg.merge.min_gps_frames),
-                                           max_rms_m=float(tcfg.merge.max_piece_gps_rms_m))
-        if merge_info["merged"]:
-            sparse_model = sparse_dir / "merged"
-            sparse_model.mkdir(exist_ok=True)
-            rec.write(str(sparse_model))
-        for reason in merge_info.get("skipped", []):
-            run.downgrade("SfM piece", "dropped", reason)
-    elif len(models) > 1:
-        run.downgrade("SfM pieces", f"largest of {len(models)} only",
-                      "no GPS to place the others" if not gps else "recon.track_a.merge.enabled is off")
+    models, sparse_dir, focal_source, database, mapper = _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir,
+                                                                 names, hints, threads, use_cuda, run)
+    rec, merge_info = _merge_pieces(models, gps, tcfg, run)
+    sparse_model = sparse_dir / str(_best_model_id(sparse_dir, max(models, key=lambda r: r.num_reg_images())))
+    if merge_info["merged"]:
+        sparse_model = sparse_dir / "merged"
+        sparse_model.mkdir(exist_ok=True)
+        rec.write(str(sparse_model))
+
+    # §7.3 / §8.1 step 4: GPS time sync + a second mapping pass with GPS priors, kept only if it
+    # passes the regression gate (DEVLOG S4-1).
+    prior_info: dict[str, Any] = {"enabled": bool(tcfg.gps_priors.enabled)}
+    synced_geo = None
+    if tcfg.gps_priors.enabled and frames_path and gps_track_path and Path(gps_track_path).exists():
+        rec, sparse_model, gps, prior_info, synced_geo = _refine_with_gps(
+            pycolmap, tcfg, rec, sparse_model, sparse_dir, database, mapper, images_dir, names,
+            Path(frames_path), Path(gps_track_path), gps, out_dir, run)
+    elif tcfg.gps_priors.enabled:
+        prior_info["skipped"] = "no frame times or GPS track"
     reg_names = sorted(im.name for im in posed(rec))
     by_name = {im.name: im for im in posed(rec)}
     centres = np.array([by_name[n].projection_center() for n in reg_names])
@@ -144,6 +146,7 @@ def run_track_a(
         "focal_px": round(float(next(iter(rec.cameras.values())).params[0]), 1),
         "focal_source": focal_source,
         "using_cuda": use_cuda,
+        "gps_refinement": prior_info,
         **metric,
     }
     if "expected_agl_m" in hints:
@@ -153,6 +156,8 @@ def run_track_a(
                 100 * (metrics["height_above_ground_m"] - hints["expected_agl_m"]) / hints["expected_agl_m"], 1)
 
     artifacts: dict[str, Path] = {"sparse": sparse_model}
+    if synced_geo is not None:
+        artifacts["geo_synced"] = synced_geo
     fused, dense_info, mvs_dir = _dense(pycolmap, cfg, tcfg, rec, artifacts["sparse"], images_dir, out_dir,
                                         threads, use_cuda, bin_dir, budget_stage, run,
                                         depth_predictor=depth_predictor)
@@ -262,7 +267,101 @@ def _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names, hints, thread
         recs = pycolmap.incremental_mapping(db, images_dir, sparse_dir, options=mapper)
     if not recs:
         raise TrackAError("SfM produced no model: too few matches between the conditioned frames")
-    return list(recs.values()), sparse_dir, focal_source
+    return list(recs.values()), sparse_dir, focal_source, db, mapper
+
+
+def _merge_pieces(models, gps, tcfg, run):
+    """Largest SfM model, with the other pieces placed through GPS when possible."""
+    rec = max(models, key=lambda r: r.num_reg_images())
+    info: dict[str, Any] = {"models": len(models), "merged": 0, "frames_added": 0}
+    if len(models) > 1 and tcfg.merge.enabled and gps:
+        # SfM split the flight; place the other pieces through GPS instead of dropping them.
+        with run.timed("sparse_merge"):
+            rec, info = merge_by_gps(models, gps, min_frames=int(tcfg.merge.min_gps_frames),
+                                     max_rms_m=float(tcfg.merge.max_piece_gps_rms_m))
+        for reason in info.get("skipped", []):
+            run.downgrade("SfM piece", "dropped", reason)
+    elif len(models) > 1:
+        run.downgrade("SfM pieces", f"largest of {len(models)} only",
+                      "no GPS to place the others" if not gps else "recon.track_a.merge.enabled is off")
+    return rec, info
+
+
+def _gps_rms(rec, gps) -> tuple[float, float]:
+    """(3-D RMS, reprojection error) of a model against a GPS dict, for the regression gate."""
+    names = sorted(im.name for im in posed(rec) if im.name in gps)
+    by_name = {im.name: im for im in posed(rec)}
+    if len(names) < 3:
+        return float("inf"), float(rec.compute_mean_reprojection_error())
+    centres = np.array([by_name[n].projection_center() for n in names])
+    stats, _ = alignment.metric_check(names, centres, np.empty((0, 3)), gps)
+    return float(stats["cam_vs_gps_rms_m"]), float(rec.compute_mean_reprojection_error())
+
+
+def _refine_with_gps(pycolmap, tcfg, rec, sparse_model, sparse_dir, database, mapper, images_dir, names,
+                     frames_path, track_path, gps, out_dir, run):
+    """Estimate the GPS-to-video lag, re-map with GPS priors, keep the result only if it is better."""
+    from src.recon import gps_sync
+
+    pcfg = tcfg.gps_priors
+    info: dict[str, Any] = {"enabled": True}
+    track = gps_sync.GpsTrack.load(track_path)
+    times = gps_sync.frame_times(frames_path)
+    reg = sorted((im for im in posed(rec) if im.name in times), key=lambda im: times[im.name])
+    if track is None or len(reg) < 4:
+        info["skipped"] = "too few registered frames with a GPS time"
+        return rec, sparse_model, gps, info, None
+
+    offset = 0.0
+    if str(pcfg.time_offset) == "auto":
+        with run.timed("gps_time_sync"):
+            est = gps_sync.estimate_offset(np.array([im.projection_center() for im in reg]),
+                                           np.array([times[im.name] for im in reg]), track,
+                                           float(pcfg.offset_search_s), float(pcfg.offset_step_s))
+        info["time_offset_estimate"] = est
+        if est["improvement_pct"] >= float(pcfg.min_offset_improvement_pct) and not est["at_search_edge"]:
+            offset = est["best_s"]
+    else:
+        offset = float(pcfg.time_offset)
+    info["time_offset_s"] = offset
+    synced = gps_sync.write_geo(out_dir / "geo_synced.txt", names, times, track, offset)
+    synced_gps = alignment.read_geo_enu(synced)
+
+    before_gps, before_reproj = _gps_rms(rec, synced_gps)
+    count = gps_sync.write_pose_priors(database, times, track, offset, float(pcfg.sigma_horizontal_m),
+                                       float(pcfg.sigma_vertical_m))
+    prior_dir = sparse_dir.parent / "sparse_gps"
+    if prior_dir.exists():
+        shutil.rmtree(prior_dir)
+    prior_dir.mkdir()
+    mapper.use_prior_position = True
+    with run.timed("sparse_map_gps"):
+        recs = pycolmap.incremental_mapping(database, images_dir, prior_dir, options=mapper)
+    info.update(priors=count, sigma_horizontal_m=float(pcfg.sigma_horizontal_m),
+                sigma_vertical_m=float(pcfg.sigma_vertical_m), gps_rms_before_m=round(before_gps, 3),
+                reproj_before_px=round(before_reproj, 3))
+    if not recs:
+        info["kept"] = "first pass (GPS-prior mapping produced no model)"
+        run.downgrade("GPS-prior refinement", "first-pass SfM", info["kept"])
+        return rec, sparse_model, synced_gps, info, synced
+    refined, merge2 = _merge_pieces(list(recs.values()), synced_gps, tcfg, run)
+    after_gps, after_reproj = _gps_rms(refined, synced_gps)
+    registered_ok = refined.num_reg_images() >= rec.num_reg_images() - int(pcfg.max_frames_lost)
+    reproj_ok = after_reproj <= before_reproj * (1 + float(pcfg.reproj_tolerance))
+    info.update(gps_rms_after_m=round(after_gps, 3), reproj_after_px=round(after_reproj, 3),
+                registered_before=rec.num_reg_images(), registered_after=refined.num_reg_images())
+    if after_gps < before_gps and reproj_ok and registered_ok:
+        info["kept"] = "GPS-prior refinement"
+        final = sparse_dir / "gps_refined"
+        final.mkdir(exist_ok=True)
+        refined.write(str(final))
+        return refined, final, synced_gps, info, synced
+    reasons = [r for r, bad in (("GPS error did not drop", after_gps >= before_gps),
+                                ("reprojection error regressed", not reproj_ok),
+                                ("frames were lost", not registered_ok)) if bad]
+    info["kept"] = "first pass (" + ", ".join(reasons) + ")"
+    run.downgrade("GPS-prior refinement", "first-pass SfM", ", ".join(reasons))
+    return rec, sparse_model, synced_gps, info, synced
 
 
 def _colmap_masks(images_dir: Path, masks_dir: Path | None, out_dir: Path, names: list[str]) -> Path | None:

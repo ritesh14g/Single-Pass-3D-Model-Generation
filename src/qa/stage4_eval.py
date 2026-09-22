@@ -128,6 +128,16 @@ def _metric_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
     else:
         ev.kpis.append(Kpi("cam_vs_gps_rms_m", g, "Camera centres vs GPS (RMS)", None, "<= 1 m", INFO,
                            "no GPS for the registered frames: the model is scale-free"))
+    ref = r.get("gps_refinement") or {}
+    if ref.get("enabled") and "kept" in ref:
+        kept_refined = ref["kept"] == "GPS-prior refinement"
+        ev.kpis.append(Kpi("gps_refinement", g, "GPS-prior refinement", ref["kept"], "GPS-prior refinement",
+                           PASS if kept_refined else WARN,
+                           f"time offset {ref.get('time_offset_s', 0):+.2f} s; GPS RMS {ref.get('gps_rms_before_m')} -> "
+                           f"{ref.get('gps_rms_after_m')} m; reprojection {ref.get('reproj_before_px')} -> "
+                           f"{ref.get('reproj_after_px')} px"))
+    elif ref.get("skipped"):
+        ev.kpis.append(Kpi("gps_refinement", g, "GPS-prior refinement", "skipped", "-", INFO, ref["skipped"]))
     if "height_error_pct" in r:
         err = float(r["height_error_pct"])
         ev.kpis.append(Kpi("height_error_pct", g, "Height above ground vs telemetry", err,

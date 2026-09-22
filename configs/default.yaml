@@ -366,6 +366,26 @@ recon:
     mapper:
       # Hard cap on incremental mapping (0 = none); the budget ladder backs it up.
       max_runtime_s: 0
+    gps_priors:
+      # §7.3 / §8.1 step 4 (DEVLOG S4-1): estimate the GPS-to-video time lag from the SfM
+      # cameras, then re-map with GPS positions as priors. Esri: residual 7.6 -> 3.4 m, camera
+      # height wander 20 -> 6.4 m, lag -1.7 s (one clean minimum, stable across passes).
+      enabled: true
+      # auto = estimate; a number (s) forces it; 0 = trust the telemetry clock.
+      time_offset: auto
+      offset_search_s: 3.0
+      offset_step_s: 0.05
+      # Apply the estimated lag only if it cuts the horizontal RMS by at least this much.
+      min_offset_improvement_pct: 10.0
+      # Horizontal GPS carries the timing error; a level flight's altitude is known to its
+      # quantisation (KLV 0.30 m). Esri: v 0.5 -> 4.1 m, v 0.3 -> 3.4 m; h 3/5/10 ~ equal.
+      sigma_horizontal_m: 5.0
+      sigma_vertical_m: 0.3
+      # Regression gate (§7.3 step 6): keep the refined model only if the GPS error drops, the
+      # mean reprojection error rises by no more than this fraction, and at most this many
+      # frames fall out; otherwise keep the first pass and log why.
+      reproj_tolerance: 0.25
+      max_frames_lost: 2
     merge:
       # When SfM splits the flight into pieces (they share no images), place the smaller
       # pieces through GPS instead of dropping them (box, Esri: 42 of 50 frames kept of 2

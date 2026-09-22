@@ -630,6 +630,8 @@ def run_pipeline(
                 geo_path=_optional_artifact(manifest, "condition", "geo"),
                 telemetry_path=_optional_artifact(manifest, "ingest", "telemetry"),
                 budget_stage=sb,
+                frames_path=_optional_artifact(manifest, "ingest", "frames"),
+                gps_track_path=_optional_artifact(manifest, "condition", "telemetry_filtered"),
             )
             for key, path in outcome["artifacts"].items():
                 st.add_artifact(key, path)
@@ -645,8 +647,10 @@ def run_pipeline(
             raise RuntimeError("georeferencing needs a completed Track A stage")
         source = manifest.stages["ingest"].metrics.get("telemetry", {}).get("source", "")
         with budget.stage("geo") as sb, manifest.stage("geo") as st:
-            outcome = run_geo(manifest.artifact("track_a", "sparse"),
-                              _optional_artifact(manifest, "condition", "geo"), st.dir, cfg,
+            # Prefer the GPS re-timed by Track A's sync (S4-1) over Stage 2's frame-time GPS.
+            geo_path = (_optional_artifact(manifest, "track_a", "geo_synced")
+                        or _optional_artifact(manifest, "condition", "geo"))
+            outcome = run_geo(manifest.artifact("track_a", "sparse"), geo_path, st.dir, cfg,
                               telemetry_source=source)
             for key, path in outcome["artifacts"].items():
                 st.add_artifact(key, path)

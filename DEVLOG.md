@@ -136,6 +136,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `ui/stages/stage5_geo_export.py` | 5 | Stage 5 parameters, residual chart, DSM/ortho previews, file table |
 | `tests/test_geo_export.py` | 5 | CRS/datum, RANSAC, straight path, rasters, every writer read back, end to end |
 | `tools/blender-4.2.3-*/` | 5 | Portable Blender for FBX (git-ignored; per machine) |
+| `src/recon/gps_sync.py` | 4 | GPS-to-video time offset, synced `geo.txt`, anisotropic GPS pose priors |
 | `src/recon/merge.py` | 4 | Place disconnected SfM pieces through GPS; `posed()` filter for unregistered images |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
@@ -269,11 +270,10 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 Stage 4 is BUILT for the design the measurements chose (Track A cameras + VGGT-Ω hybrid depth).
 These remain, in priority order; each links its open issue:
 
-1. **S4-1 camera vs GPS 5.4–6.4 m RMS** — likely KLV-to-frame timing. Try a time-offset sweep
-   against the SfM path; it caps georeferencing accuracy (Stage 5 reports it, it does not fix it).
-2. **§7.3 GPS-prior bundle adjustment with a regression gate** (the manifest's `refine_ba`): re-run BA
-   with GPS as soft constraints so scale is optimised, not only fitted (§8.1 step 4); keep the
-   pre-BA result if reprojection error regresses. Depends on S4-1 (bad timing = bad priors).
+1. ~~S4-1~~ and ~~§7.3 GPS-prior refinement with a regression gate~~ — **done 2026-09-22**
+   (`recon.track_a.gps_priors`): 7.5 → 3.2 m on Esri. What remains there (~2.7 m horizontal) is the
+   file's whole-second KLV timestamps. Re-verify on DJI footage (per-frame SRT timing).
+2. Measure the refinement on a DJI clip (SRT is frame-synced: the lag estimate should come out ~0).
 3. **Speed** (S4-8, §9): Stages 1–4 ≈ 300 s per 1.7 min of video → ~25–30 min projected for 10 min.
    CPU-bound: Stage 1 decode (NVDEC refused for MPEG-2 TS), Stage 2, OpenMVS mesh + texture.
 4. **S4-9** dynamic-object masks in dense fusion (only SfM uses them today).
@@ -314,7 +314,7 @@ These remain, in priority order; each links its open issue:
 | ~~S2-8~~ | 2 | ~~100/100 overstates Stage 2: 5 of 12 KPIs were INFO, so a degraded run could not move the score~~ | **Closed 2026-09-18**: shadow coverage, low-light fraction and altitude provenance promoted to scored KPIs with bands in `qa.stage2` (rule 6 — the gain-span and GPS-outlier constants moved there too). Now 9 scored / 3 info; a fully degraded report scores **5.6/100** with 8 fails. `demo_flight.mp4` still scores 100, now earned across 9 scored KPIs. The three remaining INFO KPIs are contextual, not quality signals (keypoints vetoed happens in Stage 4; RTK absence is not a defect; masked *area* is scored instead of mover count). **Does not close S2-3**: coverage is not correctness — telling an over-firing detector from a genuinely dark scene still needs per-pixel truth |
 | S2-4 | 2 | ultralytics not installed → semantic masking path untested | Install on GPU box. As of 2026-09-19 YOLO is passed `device=0, half=True` when CUDA is visible, with GPU→CPU retry on failure (unit-tested with a fake model); check the log says `device=cuda` and record ms/frame |
 | ~~ENV-1~~ | — | ~~No Docker, Podman or Apptainer on the institute notebook; ODM cannot run there~~ | **Closed 2026-09-21 by re-scoping Track A**: no container needed. `pycolmap-cuda12` 4.2.0 has a cp313 manylinux wheel (pip, no root); OpenMVS 2.4.0's Ubuntu build is statically linked (glibc + libstdc++ only) and runs from a folder. Unverified on the box until S4-3 |
-| S4-1 | 4 | Camera centres sit **5–7 m RMS** from KLV GPS after a similarity fit on Esri, in every variant (≈ 1 m would be expected for a well-timed GPS). GPS steps between selected frames are irregular (1.6, 4, 15.8, 21.9, 29, 16 … m) | Suspect KLV-to-frame timing or interpolation, not SfM. Plot residual vs time; try a time offset sweep. Blocks GPS priors and §8.1 georeferencing accuracy |
+| ~~S4-1~~ | 4 | **Largely fixed 2026-09-22 (7.5 → 3.2 m on Esri; residual limited by 1 s KLV timestamps)** — was: Camera centres sit **5–7 m RMS** from KLV GPS after a similarity fit on Esri, in every variant (≈ 1 m would be expected for a well-timed GPS). GPS steps between selected frames are irregular (1.6, 4, 15.8, 21.9, 29, 16 … m) | Suspect KLV-to-frame timing or interpolation, not SfM. Plot residual vs time; try a time offset sweep. Blocks GPS priors and §8.1 georeferencing accuracy |
 | S4-2 | 4 | No 3D ground truth for the Stage 4 evaluator: `demo_flight.mp4` is planar and unobservable (see §4) | Render a synthetic flight over a textured 3D terrain with known cameras (`src/qa/synthetic.py`), so `stage4_eval.py` can score pose error, focal error and surface error |
 | S4-3 | 4 | GPU path (CUDA SIFT, matching, PatchMatch stereo) never run | Run `scripts/recon_probe.py` on the box; record timings vs laptop CPU in this log |
 | S4-5 | 4 | **OpenMVS TextureMesh segfaults (exit -11) on the box** on the Esri Poisson mesh: 1.75 M vertices / 1.82 M faces, i.e. heavily fragmented (a clean surface has ~2 faces per vertex), **and it contains NaN vertex coordinates** (numpy `invalid value` warnings in the cross products during cleaning; `trimesh.split` then stalled) | Probe now cleans the mesh (degenerate/duplicate faces, fragments < 1% of the largest piece) before texturing and treats a texture failure as a logged downgrade that keeps the vertex-coloured mesh. Re-run with `--reuse`; if it still crashes, try the laptop Windows build on the same mesh to separate a Linux-build bug from a mesh problem |
@@ -1978,3 +1978,43 @@ the flight — telemetry (altitude resolution / timing), not only SfM, is suspec
 **Tests:** not run (no code change).
 
 **Next:** Stage 4 backlog §4b item 1 (S4-1: time-offset sweep and altitude check), then §7.3 GPS-prior BA.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — S4-1: GPS time sync + GPS-prior refinement
+**Goal:** Find where Esri's 6–7 m camera-vs-GPS residual comes from and fix what is fixable.
+
+**Investigation (laptop, Esri matches, focal fixed from KLV HFOV):**
+- KLV rows are 1.000 s apart and their precision timestamps are **whole seconds** (14:57:00.000,
+  :01.000 …); implied speed jitters 9–12.5 m/s. KLV pitch and roll are **0.0 for the whole flight**,
+  altitude takes 3 values (0.30 m steps = ST 0601 tag 15 resolution): simplified metadata.
+- Residual split: along-track 4.6, **cross-track 4.1**, vertical 4.4 m. Cross-track error cannot come from
+  timing jitter; **smoothing the GPS track made it worse** (7.6 → 10.1 m). ❌ timing jitter as the main cause.
+- **SfM drift:** after the similarity fit, camera heights span **20 m** over 800 m of level flight and the
+  ground under each camera moves with them (height above ground steady at ~107 m) — the model is bent, in
+  steps at weak links between frames. ❌ global SfM (GLOMAP) made it worse (8.6 m, 27.7 m span).
+- **A constant GPS-to-video lag exists:** horizontal RMS vs time shift has one clean minimum at −1.65 to
+  −1.80 s, the same before and after refinement.
+- GPS priors in the mapper (focal fixed; ±3 m isotropic): 7.57 → 7.37 m — too weak vertically. Anisotropic
+  ±5 m horizontal / **±0.5 m vertical: 6.02 m**; with the −1.85 s lag **4.11 m**; **±0.3 m vertical: 3.38 m**
+  (vertical 1.63 m, camera-height span 6.4 m). Horizontal sigma 3/5/10 m barely matters.
+
+**Built (`src/recon/gps_sync.py`, `recon.track_a.gps_priors`, inside Track A after the first mapping
+pass and the piece merge):** estimate the lag (sweep ±3 s, 0.05 s steps, applied only if it cuts the
+horizontal RMS ≥ 10% and is not at the search edge) → write `geo_synced.txt` (the Stage 5 geo stage now
+prefers it) → write anisotropic GPS pose priors → second incremental mapping pass with
+`use_prior_position` → merge pieces again → **regression gate**: keep the refined model only if the GPS
+RMS drops, mean reprojection error rises ≤ 25% and ≤ 2 frames are lost; otherwise keep the first pass and
+log the reason. Scorecard: new "GPS-prior refinement" KPI (kept / fell back + why, offset, before/after).
+
+**Measured (laptop, pipeline, Esri, dense at 320 px for speed):** lag **−1.9 s** (horizontal −42%);
+GPS RMS **5.51 → 3.21 m** vs the synced track (7.5 m vs the original timing); reprojection **1.134 →
+1.140 px**; 52/52 registered; **kept**. Stage 5 georeferencing **3.109 m** (horizontal 2.706, vertical
+1.53; was 6.39 / 5.08 / 3.87 on the box). Height vs telemetry **−2.1%** (was −4.1%). Cost: one extra
+mapping pass (+53 s on the laptop CPU, ~15 s on the box GPU).
+
+**Remaining residual:** ~2.7 m horizontal ≈ uniform ±0.5 s timing × ~10 m/s (2.9 m RMS) — the file's
+timestamp resolution, not the method. DJI SRT is per frame, so it should get well under this.
+
+**Tests:** 397 passed / 0 failed (was 393; +4: lag of −1.7 / 0 / +1.2 s recovered within 0.15 s under
+0.5 m GPS noise; synced geo interpolation).
+
+**Next:** box: full Stages 1–5 run to confirm on GPU; then Stage 3, Stage 6.
