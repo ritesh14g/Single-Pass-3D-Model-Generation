@@ -56,6 +56,8 @@ from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
 from src.ingest.telemetry import TelemetryTable, load_telemetry
 from src.ingest.video_reader import VideoReader, reader_options
+from src.export.stage import run_export
+from src.geo.stage import run_geo
 from src.recon.track_a_colmap import run_track_a
 
 log = get_logger(__name__)
@@ -637,18 +639,53 @@ def run_pipeline(
                 st.warn(f"track_a downgrade: {downgrade}")
         result.completed_stages.append("track_a")
 
-    # -- Fusion, geo, export, QA ----------------------------------------------
+    # -- Stage 5: georeferencing (§8.1) and export (§8.2) ----------------------
+    if should("geo"):
+        if manifest.stages["track_a"].status is not StageStatus.DONE:
+            raise RuntimeError("georeferencing needs a completed Track A stage")
+        source = manifest.stages["ingest"].metrics.get("telemetry", {}).get("source", "")
+        with budget.stage("geo") as sb, manifest.stage("geo") as st:
+            outcome = run_geo(manifest.artifact("track_a", "sparse"),
+                              _optional_artifact(manifest, "condition", "geo"), st.dir, cfg,
+                              telemetry_source=source)
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics(outcome["metrics"])
+            for downgrade in outcome["metrics"].get("downgrades", []):
+                st.warn(f"geo downgrade: {downgrade}")
+        result.completed_stages.append("geo")
+
+    if should("export"):
+        if manifest.stages["geo"].status is not StageStatus.DONE:
+            raise RuntimeError("export needs a completed georeferencing stage")
+        track_a_outputs = {key: manifest.artifact("track_a", key)
+                           for key in ("sparse", "dense", "mesh", "textured") if manifest.has_artifact("track_a", key)}
+        run_info = {"preset": cfg.get_path("preset", "default"), "mode": cfg.get_path("run.mode"),
+                    "stage_seconds": {name: round(rec.duration_s or 0.0, 1) for name, rec in manifest.stages.items()
+                                      if rec.status is StageStatus.DONE},
+                    "video": str(inputs.video)}
+        with budget.stage("export") as sb, manifest.stage("export") as st:
+            outcome = run_export(track_a_outputs, manifest.artifact("geo", "georef"), st.dir, cfg, run_info=run_info)
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics(outcome["metrics"])
+            for fmt, reason in outcome["metrics"]["formats_failed"].items():
+                st.warn(f"export: {fmt} not written ({reason})")
+        result.completed_stages.append("export")
+
+    # -- Fusion, QA ------------------------------------------------------------
     # These stages are wired but not yet implemented; each records why it did
     # not run so the manifest and QA report stay truthful about what produced
     # the outputs rather than silently showing fewer stages.
-    implemented = {"ingest", "condition", "track_a"}
+    implemented = {"ingest", "condition", "track_a", "geo", "export"}
     for spec in STAGES:
         for name in spec.manifest_stages:
             if name in result.completed_stages or manifest.stages[name].status is StageStatus.DONE:
                 continue
             if name in wanted and name in implemented:
                 continue
-            if name == "track_b" and "track_a" in result.completed_stages:
+            if name == "track_b" and (manifest.stages["track_a"].status is StageStatus.DONE
+                                      or "track_a" in result.completed_stages):
                 reason = ("Track B runs inside the track_a stage as the §7.4 hybrid (VGGT depth on "
                           "Track A cameras; see track_a metrics.dense); VGGT poses are not used")
             elif spec.is_built and name not in implemented:

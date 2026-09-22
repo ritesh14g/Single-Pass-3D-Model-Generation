@@ -52,9 +52,6 @@ export:
   # need them and the accurate preset still emits all six formats.
   formats: [obj, ply, las, geotiff, glb]
   texture_size: 4096
-  raster:
-    dsm_resolution_m: 0.25
-    ortho_resolution_m: 0.15
 
 budget:
   total_s: 600
@@ -65,4 +62,5 @@ budget:
     refine_ba: 90
     track_a_mvs: 150
     fusion: 90
+    geo: 10
     export: 45

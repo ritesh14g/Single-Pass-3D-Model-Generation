@@ -73,7 +73,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
 | 3 | Occluded surfaces | §6 | ⚪ planned | — | — | **Executes after Stage 4** (needs recon output) |
 | 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Refinement BA: planned |
-| 5 | Georeferencing & export | §8.1–8.3 | ⚪ planned | — | — | |
+| 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the laptop demo (FBX via headless Blender), coverage %, `metadata.json`. Box run on Esri pending |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
 ---
@@ -126,6 +126,16 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `scripts/vggt_hybrid_probe.py` | 4 | Hybrid probe: VGGT depth vs COLMAP depth maps, pixel by pixel; compares input widths |
 | `scripts/stage4_report.py` | 4 | Compact Stage 1–4 report for run folders + probe JSON |
 | `scripts/box_stage4_compare.sh` | 4 | Box: Stages 1–2 once, Stage 4 with VGGT-Ω and VGGT-1B, Ω depth probe, one report |
+| `src/geo/crs.py` | 5 | UTM zone, EGM96 orthometric heights (fails loudly without the grid), telemetry altitude datum |
+| `src/geo/georef.py` | 5 | RANSAC similarity model → local → map; straight-path ground constraint; `georef.json` |
+| `src/geo/stage.py` | 5 | Geo stage runner (+ per-camera residual CSV) |
+| `src/export/writers.py` | 5 | PLY / LAS (WKT compound CRS) / lossless textured OBJ / glb (+confidence) / FBX via Blender |
+| `src/export/rasters.py` | 5 | DSM + orthophoto GeoTIFFs, auto resolution, bounded gap fill, coverage % |
+| `src/export/stage.py` | 5 | Export runner: every format independently, `metadata.json` |
+| `src/qa/stage5_eval.py` | 5 | Stage 5 KPIs; re-opens every file to verify it |
+| `ui/stages/stage5_geo_export.py` | 5 | Stage 5 parameters, residual chart, DSM/ortho previews, file table |
+| `tests/test_geo_export.py` | 5 | CRS/datum, RANSAC, straight path, rasters, every writer read back, end to end |
+| `tools/blender-4.2.3-*/` | 5 | Portable Blender for FBX (git-ignored; per machine) |
 | `src/recon/merge.py` | 4 | Place disconnected SfM pieces through GPS; `posed()` filter for unregistered images |
 | `scripts/recon_probe.py` | 4 | Track A feasibility probe: pycolmap sparse + dense (CUDA PatchMatch, OpenMVS CPU fallback), Poisson mesh, OpenMVS texture; timings + metric check vs telemetry |
 | `tools/openmvs/` | 4 | OpenMVS 2.4.0 prebuilt binaries, fetched per machine, git-ignored (Windows: `vc17/x64/Release/`; Linux: `bin/`) |
@@ -142,7 +152,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `tests/fixtures.py` | test | Re-export of `src.qa.synthetic` |
 | `data/raw/demo_flight.*` | — | Local demo input (git-ignored) |
 
-Empty placeholders: `docker/`, `viewer/`, `src/fusion/`, `src/geo/`, `src/export/`.
+Empty placeholders: `docker/`, `viewer/`, `src/fusion/`.
 
 ---
 
@@ -254,6 +264,25 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 
 ---
 
+## 4b. Stage 4 backlog — pick up after Stage 5
+
+Stage 4 is BUILT for the design the measurements chose (Track A cameras + VGGT-Ω hybrid depth).
+These remain, in priority order; each links its open issue:
+
+1. **S4-1 camera vs GPS 5.4–6.4 m RMS** — likely KLV-to-frame timing. Try a time-offset sweep
+   against the SfM path; it caps georeferencing accuracy (Stage 5 reports it, it does not fix it).
+2. **§7.3 GPS-prior bundle adjustment with a regression gate** (the manifest's `refine_ba`): re-run BA
+   with GPS as soft constraints so scale is optimised, not only fitted (§8.1 step 4); keep the
+   pre-BA result if reprojection error regresses. Depends on S4-1 (bad timing = bad priors).
+3. **Speed** (S4-8, §9): Stages 1–4 ≈ 300 s per 1.7 min of video → ~25–30 min projected for 10 min.
+   CPU-bound: Stage 1 decode (NVDEC refused for MPEG-2 TS), Stage 2, OpenMVS mesh + texture.
+4. **S4-9** dynamic-object masks in dense fusion (only SfM uses them today).
+5. **S4-7** measure residual doming on the GPS-aligned mesh.
+6. **SfM repeatability**: identical input registered 46 vs 48 frames; seed the mapper if COLMAP
+   exposes it, so comparisons between runs are exact.
+7. **More detail without losing accuracy**: VGGT tiling at training size, or COLMAP dense on Zone 1
+   only (after Stage 3).
+
 ## 5. Open issues
 
 | ID | Stage | Issue | Evidence / next step |
@@ -293,6 +322,10 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 | S4-7 | 4 | Esri mesh height map is low mid-strip and high at both ends — possible residual doming | Measure sag on the GPS-aligned mesh once the box run has `geo.txt`; compare with the telemetry-fixed-focal sparse metric (107 m vs 111 m) |
 | S4-8 | 4 | **(presets chosen 2026-09-22; scale problem open)** **Dense stereo is the Stage 4 bottleneck: COLMAP PatchMatch took 1133 s of a 1287 s probe** (45 frames, 1920 px, 20 source views, 5 iterations, geometric pass) on the 2g.20gb slice. Everything else in Stage 4 took 154 s. Spec §9 gives MVS 4 min for a 10-min video | `scripts/dense_sweep.sh` compares five cheaper settings on one sparse model (time vs dense points vs GPS-aligned footprint m² vs mesh faces). Pick the fastest that keeps footprint; put it in `configs/default.yaml` + presets |
 | S4-9 | 4 | Dynamic-object masks reach SfM feature extraction but not dense fusion: moving objects can still leave depth in the cloud | Undistort the Stage 2 masks with the same camera model and pass them as `StereoFusionOptions.mask_path` (COLMAP) / `--mask-path` (OpenMVS) |
+| S5-1 | 5 | DJI SRT/CSV altitude datum is **assumed** ellipsoidal (spec §8.1); if the competition drone's `abs_alt` is MSL, heights are off by the geoid undulation (−86 m at Bengaluru) | Check one competition clip's `abs_alt` against a known ground height; set `geo.vertical.gps_altitude_datum`. The assumption is flagged in `metadata.json` |
+| S5-2 | 5 | Orthophoto is binned from the dense cloud's colours (~0.5 m on Esri), not rendered from the textured mesh (~15 cm texels) | Render the textured mesh top-down (orthographic) into the ortho grid |
+| S5-3 | 5 | GCP file (`geo.gcp.file`) accepted by config but not used; LAS points are all class 1 (unclassified) | GCPs as weighted pairs in the similarity fit; ground vs above-ground classes from the DSM |
+| S5-4 | 5 | Coverage % is only meaningful on real footage (demo: 36% of a 47 m² footprint) | Record Esri's number from the box run |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | LIC-1 | 4 | **VGGT licence vs the PS domain.** Every VGGT checkpoint carries a no-military / no-espionage acceptable-use clause (VGGT License AUP §2; VGGT-1B is also CC-BY-NC-4.0; VGGT-Ω is FAIR non-commercial research). The PS is set by NTRO and lists military reconnaissance and border mapping among applications | **Team decision 2026-09-22 (ritesh14g):** use VGGT for the competition prototype; the PS names disaster management and treats military use as one optional application, and a selected project would move to an in-house model built with government support. State this position and the licence terms in the README (§11). Track A (COLMAP BSD, OpenMVS AGPL) stays the licence-clean floor |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
@@ -1870,3 +1903,56 @@ VGGT is ~10 s of it; the rest is CPU: decode + conditioning (100 s), mesh + text
 (default model + measurements), `tests/test_recon.py` (+1: gated Ω falls back to VGGT-1B).
 
 **Next:** Stage 5 (georeferencing + six export formats); S4-1; CPU speed.
+
+### Session — 2026-09-22 — ritesh14g (with Claude) — Stage 5 (georeferencing & export): BUILT
+**Goal:** §8.1–8.3: metric georeferencing, all six formats with verified georeferencing, the metadata
+sidecar, coverage percent (§11). Stage 4 leftovers recorded first as a backlog (§4b).
+
+**Design (and why):**
+- **Frames:** model --similarity--> local (UTM minus a rounded offset, heights absolute) --> map. Meshes and
+  PLY are local (float32 viewers jitter on 7-digit northings); LAS/GeoTIFF absolute with the CRS in the
+  header; the offset is in `georef.json`, `metadata.json` and the glb extras.
+- **CRS:** UTM zone of the flight (Esri → EPSG:32617, demo → 32643). **Heights: EGM96 orthometric
+  (EPSG:5773).** pyproj silently skips a missing geoid grid, so the transform uses `only_best=True` and a
+  failure is a logged downgrade to heights-as-given. Checked: 900 m ellipsoidal at Bengaluru → 986.4 m
+  orthometric (N ≈ −86 m); Esri 116.9 m → 143.3 m if it were ellipsoidal (N ≈ −26 m).
+- **Altitude datum by source:** KLV (ST 0601 tag 15) is MSL → carried through as orthometric; DJI is
+  assumed ellipsoidal and flagged (S5-1).
+- **Similarity:** RANSAC over camera centres; `inlier_threshold_m` 3 → 10 m (accurate: 2 → 10) because
+  Esri's 5–7 m residuals are systematic (S4-1) and a tight cut would drop half the flight and flatter the
+  number. Headline = **RMS over all cameras**; inlier RMS reported beside it.
+- **Straight flight lines:** camera centres alone leave the roll about the path free. When the track's
+  collinearity < 0.1, virtual ground points make the reconstruction's ground plane horizontal. Measured
+  (synthetic, 0.3 m GPS noise): ground height spread after the fit **89 m without, 0.04 m with**.
+- **Confidence** = confirming views / `export.confidence_full_views` (5): PLY property, LAS extra
+  dimension, and a vertex-coloured `model_confidence.glb`.
+- **Rasters:** DSM = per-cell median height, orthophoto = mean colour, cell = spacing of unique surface
+  samples (auto); gaps up to 3 cells filled from the nearest cell, larger stay nodata.
+- **Coverage %** = share of the ground the cameras saw (each frame's footprint on the ground plane) that
+  the dense cloud covers: the §1.4 "entire visible scene" check.
+- **FBX** via headless portable Blender 4.2.3 (`tools/blender-*/`), OBJ → FBX with embedded texture; skipped
+  with the reason where Blender is absent.
+- **Each format is written independently**; a missing Stage 4 mesh is stated as the reason for OBJ/glb/FBX.
+
+**Bugs found while building (fixed):** laspy's `add_crs` rejects compound CRSs → LAS 1.4 WKT VLR written
+directly (reads back "WGS 84 / UTM zone 17N + EGM96 height"); a trimesh OBJ round trip re-encoded the
+2.7 MB texture into 0.9 MB → OBJ transformed line by line, texture copied byte-identical; pygltflib drops
+`asset.extras` on save → offset stored in the root extras.
+
+**Measured (laptop, demo run, `src.cli run --resume … --stage geo --stage export`):** geo 0.7 s (EPSG:32643+5773,
+RMS 0.093 m, ground constraint on: the demo track is straight); export 73.1 s, **all 6 formats** written and
+re-opened (OBJ 76 MB textured, PLY/LAS 1.16 M points with confidence, DSM/ortho GeoTIFF, glb 44 MB +
+confidence glb, FBX 24 MB in 11.1 s); Stage 5 score **92.9** (fail: coverage 36%, meaningless on the 47 m²
+synthetic scene, S5-4).
+
+**Modified:** `src/pipeline.py` (geo + export stages; Track B skip reason on resume), `src/stages.py`
+(Stage 5 BUILT, budget keys geo + export), `src/core/manifest.py` (export depends on geo config),
+`configs/*.yaml` (geo/export keys, `qa.stage5`, budget geo), `ui/stages/__init__.py`,
+`scripts/stage4_report.py` (Stage 5 block), `tests/test_stage1_eval.py` (registry).
+
+**Tests:** 393 passed / 0 failed (was 379; +14).
+
+**Open issues:** S5-1 … S5-4 added.
+
+**Next:** box: Blender for Linux into `tools/`, full Stages 1–5 on Esri; then the Stage 4 backlog (§4b),
+Stage 3, Stage 6.

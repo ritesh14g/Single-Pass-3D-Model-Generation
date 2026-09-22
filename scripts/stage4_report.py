@@ -40,7 +40,23 @@ def run_report(run_dir: Path) -> dict:
         "mesh": {k: mesh.get(k) for k in ("mesher", "target_faces", "faces", "faces_per_vertex")},
         "textured": report.get("textured"), "timings_s": report.get("timings_s"),
         "downgrades": report.get("downgrades"),
+        **_stage5(run_dir),
     }
+
+
+def _stage5(run_dir: Path) -> dict:
+    if not (run_dir / "export" / "metadata.json").exists():
+        return {}
+    from ui.stages import stage5_geo_export
+
+    ev = stage5_geo_export.evaluate(run_dir, None)
+    meta = json.loads((run_dir / "export" / "metadata.json").read_text())
+    return {"stage5": {
+        "score": ev.score, "counts": ev.counts(),
+        "kpis": [f"{k.label}: {k.value} ({k.status}) {k.detail}".strip() for k in ev.kpis],
+        "crs": meta.get("crs"), "coverage": meta.get("coverage"),
+        "formats_produced": meta.get("formats_produced"), "formats_failed": meta.get("formats_failed"),
+    }}
 
 
 def main() -> int:

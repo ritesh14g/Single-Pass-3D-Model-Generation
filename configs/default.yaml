@@ -529,9 +529,15 @@ geo:
     # GPS altitude is ellipsoidal; most deliverables want orthometric.
     geoid_model: EGM96
     output_datum: orthometric
+    # Datum of the telemetry altitude. auto: KLV (MISB ST 0601 tag 15) is MSL/orthometric;
+    # DJI SRT/CSV is taken as WGS84-ellipsoidal (spec §8.1) and flagged as assumed.
+    gps_altitude_datum: auto
   similarity:
     ransac_iterations: 2000
-    inlier_threshold_m: 3.0
+    # Rejects gross GPS outliers only. Esri's residuals are 5-7 m and systematic (S4-1); a
+    # 3 m cut would discard half the flight and flatter the RMS, which is reported over all
+    # cameras anyway.
+    inlier_threshold_m: 10.0
     min_cameras: 8
   gcp:
     # Optional. The system must work with zero GCPs (§8.1).
@@ -545,10 +551,17 @@ export:
   formats: [obj, ply, las, geotiff, glb, fbx]
   # Confidence must survive export in every format that can carry it.
   carry_confidence: true
+  # Confidence = confirming views / this, clipped to 1 (COLMAP's own points: median 4 views).
+  confidence_full_views: 5
+  # Coverage grid: share of the ground the cameras saw that the dense cloud covers.
+  coverage_cell_m: 1.0
   texture_size: 8192
   raster:
-    dsm_resolution_m: 0.1
-    ortho_resolution_m: 0.05
+    # auto = spacing of unique surface samples (Esri hybrid: ~0.5 m); a finer fixed value
+    # leaves the DSM mostly holes. The orthophoto uses the same grid.
+    dsm_resolution_m: auto
+    # Fill gaps up to this many cells from the nearest valid cell; larger stay nodata.
+    fill_max_cells: 3
     nodata: -9999.0
   las:
     point_format: 3
@@ -628,6 +641,15 @@ qa:
     anchor_spread_warn_pct: 5.0
     frames_anchored_pass: 0.90
     frames_anchored_warn: 0.70
+  # Stage 5 (georeferencing + export) scorecard bands, read by src/qa/stage5_eval.py.
+  stage5:
+    cam_vs_gps_rms_pass_m: 1.0
+    cam_vs_gps_rms_warn_m: 5.0
+    inlier_fraction_pass: 0.90
+    inlier_fraction_warn: 0.70
+    # Share of the ground the cameras saw that the dense cloud covers (§1.4 "entire visible scene").
+    coverage_pass_pct: 90.0
+    coverage_warn_pct: 70.0
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]
@@ -650,6 +672,7 @@ budget:
     refine_ba: 180
     track_a_mvs: 240
     fusion: 120
+    geo: 15
     export: 60
   # On overrun a stage degrades rather than blocking. Every degradation logged.
   degradation:

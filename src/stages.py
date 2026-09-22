@@ -76,9 +76,10 @@ STAGES: tuple[StageSpec, ...] = (
     ),
     StageSpec(
         number=5, key="geo_export", title="Georeferencing & export", spec_ref="§8.1-8.3",
-        summary="GPS similarity/scale, CRS + geoid, OBJ/PLY/LAS/GeoTIFF/glTF/FBX export.",
-        status=StageStatus.PLANNED, execution_order=5,
-        manifest_stages=("geo", "export"), budget_keys=("export",),
+        summary="RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric heights, "
+                "OBJ/PLY/LAS/GeoTIFF/glb/FBX export with confidence, coverage percent, metadata sidecar.",
+        status=StageStatus.BUILT, execution_order=5,
+        manifest_stages=("geo", "export"), budget_keys=("geo", "export"),
     ),
     StageSpec(
         number=6, key="viewer_qa", title="Viewer & QA", spec_ref="§8.4-8.5",

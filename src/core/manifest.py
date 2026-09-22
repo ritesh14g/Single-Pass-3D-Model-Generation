@@ -64,7 +64,7 @@ STAGE_CONFIG_DEPS: dict[str, list[str]] = {
     "track_a": ["recon.track_a", "recon.track_b", "run.mode", "device"],
     "fusion": ["fusion"],
     "geo": ["geo"],
-    "export": ["export"],
+    "export": ["export", "geo"],
     "qa": ["qa"],
 }
 

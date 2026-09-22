@@ -35,3 +35,6 @@ pygltflib>=1.16
 #   GPU box (Linux):  pycolmap-cuda12==4.2.0   (CUDA SIFT, matching, BA, PatchMatch stereo)
 # OpenMVS 2.4.0 binaries (texturing; CPU dense fallback) go in tools/openmvs/, not pip.
 plyfile>=1.0   # Track A reads dense PLYs (OpenMVS clouds carry per-point view lists)
+
+# Stage 5 FBX (§8.3): portable Blender 4.2 LTS unpacked into tools/ (not pip):
+#   https://download.blender.org/release/Blender4.2/  (blender-4.2.3-linux-x64.tar.xz / -windows-x64.zip)

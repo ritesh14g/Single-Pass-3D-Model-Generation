@@ -68,13 +68,11 @@ fusion:
 geo:
   similarity:
     ransac_iterations: 5000
-    inlier_threshold_m: 2.0
+    # Same as default: residuals are systematic (S4-1); a tight cut only flatters the RMS.
+    inlier_threshold_m: 10.0
 
 export:
   texture_size: 16384
-  raster:
-    dsm_resolution_m: 0.05
-    ortho_resolution_m: 0.025
 
 qa:
   degrade:
@@ -91,4 +89,5 @@ budget:
     refine_ba: 900
     track_a_mvs: 1200
     fusion: 300
+    geo: 60
     export: 180
