@@ -678,6 +678,9 @@ fusion:
     # The fill stops early only when its own per-frame rate x the frames left would leave less
     # than this many seconds of the fusion allotment for the mesh flags and the outputs.
     budget_reserve_s: 20
+    # Frames that run whatever the budget says: a frame costs ~1.6 s from Track B's saved depth,
+    # and a slow classification must not starve the fill (DJI_0047: 1 of 3 frames, S3-8).
+    budget_min_frames: 3
     # Filled points outside the measured surface's height range +- this are dropped.
     height_margin_m: 5.0
     # Weights: Zone 1 = 1.0; a monocular pixel <= this, so always strictly below Zone 1.

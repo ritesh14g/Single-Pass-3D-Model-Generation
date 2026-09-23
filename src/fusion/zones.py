@@ -21,7 +21,8 @@ occupies. It is never "filled in" here — it becomes a gap in ``gaps.geojson``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -67,6 +68,7 @@ class ZoneResult:
     gsd: float
     angle_source: str           # "confirming views" | "geometric visibility"
     spacing: float = 0.0        # median distance between neighbouring surface samples
+    timings: dict[str, float] = field(default_factory=dict)   # seconds per classification step
 
     @property
     def point_zone(self) -> np.ndarray:
@@ -95,6 +97,21 @@ def ground_sample_distance(scene: Scene) -> float:
     return float(np.median(per_cam)) if per_cam else 1.0
 
 
+def _occupied(points: np.ndarray, size: float) -> int:
+    """Occupied voxels at ``size``: 1-D linear keys (``np.unique(axis=0)`` on rows took 18.7 s
+    over the retries on a DJI_0047-sized cloud, S3-8)."""
+    if not len(points):
+        return 0
+    ijk = np.floor(points / size).astype(np.int64)
+    ijk -= ijk.min(0)
+    dims = ijk.max(0) + 1
+    if float(dims[0]) * float(dims[1]) * float(dims[2]) >= 2.0 ** 62:
+        return len(np.unique(ijk, axis=0))
+    key = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
+    key.sort()
+    return int(1 + np.count_nonzero(np.diff(key)))
+
+
 def voxel_size(scene: Scene, zcfg: Any, max_voxels: int) -> tuple[float, float, list[str]]:
     gsd = ground_sample_distance(scene)
     size = float(zcfg.voxel_gsd_multiple) * gsd
@@ -103,7 +120,7 @@ def voxel_size(scene: Scene, zcfg: Any, max_voxels: int) -> tuple[float, float, 
         size = float(np.clip(size, float(zcfg.voxel_size_min_m), float(zcfg.voxel_size_max_m)))
     # Never more occupied voxels than the budget allows: coarsen until the surface fits.
     while True:
-        occupied = len(np.unique(np.floor(scene.points / size).astype(np.int64), axis=0))
+        occupied = _occupied(scene.points, size)
         if occupied <= max_voxels:
             break
         notes.append(f"voxel {size:.3f} -> {size * 1.5:.3f}: {occupied:,} occupied voxels > {max_voxels:,}")
@@ -123,10 +140,14 @@ def _pair_angles(vox: np.ndarray, cam: np.ndarray, centroid: np.ndarray, centres
     for axis in range(3):
         mean[:, axis] = np.bincount(vox, rays[:, axis], minlength=n_vox)
     mean /= np.maximum(np.linalg.norm(mean, axis=1, keepdims=True), 1e-12)
-    order = np.lexsort((np.einsum("ij,ij->i", rays, mean[vox]), vox))   # per voxel, farthest from the mean first
-    first = np.r_[0, np.flatnonzero(np.diff(vox[order])) + 1]
+    # Per voxel, the ray farthest from the mean (a per-voxel minimum, not a sort of every pair:
+    # 10 M pairs on DJI_0047).
+    to_mean = np.einsum("ij,ij->i", rays, mean[vox])
+    lowest = np.full(n_vox, np.inf)
+    np.minimum.at(lowest, vox, to_mean)
+    pick = np.flatnonzero(to_mean == lowest[vox])
     far = np.zeros((n_vox, 3))
-    far[vox[order[first]]] = rays[order[first]]
+    far[vox[pick]] = rays[pick]
     dots = np.einsum("ij,ij->i", rays, far[vox])
     min_dot = np.ones(n_vox)
     np.minimum.at(min_dot, vox, dots)
@@ -148,14 +169,63 @@ def sample_spacing(centroid: np.ndarray, size: float, rng_seed: int = 0) -> floa
     return float(max(size, np.median(dist[:, 1])))
 
 
+class _XYIndex:
+    """Voxels bucketed on a coarse ground grid, for "which voxels can this camera see" queries."""
+
+    def __init__(self, xy: np.ndarray, cell: float):
+        self.cell = float(cell)
+        self.lo = xy.min(0) if len(xy) else np.zeros(2)
+        c = np.floor((xy - self.lo) / self.cell).astype(np.int64)
+        self.nx, self.ny = (int(c[:, 0].max()) + 1, int(c[:, 1].max()) + 1) if len(xy) else (1, 1)
+        key = c[:, 0] * self.ny + c[:, 1]
+        self.order = np.argsort(key, kind="stable")
+        self.key = key[self.order]
+
+    def query(self, x0: float, x1: float, y0: float, y1: float) -> np.ndarray:
+        cx0, cx1 = max(int((x0 - self.lo[0]) // self.cell), 0), min(int((x1 - self.lo[0]) // self.cell), self.nx - 1)
+        cy0, cy1 = max(int((y0 - self.lo[1]) // self.cell), 0), min(int((y1 - self.lo[1]) // self.cell), self.ny - 1)
+        if cx0 > cx1 or cy0 > cy1:
+            return np.zeros(0, np.int64)
+        cols = np.arange(cx0, cx1 + 1) * self.ny
+        starts = np.searchsorted(self.key, cols + cy0, "left")
+        ends = np.searchsorted(self.key, cols + cy1, "right")
+        return np.concatenate([self.order[a:b] for a, b in zip(starts, ends)])
+
+
+def _frustum_box(cam, z_lo: float, z_hi: float, margin: float):
+    """Ground bounding box of the camera's frustum between two heights, or None when the
+    frustum does not cross both planes (camera inside the slab, or a view up to the horizon):
+    the frustum between the planes is then not the hull of the corner-ray hits."""
+    corners = np.array([[0.0, 0.0], [cam.width, 0.0], [0.0, cam.height], [cam.width, cam.height]])
+    d = cam.rays(corners)
+    hits = []
+    for plane in (z_lo, z_hi):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (plane - cam.centre[2]) / d[:, 2]
+        if not np.all(np.isfinite(t) & (t > 0)):
+            return None
+        hits.append(cam.centre[:2] + t[:, None] * d[:, :2])
+    hits = np.concatenate(hits)
+    return hits[:, 0].min() - margin, hits[:, 0].max() + margin, hits[:, 1].min() - margin, hits[:, 1].max() + margin
+
+
 def _visibility(scene: Scene, centroid: np.ndarray, size: float, zcfg: Any):
-    """Per camera: which voxels it sees (in the frustum, not behind a nearer surface). Packed bits."""
+    """Per camera: which voxels it sees (in the frustum, not behind a nearer surface). Packed bits.
+
+    Only voxels under the camera's footprint are projected: a nadir camera sees ~a tenth of a
+    strip's voxels, and projecting all of them for 136 cameras was most of DJI_0047's 115 s (S3-8)."""
     import cv2
 
     width_cap = int(zcfg.zbuffer_width)
     bits = []
+    everything = np.arange(len(centroid))
+    z_lo, z_hi = (float(centroid[:, 2].min()), float(centroid[:, 2].max())) if len(centroid) else (0.0, 0.0)
+    extent = np.ptp(centroid[:, :2], axis=0).max() if len(centroid) else 1.0
+    index = _XYIndex(centroid[:, :2], max(float(extent) / 256.0, size))
     for cam in scene.cameras:
-        uv, z = cam.project(centroid)
+        box = _frustum_box(cam, z_lo, z_hi, 2 * size)
+        cand = everything if box is None else index.query(*box)
+        uv, z = cam.project(centroid[cand])
         inside = cam.inside(uv, z)
         f = min(1.0, width_cap / cam.width)
         w, h = max(int(cam.width * f), 1), max(int(cam.height * f), 1)
@@ -170,7 +240,7 @@ def _visibility(scene: Scene, centroid: np.ndarray, size: float, zcfg: Any):
         zbuf[zbuf >= 1e30] = np.inf  # cv2.erode turns inf into FLT_MAX
         seen = np.zeros(len(centroid), bool)
         tol = np.maximum(float(zcfg.occlusion_tolerance_voxels) * size, 0.01 * z[inside])
-        seen[np.flatnonzero(inside)] = z[inside] <= zbuf[row * w + col] + tol
+        seen[cand[inside]] = z[inside] <= zbuf[row * w + col] + tol
         bits.append(np.packbits(seen))
     return bits
 
@@ -178,32 +248,58 @@ def _visibility(scene: Scene, centroid: np.ndarray, size: float, zcfg: Any):
 def _photometric(scene: Scene, vox: np.ndarray, cam: np.ndarray, centroid: np.ndarray, n_vox: int,
                  scale: float, width_cap: int) -> np.ndarray:
     """1 - std(grey level across observing views) / scale, per voxel; NaN without images."""
+    from concurrent.futures import ThreadPoolExecutor
+
     import cv2
 
-    total = np.zeros(n_vox)
-    total_sq = np.zeros(n_vox)
-    count = np.zeros(n_vox)
-    for c in np.unique(cam):
+    from src.core.device import cpu_thread_budget
+
+    def load(c: int):
         view = scene.cameras[int(c)]
         if view.image_path is None:
-            continue
-        img = cv2.imread(str(view.image_path), cv2.IMREAD_GRAYSCALE)
+            return None
+        # Decode at 1/2, 1/4 or 1/8 scale straight from the JPEG when that stays at or above the
+        # working width, instead of a full 4K decode per camera (S3-8).
+        flag = cv2.IMREAD_GRAYSCALE
+        for factor, reduced in ((8, cv2.IMREAD_REDUCED_GRAYSCALE_8), (4, cv2.IMREAD_REDUCED_GRAYSCALE_4),
+                                (2, cv2.IMREAD_REDUCED_GRAYSCALE_2)):
+            if view.width / factor >= width_cap:
+                flag = reduced
+                break
+        img = cv2.imread(str(view.image_path), flag)
         if img is None:
-            continue
+            return None
         f = min(1.0, width_cap / img.shape[1])
         if f < 1.0:
             img = cv2.resize(img, (max(int(img.shape[1] * f), 1), max(int(img.shape[0] * f), 1)),
                              interpolation=cv2.INTER_AREA)
-        sel = cam == c
+        return img
+
+    # Pairs grouped by camera once (a `cam == c` mask per camera scanned every pair each time).
+    order = np.argsort(cam, kind="stable")
+    cams_sorted = cam[order]
+    used = np.unique(cam)
+    # The images (small: z-buffer width) decode in parallel; OpenCV releases the GIL.
+    with ThreadPoolExecutor(max_workers=max(1, min(cpu_thread_budget(), 4))) as pool:
+        images = list(pool.map(load, used)) if len(used) else []
+    samples_v, samples_g = [], []
+    for c, img in zip(used, images):
+        if img is None:
+            continue
+        view = scene.cameras[int(c)]
+        sel = order[np.searchsorted(cams_sorted, c, "left"):np.searchsorted(cams_sorted, c, "right")]
         uv, z = view.project(centroid[vox[sel]])
         ok = view.inside(uv, z)
         sx, sy = img.shape[1] / view.width, img.shape[0] / view.height
         grey = img[np.clip((uv[ok, 1] * sy).astype(int), 0, img.shape[0] - 1),
                    np.clip((uv[ok, 0] * sx).astype(int), 0, img.shape[1] - 1)].astype(np.float64)
-        v = vox[sel][ok]
-        np.add.at(total, v, grey)
-        np.add.at(total_sq, v, grey ** 2)
-        np.add.at(count, v, 1)
+        samples_v.append(vox[sel][ok])
+        samples_g.append(grey)
+    v = np.concatenate(samples_v) if samples_v else np.zeros(0, np.int64)
+    g = np.concatenate(samples_g) if samples_g else np.zeros(0)
+    total = np.bincount(v, g, minlength=n_vox)
+    total_sq = np.bincount(v, g ** 2, minlength=n_vox)
+    count = np.bincount(v, minlength=n_vox).astype(np.float64)
     out = np.full(n_vox, np.nan)
     many = count >= 2
     std = np.sqrt(np.maximum(total_sq[many] / count[many] - (total[many] / count[many]) ** 2, 0))
@@ -213,7 +309,16 @@ def _photometric(scene: Scene, vox: np.ndarray, cam: np.ndarray, centroid: np.nd
 
 def classify(scene: Scene, cfg: Any) -> tuple[ZoneResult, list[str]]:
     zcfg = cfg.get_path("fusion.zones")
+    timings: dict[str, float] = {}
+    clock = [time.perf_counter()]
+
+    def lap(name: str) -> None:
+        now = time.perf_counter()
+        timings[name] = round(now - clock[0], 2)
+        clock[0] = now
+
     size, gsd, notes = voxel_size(scene, zcfg, int(zcfg.max_voxels))
+    lap("voxel_size")
     pts = scene.points
     origin = np.floor(pts.min(0) / size) * size - size
     dims = (np.ceil((pts.max(0) - origin) / size).astype(np.int64) + 2)
@@ -224,6 +329,7 @@ def classify(scene: Scene, cfg: Any) -> tuple[ZoneResult, list[str]]:
     centroid = np.stack([np.bincount(point_voxel, pts[:, a], minlength=n_vox) for a in range(3)], 1) / n_points[:, None]
     full = max(int(cfg.get_path("export.confidence_full_views", 5)), 1)
     conf = np.bincount(point_voxel, np.clip(scene.views / full, 0, 1), minlength=n_vox) / n_points
+    lap("voxelise")
 
     centres = np.array([c.centre for c in scene.cameras]) if scene.cameras else np.zeros((0, 3))
     spacing = sample_spacing(centroid, size)
@@ -231,6 +337,7 @@ def classify(scene: Scene, cfg: Any) -> tuple[ZoneResult, list[str]]:
     views_geom = np.zeros(n_vox, np.int32)
     for packed in bits:
         views_geom += np.unpackbits(packed, count=n_vox).astype(np.int32)
+    lap("visibility")
 
     if scene.view_idx is not None:
         per_point = np.diff(scene.view_ptr)
@@ -252,15 +359,18 @@ def classify(scene: Scene, cfg: Any) -> tuple[ZoneResult, list[str]]:
         vox = np.concatenate(vox_list) if vox_list else np.zeros(0, np.int64)
         cam = np.concatenate(cam_list) if cam_list else np.zeros(0, np.int64)
         angle_source = "geometric visibility"
+    lap("views")
     tri = _pair_angles(vox, cam, centroid, centres, n_vox)
+    lap("angles")
     photo = _photometric(scene, vox, cam, centroid, n_vox, float(zcfg.photometric_std_scale),
                          int(zcfg.zbuffer_width)) if scene.images_dir is not None else np.full(n_vox, np.nan)
+    lap("photometric")
 
     zone = np.full(n_vox, ZONE3, np.uint8)
     zone[views >= int(zcfg.zone2_min_views)] = ZONE2
     zone[(views >= int(zcfg.zone1_min_views)) & (tri >= float(zcfg.zone1_min_triangulation_deg))] = ZONE1
     return ZoneResult(grid, keys, centroid, n_points, views, views_geom, tri, photo, conf, zone,
-                      point_voxel, gsd, angle_source, spacing), notes
+                      point_voxel, gsd, angle_source, spacing, timings), notes
 
 
 # -- the ground: coverage and gaps (§6.4) --------------------------------------------------

@@ -339,7 +339,10 @@ def fill(scene: Scene, zones: ZoneResult, gm: GroundMap, cfg: Any, mono: MonoDep
         # (elapsed / progress) counted zone classification as fill time: on Esri it read 49 s at 2/35
         # frames as an 860 s stage and stopped the fill, which then took 2.2 s for those 2 frames.
         left = len(frames) - n - 1
-        if budget_stage is not None and getattr(budget_stage, "enabled", True) and left:
+        # The first budget_min_frames frames always run: one costs ~1.6 s from saved depth, and on
+        # DJI_0047 a slow classification left the fill 1 of 3 frames (S3-8).
+        guaranteed = n + 1 < int(acfg.budget_min_frames)
+        if budget_stage is not None and getattr(budget_stage, "enabled", True) and left and not guaranteed:
             per_frame = (time.perf_counter() - started) / (n + 1)
             if per_frame * left > budget_stage.remaining_s - float(acfg.budget_reserve_s):
                 budget_stage.degrade("reduce_frames", reason="time budget", component="Zone 2 monocular fill",

@@ -206,5 +206,15 @@ def evaluate_fusion(outputs: FusionOutputs, cfg: Any) -> StageEvaluation:
     allot = float(((outputs.config.get("budget") or {}).get("stages") or {}).get("fusion", 120))
     ev.kpis.append(Kpi("seconds", grp, "Stage 3 wall time", seconds, f"<= {allot:.0f} s (fusion allotment)",
                        PASS if seconds <= allot else WARN if seconds <= 2 * allot else FAIL,
-                       ", ".join(f"{k} {v}s" for k, v in (r.get("timings_s") or {}).items() if k != "total"), unit="s"))
+                       ", ".join(f"{k} {v}s" for k, v in (r.get("timings_s") or {}).items()
+                                 if k != "total" and not isinstance(v, dict))
+                       + _steps((r.get("timings_s") or {}).get("classify_steps")), unit="s"))
     return ev
+
+
+def _steps(steps: dict | None) -> str:
+    """The classification's own split (S3-8), e.g. "; classify = visibility 3.1s + photometric 2.3s ..."."""
+    if not steps:
+        return ""
+    top = sorted(steps.items(), key=lambda kv: -kv[1])
+    return "; classify = " + " + ".join(f"{k} {v}s" for k, v in top)

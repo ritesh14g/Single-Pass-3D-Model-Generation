@@ -335,6 +335,56 @@ def test_fill_budget_uses_the_fills_own_rate(scene, classified, cfg):
     roomy = _Budget(remaining=500.0)
     full = anchor.fill(scene, classified, gm, cfg, _TruthMono(), max_frames=4, source="truth", budget_stage=roomy)
     assert not roomy.degradations and full.reason is None and len(full.frames) >= 2
+    one = load_config(overrides=["fusion.mono_depth.budget_min_frames=1"])
     tight = _Budget(remaining=0.0)   # nothing left beyond the reserve: stop after the first frame
-    cut = anchor.fill(scene, classified, gm, cfg, _TruthMono(), max_frames=4, source="truth", budget_stage=tight)
+    cut = anchor.fill(scene, classified, gm, one, _TruthMono(), max_frames=4, source="truth", budget_stage=tight)
     assert tight.degradations and len(cut.frames) == 1 and "time budget" in cut.reason
+
+
+def test_fill_keeps_its_guaranteed_frames_when_the_budget_is_gone(scene, classified, cfg):
+    # DJI_0047, box: classification took the stage's time and the fill ran 1 of 3 frames (S3-8).
+    gm = zm.ground_map(scene, classified, 1.0, 3.0)
+    planned = len(anchor.fill(scene, classified, gm, cfg, _TruthMono(), max_frames=4, source="truth").frames)
+    three = load_config(overrides=["fusion.mono_depth.budget_min_frames=3"])
+    cut = anchor.fill(scene, classified, gm, three, _TruthMono(), max_frames=4, source="truth",
+                      budget_stage=_Budget(remaining=0.0))
+    assert len(cut.frames) == min(3, planned)
+
+
+# -- S3-8: classification speed, same answers ---------------------------------------------------
+def test_footprint_culling_does_not_change_visibility(scene, classified, cfg, monkeypatch):
+    zcfg = cfg.get_path("fusion.zones")
+    culled = zm._visibility(scene, classified.centroid, classified.spacing, zcfg)
+    monkeypatch.setattr(zm, "_frustum_box", lambda *a, **k: None)          # project every voxel
+    everything = zm._visibility(scene, classified.centroid, classified.spacing, zcfg)
+    assert all(np.array_equal(a, b) for a, b in zip(culled, everything))
+
+
+def test_frustum_box_falls_back_for_a_view_up_to_the_horizon():
+    cam = nadir("n.jpg", 0.0, 0.0)
+    box = zm._frustum_box(cam, -2.0, 2.0, 0.0)
+    assert box is not None and box[1] - box[0] > 0.9 * 2 * HEIGHT * (W / 2) / FOCAL
+    tilt = np.radians(80.0)                                                # pitched up near the horizon
+    rot = np.array([[1, 0, 0], [0, np.cos(tilt), -np.sin(tilt)], [0, np.sin(tilt), np.cos(tilt)]]) @ np.diag([1.0, -1.0, -1.0])
+    oblique = CameraView("o.jpg", W, H, cam.k, rot, np.array([0.0, 0.0, HEIGHT]))
+    assert zm._frustum_box(oblique, -2.0, 2.0, 0.0) is None
+
+
+def test_occupied_voxel_count_matches_row_unique():
+    pts = np.random.default_rng(4).normal(0, 30, (20000, 3))
+    for size in (0.5, 2.0, 7.0):
+        assert zm._occupied(pts, size) == len(np.unique(np.floor(pts / size).astype(np.int64), axis=0))
+
+
+def test_widest_angle_matches_brute_force(scene, classified):
+    rng = np.random.default_rng(5)
+    n_vox = 50
+    vox = np.repeat(np.arange(n_vox), 4)
+    cam = rng.integers(0, len(scene.cameras), len(vox))
+    centres = np.array([c.centre for c in scene.cameras]) + rng.normal(0, 5, (len(scene.cameras), 3))
+    got = zm._pair_angles(vox, cam, classified.centroid[:n_vox], centres, n_vox)
+    for v in range(n_vox):
+        rays = centres[cam[vox == v]] - classified.centroid[v]
+        rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+        widest = np.degrees(np.arccos(np.clip(rays @ rays.T, -1, 1))).max()
+        assert got[v] <= widest + 1e-6 and got[v] >= 0.5 * widest       # the 2-pass estimate's bound

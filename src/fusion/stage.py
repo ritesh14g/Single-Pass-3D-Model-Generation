@@ -261,6 +261,7 @@ def run_fusion(track_a: dict[str, Path], georef_path: Path | None, out_dir: Path
     for note in voxel_notes:
         downgrades.append(f"voxel size coarsened: {note}")
     timings["classify"] = round(time.perf_counter() - t, 1)
+    timings["classify_steps"] = zones.timings
     gcfg = fcfg.ground
     t = time.perf_counter()
     measured_map = zmod.ground_map(scene, zones, float(gcfg.cell_m), float(gcfg.max_range_factor))
