@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.core.config import load_config
@@ -172,20 +173,24 @@ def georeferenced_run(tmp_path_factory):
     from src.recon.track_a_colmap import run_track_a
 
     root = tmp_path_factory.mktemp("stage5")
-    flight = fixtures.make_flight_video(root / "flight.mp4", frames=64, width=320, height=240, overlap=0.93)
+    # T-1: the same pan as fixtures.make_flight_video (64 frames, 320x240, 93% overlap, every 4th
+    # frame kept), cropped straight from the canvas. Through an mp4v encode/decode the pixels
+    # differed between the Windows and Linux OpenCV builds, and on this flat scene with a
+    # self-calibrated focal SfM sometimes degenerated (the box: float32 overflow in glTF, a
+    # Blender hang). A fixed field of view, as real telemetry gives, makes the focal known.
+    width, height, frames, overlap = 320, 240, 64, 0.93
+    step = (1.0 - overlap) * width
+    canvas = fixtures.make_canvas(int(width + step * frames + 8), height + 8, seed=7)
     images = root / "images"
     images.mkdir()
-    cap, index = cv2.VideoCapture(str(flight.video_path)), 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if index % 4 == 0:
-            cv2.imwrite(str(images / f"frame_{index:06d}.jpg"), frame)
-        index += 1
-    cap.release()
+    for index in range(0, frames, 4):
+        x = int(round(index * step))
+        cv2.imwrite(str(images / f"frame_{index:06d}.jpg"), canvas[0:height, x:x + width],
+                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+    telemetry = root / "telemetry.parquet"
+    pd.DataFrame({"t": [0.0], "hfov_deg": [60.0]}).to_parquet(telemetry)
     cfg = load_config(overrides=["device.prefer=cpu", "run.mode=A", "recon.track_a.dense.max_image_size=320"])
-    track_a = run_track_a(images, root / "track_a", cfg)["artifacts"]
+    track_a = run_track_a(images, root / "track_a", cfg, telemetry_path=telemetry)["artifacts"]
 
     # GPS = the SfM cameras, levelled (ground plane horizontal, as in the real world), scaled 12x
     # and moved to Bengaluru: the fit must recover exactly that.
@@ -271,6 +276,30 @@ def test_end_to_end_stage3_zones_travel_with_the_export(georeferenced_run, tmp_p
     (tmp_path / "manifest.json").write_text(json.dumps({"config": cfg.to_dict()}))
     kpis = {k.key: k for k in evaluate_fusion(FusionOutputs.load(tmp_path), cfg).kpis}
     assert kpis["gaps_geojson"].status == PASS and kpis["zone1_untouched"].status == PASS
+
+
+def test_broken_mesh_is_named_not_exported():
+    cloud = np.random.default_rng(1).uniform(0, 100, (500, 3))
+    good = cloud[:50] + 1.0
+    assert writers.mesh_is_broken(good, cloud, 10.0) is None
+    assert "not finite" in writers.mesh_is_broken(np.r_[good, [[np.inf, 0, 0]]], cloud, 10.0)
+    assert "outside it" in writers.mesh_is_broken(np.r_[good, [[1e30, 0, 0]]], cloud, 10.0)
+    assert writers.mesh_is_broken(np.zeros((0, 3)), cloud, 10.0) == "the mesh has no vertices"
+
+
+def test_end_to_end_absurd_mesh_skips_mesh_formats_keeps_points(georeferenced_run, tmp_path):
+    """T-1: a degenerate mesh overflowed glTF's float32 and hung Blender on the box."""
+    from src.export.stage import run_export
+
+    run_dir, _, _, cfg, track_a = georeferenced_run
+    bad = tmp_path / "bad.obj"
+    bad.write_text("\n".join(["v 0 0 0", "v 1 0 0", "v 0 1 0", "v 1e30 1e30 0", "f 1 2 3", "f 2 3 4"]) + "\n")
+    broken = {k: v for k, v in track_a.items() if k != "textured"}
+    broken["mesh"] = bad
+    export = run_export(broken, run_dir / "geo" / "georef.json", tmp_path / "export", cfg)
+    failed, produced = export["metrics"]["formats_failed"], set(export["metrics"]["formats_produced"])
+    assert all("mesh rejected" in failed[f] for f in ("obj", "glb", "fbx"))
+    assert {"ply", "las", "geotiff"} <= produced and not {"obj", "glb", "fbx"} & produced
 
 
 def test_unreferenced_run_is_reported_not_crashed(tmp_path):

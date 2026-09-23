@@ -735,6 +735,11 @@ export:
   confidence_full_views: 5
   # Coverage grid: share of the ground the cameras saw that the dense cloud covers.
   coverage_cell_m: 1.0
+  # A mesh vertex that is not finite, or lies more than this many times the dense cloud's
+  # extent outside the cloud, marks a broken Stage 4 mesh: mesh formats are skipped (logged),
+  # point formats still go out. A degenerate test mesh overflowed glTF's float32 and hung
+  # Blender > 10 min on the box (T-1).
+  mesh_max_extent_factor: 10.0
   texture_size: 8192
   raster:
     # auto = spacing of unique surface samples (Esri hybrid: ~0.5 m); a finer fixed value
@@ -752,6 +757,8 @@ export:
     # FBX is the most fragile export; OBJ -> headless Blender is the fallback.
     converter: auto        # auto | blender | fbxsdk
     blender_binary: null
+    # Headless Blender's OBJ -> FBX conversion is killed after this many seconds.
+    timeout_s: 600
   tiling:
     enabled: true
     tile_size_m: 100.0

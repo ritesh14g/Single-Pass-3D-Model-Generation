@@ -130,6 +130,27 @@ def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, s
 
 
 # -- meshes ---------------------------------------------------------------------------
+def mesh_is_broken(vertices: np.ndarray, cloud: np.ndarray | None, factor: float) -> str | None:
+    """Why a mesh must not be exported, or None. Non-finite vertices, or vertices farther than
+    ``factor`` x the dense cloud's extent outside the cloud's bounding box (a degenerate Stage 4
+    mesh: float32 overflow in glTF, a Blender hang in FBX; T-1)."""
+    if not len(vertices):
+        return "the mesh has no vertices"
+    bad = ~np.isfinite(vertices).all(axis=1)
+    if bad.any():
+        return f"{int(bad.sum()):,} of {len(vertices):,} vertices are not finite"
+    if cloud is None or not len(cloud) or factor <= 0:
+        return None
+    lo, hi = cloud.min(0), cloud.max(0)
+    reach = factor * max(float(np.linalg.norm(hi - lo)), 1.0)
+    far = ((vertices < lo - reach) | (vertices > hi + reach)).any(axis=1)
+    if far.any():
+        worst = float(np.abs(vertices[far]).max())
+        return (f"{int(far.sum()):,} of {len(vertices):,} vertices lie more than {factor:g}x the cloud's "
+                f"extent ({reach:,.0f} m) outside it (largest coordinate {worst:.3g})")
+    return None
+
+
 def load_mesh(path: Path):
     import trimesh
 

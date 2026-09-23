@@ -169,6 +169,16 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
         mesh = attempt("mesh_load", lambda: writers.load_mesh(Path(mesh_src)))
         if mesh is not None:
             mesh.vertices = georef.to_local(np.asarray(mesh.vertices))
+            broken = writers.mesh_is_broken(np.asarray(mesh.vertices), local, float(ecfg.mesh_max_extent_factor))
+            if broken:
+                # Never hand absurd geometry to the writers: it overflowed float32 in glTF and hung
+                # Blender for > 10 min on the box (T-1). The point formats still go out.
+                for fmt in ("obj", "glb", "fbx"):
+                    if fmt in wanted:
+                        failures[fmt] = f"Stage 4 mesh rejected: {broken}"
+                log_downgrade(log, "mesh export", "skipped (point formats only)", broken)
+                mesh = None
+        if mesh is not None:
             if "obj" in wanted or "fbx" in wanted:
                 if track_a.get("textured") is not None and str(mesh_src).lower().endswith(".obj"):
                     obj_path = attempt("obj", lambda: writers.transform_obj(Path(mesh_src), out_dir / "model.obj",
@@ -205,7 +215,8 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                                        "FBX needs headless Blender (§8.3)")
                     log_downgrade(log, "fbx export", "skipped", failures["fbx"])
                 elif obj_path:
-                    path = attempt("fbx", lambda: writers.write_fbx(out_dir / "model.fbx", obj_path, blender))
+                    path = attempt("fbx", lambda: writers.write_fbx(out_dir / "model.fbx", obj_path, blender,
+                                                                                 int(ecfg.fbx.timeout_s)))
                     if path:
                         files.append(writers.file_entry(path, "fbx", frame="local", converter=str(blender)))
 

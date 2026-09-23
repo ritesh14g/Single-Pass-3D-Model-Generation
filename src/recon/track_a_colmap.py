@@ -84,6 +84,10 @@ def run_track_a(
     import pycolmap
 
     tcfg = cfg.get_path("recon.track_a")
+    # COLMAP's RANSAC and mapper sampling draw from one global generator: seed it, so a run (and
+    # the end-to-end tests, T-1) reconstructs the same model every time.
+    if hasattr(pycolmap, "set_random_seed"):
+        pycolmap.set_random_seed(int(cfg.get_path("run.seed", 0)))
     out_dir = Path(out_dir).resolve()
     images_dir = Path(images_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
