@@ -40,9 +40,25 @@ say "code: anything not yet in git"
 git diff HEAD > "$STAGE/code/uncommitted.patch" 2>/dev/null
 UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null | grep -v '^data/' || true)
 if [ -n "$UNTRACKED" ]; then
-  # Untracked files the repo does not ignore: scripts or configs written on the box.
-  echo "$UNTRACKED" > "$STAGE/code/untracked_list.txt"
-  tar czf "$STAGE/code/untracked_files.tar.gz" $UNTRACKED 2>/dev/null
+  # Untracked files the repo does not ignore: scripts or configs written on the box. Only the
+  # small ones are packed — a stray archive of run output would bloat the handover, and the
+  # results it holds are collected from the run folders anyway.
+  : > "$STAGE/code/untracked_list.txt"
+  SMALL=""
+  for f in $UNTRACKED; do
+    [ -f "$f" ] || continue
+    kb=$(du -k "$f" | cut -f1)
+    if [ "$kb" -le 2048 ]; then
+      SMALL="$SMALL $f"
+      printf 'packed   %6s KB  %s
+' "$kb" "$f" >> "$STAGE/code/untracked_list.txt"
+    else
+      printf 'TOO BIG  %6s KB  %s  (left on the box)
+' "$kb" "$f" >> "$STAGE/code/untracked_list.txt"
+    fi
+  done
+  [ -n "$SMALL" ] && tar czf "$STAGE/code/untracked_files.tar.gz" $SMALL 2>/dev/null
+  grep -q 'TOO BIG' "$STAGE/code/untracked_list.txt" 2>/dev/null &&     say "   large untracked files were listed, not packed (see code/untracked_list.txt)"
 fi
 if [ -s "$STAGE/code/uncommitted.patch" ] || [ -n "$UNTRACKED" ]; then
   say "   NOTE: this box has work that is not committed — it is in code/ in the tarball"
