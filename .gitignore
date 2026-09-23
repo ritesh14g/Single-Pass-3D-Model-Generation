@@ -9,6 +9,8 @@ __pycache__/
 data/raw/*
 data/interim/*
 data/outputs/*
+# results brought back from the GPU box (scripts/box_collect.sh)
+data/box/
 !data/**/.gitkeep
 
 # model weights
