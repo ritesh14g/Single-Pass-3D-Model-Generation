@@ -259,3 +259,42 @@ These are open issues from `DEVLOG.md` §5 that can only be settled on real hard
 - [ ] Status board in `DEVLOG.md` §2 matches `src/stages.py`
 - [ ] Any new tunable lives in `configs/default.yaml`, not in code
 - [ ] Any new GPU code follows the §0 rule: `resolve_device`, logged downgrade, CPU fallback
+
+---
+
+## 9. Giving the box back (it goes to someone else)
+
+Two scripts, in this order. The first keeps the work; the second keeps your accounts safe.
+
+```bash
+cd ~/single-pass && git pull                 # make sure the box is on the latest code
+git status --porcelain                       # anything listed here was written on the box
+git add -A && git commit -m "box: <what>" && git push    # push it, if it is work worth keeping
+
+bash scripts/box_collect.sh esri_full2       # package results -> ~/box_handover_<stamp>.tar.gz
+```
+
+`box_collect.sh` takes the things that cannot be recreated off a machine you are losing:
+a patch of anything uncommitted, every run's manifest, input check, scorecards, georeferencing,
+logs and telemetry tables, each run's **sparse reconstruction** (so Stage 5 can be re-run on a
+laptop), and a record of **what the machine was** (GPU, CUDA, packages, tool versions) — numbers
+are not comparable without it. Naming a run adds that run's `export/`: OBJ, PLY, LAS, GeoTIFF,
+glb and FBX, about 400 MB on Esri, which is what Stage 6's viewer is built against offline.
+
+It deliberately skips what a fresh box re-downloads: OpenMVS binaries, portable Blender, the
+VGGT-Ω weights, and the raw footage.
+
+Download the tarball from the Jupyter file browser (right-click → Download), unpack it, and
+check it opens before moving on.
+
+```bash
+bash scripts/box_wipe_credentials.sh         # reports what it finds, changes nothing
+bash scripts/box_wipe_credentials.sh --yes   # removes it
+```
+
+It looks for the Hugging Face token, saved git credentials and tokens embedded in a remote URL,
+SSH private keys, secrets in shell profiles, and shell/notebook history — and offers to delete
+the working copy with its footage and reconstructions. It never prints a secret's value.
+
+**Treat every token that was on that machine as exposed and rotate it**, even after wiping: you
+cannot prove what the next user restores from a snapshot.
