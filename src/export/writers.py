@@ -58,11 +58,22 @@ def confidence_from_views(views: np.ndarray, full_views: int) -> np.ndarray:
 
 
 # -- point clouds -------------------------------------------------------------------
-def write_ply(path: Path, local_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarray, confidence: np.ndarray) -> Path:
+# Stage 3 per-point layers (uint8): zone 1/2 (well / thinly observed) and source 0/1 (MVS / anchored
+# monocular fill). Written when the run has them; ``extra`` maps name -> (array, description).
+POINT_LAYERS = {"zone": "Stage 3 zone: 1 well observed, 2 thinly observed",
+                "source": "0 multi-view stereo, 1 monocular depth anchored to zone 1"}
+
+
+def write_ply(path: Path, local_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarray, confidence: np.ndarray,
+              extra: dict[str, np.ndarray] | None = None) -> Path:
     from plyfile import PlyData, PlyElement
 
+    extra = extra or {}
     vertex = np.empty(len(local_xyz), dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("red", "u1"), ("green", "u1"),
-                                             ("blue", "u1"), ("views", "u1"), ("confidence", "f4")])
+                                             ("blue", "u1"), ("views", "u1"), ("confidence", "f4")]
+                      + [(name, "u1") for name in extra])
+    for name, values in extra.items():
+        vertex[name] = values
     for c, k in enumerate("xyz"):
         vertex[k] = local_xyz[:, c]
     for c, k in enumerate(("red", "green", "blue")):
@@ -74,7 +85,8 @@ def write_ply(path: Path, local_xyz: np.ndarray, rgb: np.ndarray, views: np.ndar
 
 
 def write_las(path: Path, map_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarray, confidence: np.ndarray,
-              crs_string: str | None, scale: list[float], point_format: int = 3) -> Path:
+              crs_string: str | None, scale: list[float], point_format: int = 3,
+              extra: dict[str, np.ndarray] | None = None) -> Path:
     import laspy
     from pyproj import CRS
 
@@ -83,6 +95,9 @@ def write_las(path: Path, map_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarra
     header.offsets = np.floor(map_xyz.min(0))
     header.add_extra_dim(laspy.ExtraBytesParams(name="views", type=np.uint8, description="confirming views"))
     header.add_extra_dim(laspy.ExtraBytesParams(name="confidence", type=np.float32, description="views / full"))
+    for name in extra or {}:
+        header.add_extra_dim(laspy.ExtraBytesParams(name=name, type=np.uint8,
+                                                    description=POINT_LAYERS.get(name, name)[:31]))
     if crs_string:
         # LAS 1.4 carries the CRS as OGC WKT, which (unlike GeoTIFF keys) can express the
         # compound UTM + EGM96 height CRS; laspy's add_crs() only handles EPSG-coded CRSs.
@@ -93,12 +108,15 @@ def write_las(path: Path, map_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarra
     las.red, las.green, las.blue = (rgb[:, c].astype(np.uint16) * 257 for c in range(3))
     las.views = np.clip(views, 0, 255).astype(np.uint8)
     las.confidence = confidence
+    for name, values in (extra or {}).items():
+        setattr(las, name, np.asarray(values, np.uint8))
     las.classification = np.ones(len(map_xyz), np.uint8)  # 1 = unclassified
     las.write(str(path))
     return Path(path)
 
 
-def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, scale, tile_m: float) -> list[Path]:
+def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, scale, tile_m: float,
+                    extra: dict[str, np.ndarray] | None = None) -> list[Path]:
     """One LAS per ``tile_m`` x ``tile_m`` map cell (§8.2 tiling, the Scalability criterion)."""
     folder.mkdir(parents=True, exist_ok=True)
     keys = np.floor(map_xyz[:, :2] / tile_m).astype(np.int64)
@@ -106,7 +124,8 @@ def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, s
     for key in np.unique(keys, axis=0):
         sel = np.all(keys == key, axis=1)
         out.append(write_las(folder / f"tile_{int(key[0] * tile_m)}_{int(key[1] * tile_m)}.las",
-                             map_xyz[sel], rgb[sel], views[sel], confidence[sel], crs_string, scale))
+                             map_xyz[sel], rgb[sel], views[sel], confidence[sel], crs_string, scale,
+                             extra={k: v[sel] for k, v in (extra or {}).items()}))
     return out
 
 
@@ -187,6 +206,26 @@ def write_confidence_glb(path: Path, mesh, cloud_local: np.ndarray, confidence: 
     coloured.visual = trimesh.visual.ColorVisuals(coloured, vertex_colors=confidence_colours(mesh, cloud_local,
                                                                                              confidence))
     return write_glb(path, coloured, {**extras, "layer": "confidence (views / full), red low -> green high"})
+
+
+ZONE_COLOURS = {1: (31, 136, 61), 2: (191, 135, 0), 3: (207, 34, 46)}
+
+
+def write_zones_glb(path: Path, mesh, face_zone: np.ndarray, extras: dict) -> Path:
+    """Stage 3 layer: vertices coloured by the worst zone of their faces (3 = inferred, no support)."""
+    import trimesh
+
+    faces = np.asarray(mesh.faces)
+    vertex_zone = np.ones(len(mesh.vertices), np.uint8)
+    for corner in range(3):
+        np.maximum.at(vertex_zone, faces[:, corner], face_zone)
+    colours = np.array([ZONE_COLOURS.get(int(z), (128, 128, 128)) + (255,) for z in range(4)], np.uint8)[vertex_zone]
+    layer = trimesh.Trimesh(vertices=np.asarray(mesh.vertices), faces=faces, process=False)
+    layer.visual = trimesh.visual.ColorVisuals(layer, vertex_colors=colours)
+    legend = {"1": "well observed (zone 1)", "2": "thinly observed (zone 2)",
+              "3": "no measured support: inferred surface (zone 3) — excluded from accuracy"}
+    return write_glb(path, layer, {**extras, "layer": "Stage 3 zones", "legend": legend,
+                                   "colours": {str(k): list(v) for k, v in ZONE_COLOURS.items()}})
 
 
 # -- FBX via headless Blender (§8.3: the fragile one) ----------------------------------------

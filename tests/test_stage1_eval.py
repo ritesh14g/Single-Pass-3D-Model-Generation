@@ -45,7 +45,8 @@ def good_run(tmp_path_factory):
 class TestRegistry:
     def test_built_stages(self):
         assert built_manifest_stages() == ["preflight", "ingest", "condition", "track_b", "refine_ba", "track_a",
-                                           "geo", "export"]
+                                           "fusion", "geo", "export"]
+        assert get_stage("occlusion").status is BuildStatus.BUILT
         assert get_stage("input_check").status is BuildStatus.BUILT
         assert get_stage("ingest").status is BuildStatus.BUILT
         assert get_stage("condition").status is BuildStatus.BUILT
@@ -58,6 +59,15 @@ class TestRegistry:
         owned = [name for stage in STAGES for name in stage.manifest_stages]
         assert sorted(owned) == sorted(STAGE_ORDER)
 
+    def test_stage3_runs_between_georeferencing_and_export(self):
+        from src.core.manifest import STAGE_ORDER
+        from src.stages import manifest_stages_through
+
+        assert STAGE_ORDER.index("geo") < STAGE_ORDER.index("fusion") < STAGE_ORDER.index("export")
+        chain = manifest_stages_through(get_stage("occlusion"))
+        assert chain[-2:] == ["geo", "fusion"] and "export" not in chain
+        assert manifest_stages_through(get_stage("geo_export"))[-3:] == ["fusion", "geo", "export"]
+
 
 class TestStageOneRun:
     def test_only_requested_stages_run(self, good_run):
@@ -65,7 +75,7 @@ class TestStageOneRun:
         assert manifest.stages["ingest"].status is StageStatus.DONE
         assert manifest.stages["condition"].status is StageStatus.DONE
         assert manifest.stages["fusion"].status is StageStatus.SKIPPED
-        assert "planned" in manifest.stages["fusion"].skip_reason
+        assert "not requested" in manifest.stages["fusion"].skip_reason
         assert manifest.stages["track_a"].status is StageStatus.SKIPPED
 
     def test_telemetry_is_written_unfiltered(self, good_run):

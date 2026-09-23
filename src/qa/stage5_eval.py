@@ -141,6 +141,14 @@ def evaluate_export(outputs: ExportOutputs, cfg: Any) -> StageEvaluation:
     if "glb_confidence" in files:
         ok, detail = verify_file("glb_confidence", Path(files["glb_confidence"]["path"]))
         ev.kpis.append(Kpi("confidence_layer", grp, "Confidence layer (glb)", ok, "written", PASS if ok else WARN, detail))
+    if meta.get("zones"):  # Stage 3 ran: its layers must have reached the deliverables
+        ok, detail = (verify_file("glb_zones", Path(files["glb_zones"]["path"])) if "glb_zones" in files
+                      else (False, failed.get("glb_zones", "not written")))
+        layers = (files.get("las") or {}).get("layers") or []
+        ok = ok and "zone" in layers and "geojson_gaps" in files
+        ev.kpis.append(Kpi("zones_layer", grp, "Stage 3 layers (zones glb, LAS/PLY zone, gaps.geojson)", ok,
+                           "written", PASS if ok else WARN,
+                           f"{detail}; LAS layers {layers}; gaps.geojson {'yes' if 'geojson_gaps' in files else 'no'}"))
 
     grp = "Coverage"
     cov = meta.get("coverage")

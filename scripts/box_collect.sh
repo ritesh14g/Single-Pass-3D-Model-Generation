@@ -104,6 +104,16 @@ for RUNDIR in data/interim/*/; do
   find "$RUNDIR" -maxdepth 2 -name '*.csv' -size -20M -exec cp --parents {} "$STAGE/runs/" \; 2>/dev/null
   # The structured per-run log: every downgrade, degradation and timing the QA report cites.
   find "$RUNDIR" -maxdepth 1 -name '*.jsonl' -size -20M -exec cp --parents {} "$STAGE/runs/" \; 2>/dev/null
+  # Stage 3's zone layers: gap polygons, zone map, per-point and per-face zones, the fill cloud.
+  if [ -d "$RUNDIR/fusion" ]; then
+    SIZE=$(du -sm "$RUNDIR/fusion" 2>/dev/null | cut -f1)
+    if [ "${SIZE:-999}" -lt 300 ]; then
+      mkdir -p "$DEST"
+      cp -r "$RUNDIR/fusion" "$DEST/" 2>/dev/null
+    else
+      echo "fusion/ skipped: ${SIZE} MB (fusion_report.json and zones.parquet are still collected)" > "$DEST/fusion_SKIPPED.txt"
+    fi
+  fi
   # The sparse reconstruction: small, and enough to re-run Stage 5 on a laptop.
   if [ -d "$RUNDIR/track_a/sparse" ]; then
     SIZE=$(du -sm "$RUNDIR/track_a/sparse" 2>/dev/null | cut -f1)
@@ -160,7 +170,8 @@ code/     git state, a patch of anything uncommitted, and untracked files writte
           Apply with:  git apply code/uncommitted.patch
 env/      what the machine was: GPU, CPU, memory, CUDA, installed packages, tool versions.
 runs/     one folder per pipeline run: manifest, input check, scorecards, georeferencing,
-          export metadata, telemetry/frame tables, sparse reconstruction, console logs.
+          Stage 3 zones and gaps (fusion/), export metadata, telemetry/frame tables, sparse
+          reconstruction, console logs.
           With a run named on the command line, that run's export/ (OBJ, PLY, LAS, GeoTIFF,
           glb, FBX) is included too.
 

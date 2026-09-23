@@ -55,15 +55,13 @@ fusion:
     zone1_min_triangulation_deg: 7.0
     voxel_gsd_multiple: 1.5
   mono_depth:
-    anchor:
-      # Tighter anchoring: refuse to fuse Zone 2 unless the scale fit is good.
-      ransac_inlier_threshold_m: 0.15
-      min_inlier_ratio: 0.45
-      max_residual_m: 0.4
-  poisson:
-    depth: 11
-  plane_completion:
-    enabled: true
+    # Tighter anchoring: refuse to fuse Zone 2 unless the scale fit is good.
+    ransac_inlier_threshold_m: 0.15
+    ransac_inlier_threshold_rel: 0.01
+    min_inlier_ratio: 0.45
+    max_residual_m: 0.4
+    max_residual_rel: 0.01
+    max_frames: 80
 
 geo:
   similarity:

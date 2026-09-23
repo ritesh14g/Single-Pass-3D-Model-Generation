@@ -606,49 +606,82 @@ recon:
     regression_tolerance: 1.0
 
 # ---------------------------------------------------------------------------
-# Stage 3 — Occlusion / fusion engine (§6) — core innovation
+# Stage 3 — Occluded surface reconstruction (§6) — core innovation
+# Runs after georeferencing (works in metres) and before export.
 # ---------------------------------------------------------------------------
 fusion:
   zones:
     # Zone 1: well observed. Zone 2: thinly observed. Zone 3: never observed.
+    # A view = a frame whose depth confirmed the voxel (the dense cloud's visibility lists).
     zone1_min_views: 4
     zone1_min_triangulation_deg: 5.0
     zone2_min_views: 1
-    # Voxel size is derived as this multiple of the ground sample distance.
+    # Voxel = this multiple of the ground sample distance of the images the dense cloud used.
     voxel_gsd_multiple: 2.0
     voxel_size_min_m: 0.02
     voxel_size_max_m: 1.0
+    # Memory guard: the voxel is coarsened (logged) until the surface fits.
+    max_voxels: 3000000
+    # Per-camera z-buffer for geometric visibility ("ray cast", §6.2), px wide.
+    zbuffer_width: 480
+    # A voxel is visible when it is no deeper than the z-buffer + this many voxels.
+    occlusion_tolerance_voxels: 2.0
+    # Photometric consistency = 1 - std(grey level across observing views) / this.
+    photometric_std_scale: 40.0
+    # Dense points nearer a camera than this x the flight height are not scene surface
+    # (DJI_0047: 26% of the OpenMVS cloud sat 2.4 m ahead of a hovering camera). 0 = keep all.
+    camera_clearance_fraction: 0.1
+  ground:
+    # Coverage / gap grid on the ground plane; same cell as export.coverage_cell_m.
+    cell_m: 1.0
+    # A camera's footprint reaches at most this multiple of its height above ground.
+    max_range_factor: 3.0
   mono_depth:
-    model: depth-anything-v2-small
-    # Scale/shift solved on the Zone1 boundary band only, RANSAC-robust.
-    anchor:
-      boundary_band_px: 24
-      ransac_iterations: 500
-      ransac_inlier_threshold_m: 0.25
-      min_inlier_ratio: 0.35
-      # Fit residual above this -> refuse to fuse, reclassify as Zone 3.
-      max_residual_m: 0.6
-    blend_band_voxels: 3
-  tsdf:
-    truncation_voxels: 4.0
-    # Zone 2 integration weight is always strictly below Zone 1's.
-    zone1_weight: 1.0
+    enabled: true
+    # auto: Track B's saved VGGT maps when the run has them, else the Track B predictor.
+    # cached: saved maps only. predictor: always predict. none: gaps are reported, not filled.
+    source: auto
+    # Frames chosen (greedy cover of gap/thin ground cells). CPU predictor: minutes per frame.
+    max_frames: 40
+    cpu_max_frames: 2
+    min_target_cells: 25
+    # Least-confident share of monocular pixels ignored.
+    drop_low_conf: 0.3
+    min_region_px: 200
+    # Scale/shift solved on the Zone 1 boundary band only, RANSAC-robust.
+    boundary_band_px: 24
+    min_band_px: 200
+    ransac_iterations: 500
+    # Tolerances are max(metres, fraction x Zone 1 depth): monocular error grows with range
+    # (VGGT-Omega vs COLMAP on Esri: 0.86% median).
+    ransac_inlier_threshold_m: 0.25
+    ransac_inlier_threshold_rel: 0.02
+    min_inlier_ratio: 0.35
+    # Fit RMS above max(max_residual_m, max_residual_rel x band depth) -> refuse to fuse;
+    # the region stays Zone 3.
+    max_residual_m: 0.6
+    max_residual_rel: 0.015
+    # C0 seam: the band residual fades to zero over this many pixels into the fill.
+    blend_band_px: 12
+    pixel_stride: 2
+    # The fill stops early only when its own per-frame rate x the frames left would leave less
+    # than this many seconds of the fusion allotment for the mesh flags and the outputs.
+    budget_reserve_s: 20
+    # Filled points outside the measured surface's height range +- this are dropped.
+    height_margin_m: 5.0
+    # Weights: Zone 1 = 1.0; a monocular pixel <= this, so always strictly below Zone 1.
     zone2_weight_max: 0.45
+    # A filled voxel needs this much accumulated weight to become surface.
     min_weight_to_surface: 0.15
-  poisson:
-    depth: 10
-    # Trim faces whose supporting sample density is below this quantile —
-    # this is what stops Poisson silently hallucinating closed surfaces (§6.4).
-    density_trim_quantile: 0.08
+  mesh:
+    # A mesh face with no measured voxel within this many voxels is inferred (Zone 3).
+    support_voxels: 2.0
   gaps:
-    min_area_m2: 1.0
-    # Generate a clearly-marked inferred surface for Zone 3, or leave the hole.
-    render_inferred: true
-  plane_completion:
-    # Stretch goal (§6.5) — off until the core pipeline is green.
-    enabled: false
-    ransac_distance_m: 0.05
-    min_plane_points: 500
+    # Zone 3 regions smaller than this are not listed in gaps.geojson (still counted).
+    min_area_m2: 4.0
+    # A gap within this many cells of the edge of the views is "edge of view", not "interior"
+    # (the footprint is traced on a flat ground plane; rising terrain shrinks the true view).
+    edge_band_cells: 3
 
 # ---------------------------------------------------------------------------
 # Stage 5 — Geo-anchoring (§8.1)
@@ -749,6 +782,24 @@ qa:
     gain_span_warn: 0.40
     gps_outlier_fraction_warn: 0.10
     gps_outlier_fraction_fail: 0.30
+  # Stage 3 (occluded surfaces) scorecard bands, read by src/qa/stage3_eval.py.
+  stage3:
+    # Zone 1 (well observed) share of the ground the cameras saw: the accuracy backbone.
+    zone1_pass_pct: 50.0
+    zone1_warn_pct: 25.0
+    coverage_pass_pct: 90.0
+    coverage_warn_pct: 70.0
+    # Dense points rejected as not scene surface (next to the flight path): a Stage 4 defect.
+    rejected_pass_pct: 2.0
+    rejected_warn_pct: 10.0
+    # Share of chosen frames whose monocular depth passed the anchor gate.
+    anchored_pass: 0.7
+    anchored_warn: 0.4
+    # Zone 2 error on Zone 1 pixels held out of the fit, % of depth (VGGT-Omega: 0.86% on Esri).
+    holdout_pass_pct: 2.0
+    holdout_warn_pct: 5.0
+    # Mesh area with no measured support (Delaunay spans over gaps): flagged, warn above this.
+    inferred_mesh_warn_pct: 30.0
   # Stage 4 (Track A) scorecard bands, read by src/qa/stage4_eval.py.
   stage4:
     # Share of conditioned frames SfM registered, and how many pieces the flight split into.

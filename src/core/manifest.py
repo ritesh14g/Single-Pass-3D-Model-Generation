@@ -48,8 +48,9 @@ STAGE_ORDER = [
     "track_b",
     "refine_ba",
     "track_a",
-    "fusion",
+    # Stage 3 works in metres, so it runs after georeferencing and before export.
     "geo",
+    "fusion",
     "export",
     "qa",
 ]
@@ -65,7 +66,8 @@ STAGE_CONFIG_DEPS: dict[str, list[str]] = {
     "refine_ba": ["recon.refine_ba"],
     # The hybrid runs inside track_a, so the Track B model and the run mode change its output too.
     "track_a": ["recon.track_a", "recon.track_b", "run.mode", "device"],
-    "fusion": ["fusion"],
+    # The monocular fill uses the Track B predictor; confidence uses export.confidence_full_views.
+    "fusion": ["fusion", "recon.track_b", "export.confidence_full_views"],
     "geo": ["geo"],
     "export": ["export", "geo"],
     "qa": ["qa"],

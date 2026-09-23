@@ -1,4 +1,4 @@
-"""Print a compact Stage 1-4 report for one or more run folders (and optional probe JSON files).
+"""Print a compact Stage 1-5 report (with Stage 3) for one or more run folders (and optional probe JSON files).
 
     python scripts/stage4_report.py data/interim/esri_omega data/interim/esri_vggt probe_summary.json
 """
@@ -43,8 +43,29 @@ def run_report(run_dir: Path) -> dict:
         "mesh": {k: mesh.get(k) for k in ("mesher", "target_faces", "faces", "faces_per_vertex")},
         "textured": report.get("textured"), "timings_s": report.get("timings_s"),
         "downgrades": report.get("downgrades"),
+        **_stage3(run_dir),
         **_stage5(run_dir),
     }
+
+
+def _stage3(run_dir: Path) -> dict:
+    if not (run_dir / "fusion" / "fusion_report.json").exists():
+        return {}
+    from ui.stages import stage3_occlusion
+
+    ev = stage3_occlusion.evaluate(run_dir, None)
+    r = json.loads((run_dir / "fusion" / "fusion_report.json").read_text())
+    return {"stage3": {
+        "score": ev.score, "counts": ev.counts(),
+        "kpis": [f"{k.label}: {k.value} ({k.status}) {k.detail}".strip() for k in ev.kpis],
+        "voxel": r.get("voxel"), "ground": r.get("ground"), "measured_coverage_pct": r.get("measured_coverage_pct"),
+        "gaps": r.get("gaps"), "fill": r.get("fill"), "mesh": r.get("mesh"),
+        "rejected_near_camera_pct": r.get("rejected_near_camera_pct"), "timings_s": r.get("timings_s"),
+        "fill_frames": [{k: f.get(k) for k in ("frame", "status", "reason", "scale", "shift", "residual_m", "residual_limit_m",
+                                               "inlier_ratio", "holdout_error_pct", "band_px", "band_depth_m",
+                                               "region_px", "zone1_px", "points_in_targets")}
+                        for f in r.get("fill_frames", [])],
+    }}
 
 
 def _stage5(run_dir: Path) -> dict:

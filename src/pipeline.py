@@ -59,6 +59,7 @@ from src.ingest.video_reader import VideoReader, reader_options
 from src.export.stage import run_export
 from src.geo.stage import run_geo
 from src.preflight import InputRejected
+from src.fusion.stage import run_fusion
 from src.recon.track_a_colmap import run_track_a
 
 log = get_logger(__name__)
@@ -714,17 +715,38 @@ def run_pipeline(
                 st.warn(f"geo downgrade: {downgrade}")
         result.completed_stages.append("geo")
 
+    # -- Stage 3: occluded surfaces (§6) — after geo (works in metres), before export ----
+    if should("fusion"):
+        if manifest.stages["geo"].status is not StageStatus.DONE:
+            raise RuntimeError("Stage 3 (fusion) needs a completed georeferencing stage")
+        track_a_outputs = {key: manifest.artifact("track_a", key)
+                           for key in ("sparse", "dense", "mesh", "textured", "track_b_depth")
+                           if manifest.has_artifact("track_a", key)}
+        with budget.stage("fusion") as sb, manifest.stage("fusion") as st:
+            outcome = run_fusion(track_a_outputs, manifest.artifact("geo", "georef"), st.dir, cfg, budget_stage=sb)
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics(outcome["metrics"])
+            st.record_degradations(sb.degradations)
+            for downgrade in outcome["metrics"]["downgrades"]:
+                st.warn(f"fusion: {downgrade}")
+        result.completed_stages.append("fusion")
+
     if should("export"):
         if manifest.stages["geo"].status is not StageStatus.DONE:
             raise RuntimeError("export needs a completed georeferencing stage")
         track_a_outputs = {key: manifest.artifact("track_a", key)
                            for key in ("sparse", "dense", "mesh", "textured") if manifest.has_artifact("track_a", key)}
+        # Stage 3's zones travel with the export when it ran; without it export is Track A as-is.
+        fusion_outputs = ({key: manifest.artifact("fusion", key) for key in manifest.stages["fusion"].artifacts}
+                          if manifest.stages["fusion"].status is StageStatus.DONE else None)
         run_info = {"preset": cfg.get_path("preset", "default"), "mode": cfg.get_path("run.mode"),
                     "stage_seconds": {name: round(rec.duration_s or 0.0, 1) for name, rec in manifest.stages.items()
                                       if rec.status is StageStatus.DONE},
                     "video": str(inputs.video)}
         with budget.stage("export") as sb, manifest.stage("export") as st:
-            outcome = run_export(track_a_outputs, manifest.artifact("geo", "georef"), st.dir, cfg, run_info=run_info)
+            outcome = run_export(track_a_outputs, manifest.artifact("geo", "georef"), st.dir, cfg, run_info=run_info,
+                                 fusion=fusion_outputs)
             for key, path in outcome["artifacts"].items():
                 st.add_artifact(key, path)
             st.add_metrics(outcome["metrics"])
@@ -732,11 +754,11 @@ def run_pipeline(
                 st.warn(f"export: {fmt} not written ({reason})")
         result.completed_stages.append("export")
 
-    # -- Fusion, QA ------------------------------------------------------------
+    # -- QA ----------------------------------------------------------------------
     # These stages are wired but not yet implemented; each records why it did
     # not run so the manifest and QA report stay truthful about what produced
     # the outputs rather than silently showing fewer stages.
-    implemented = {"ingest", "condition", "track_a", "geo", "export"}
+    implemented = {"preflight", "ingest", "condition", "track_a", "geo", "fusion", "export"}
     for spec in STAGES:
         for name in spec.manifest_stages:
             if name in result.completed_stages or manifest.stages[name].status is StageStatus.DONE:
@@ -750,6 +772,8 @@ def run_pipeline(
             elif spec.is_built and name not in implemented:
                 reason = (f"{name} is not implemented yet; Stage {spec.number} "
                           f"({spec.title}) ran without it")
+            elif spec.is_built and name not in wanted:
+                reason = f"not requested in this run (Stage {spec.number}, {spec.title}, is built; see --stage)"
             else:
                 reason = (
                     f"Stage {spec.number} ({spec.title}, {spec.spec_ref}) is {spec.status.value}"

@@ -11,6 +11,8 @@ data/interim/*
 data/outputs/*
 # results brought back from the GPU box (scripts/box_collect.sh)
 data/box/
+# bundles packed for the GPU box (scripts/box_pack.py)
+data/box_upload/
 !data/**/.gitkeep
 
 # model weights

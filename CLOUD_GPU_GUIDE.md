@@ -65,6 +65,7 @@ When it wanted the GPU and didn't get it, it logs a downgrade. It never crashes.
 | Track B chunking | Reads the detected GPU memory | Uses `device.gpu_memory_gb` (now **20**) when no GPU is visible |
 | Stage 5 export (`src/export/`) | — (CPU) | FBX needs headless Blender in `tools/blender-4.2.3-linux-x64/` (portable tarball, no install); without it FBX is skipped with the reason. EGM96 heights need PROJ's network grid fetch (cdn.proj.org) once; without it heights stay as given and a downgrade is logged |
 | Track A (`src/recon/track_a_colmap.py`) | pycolmap-cuda12: SIFT, matching, PatchMatch dense on CUDA | pycolmap on CPU; dense via OpenMVS `DensifyPointCloud` (CPU); OpenMVS mesh → Poisson; texture → untextured mesh. Needs `pip install pycolmap-cuda12==4.2.0` and OpenMVS 2.4.0 in `tools/openmvs/bin` on the box |
+| Stage 3 Zone 2 fill (`src/fusion/`) | Reuses Track B's saved VGGT depth (`track_a/track_b_depth/`), else runs the Track B predictor per frame on CUDA | A GPU error moves the predictor to the CPU (`fusion.mono_depth.cpu_max_frames` frames, logged). No model or weights: the gaps are reported and not filled. Zone classification itself is CPU (~13 s on DJI_0047) |
 
 The run manifest records `device`, `gpu_name`, `gpu_memory_gb`, `mig`, `cpu_threads` and the
 `decoder` that was actually used. Check them after every run.
@@ -83,7 +84,8 @@ The run manifest records `device`, `gpu_name`, `gpu_memory_gb`, `mig`, `cpu_thre
 | **S1-3 / S1-4**: hardware video decode and the §4.3 speed target | **Yes** | Decode is the bottleneck. pip OpenCV never engages NVDEC, so the code uses PyNvVideoCodec |
 | **Track A**: OpenDroneMap (§7.1) | **Yes** (GPU image) | `opendronemap/odm:gpu` runs in Docker, which the notebook may not have (§0) |
 | **Track B**: VGGT-Ω feed-forward (§7.2) | **Yes** | ~6 GB for 1 frame, 20.8 GB for 200 frames |
-| Refinement BA, MVS, TSDF fusion (§7.3, §9) | **Yes** | GPU OpenMVS / TSDF per the §9 budget |
+| Refinement BA, MVS (§7.3, §9) | **Yes** | GPU PatchMatch / hybrid depth per the §9 budget |
+| Stage 3 Zone 2 fill (§6.3) | **Yes** for the fill, no for zones and gaps | Monocular depth comes from VGGT: saved by Track B on hybrid runs, or predicted. The laptop has no VGGT-Ω weights (gated), so there the fill is skipped and logged |
 | Dynamic-object masking, S2-4 (§5.5) | Recommended | YOLOv8-seg via `ultralytics`, which runs on the GPU when one is visible |
 
 Rule of thumb: write and unit-test on your laptop, measure on the GPU box.
@@ -195,9 +197,8 @@ automatically. Always pass the offset, or the run has no GPS:
 Never expose Streamlit on a public port. Bind it to localhost:
 
 ```bash
-# on the GPU box, inside tmux so it survives disconnects
-tmux new -s lab
-.venv/bin/python -m streamlit run ui/app.py --server.address 127.0.0.1 --server.port 8501
+# on the GPU box, in the background so it survives a closed tab (the box has no tmux)
+nohup .venv/bin/python -m streamlit run ui/app.py --server.address 127.0.0.1 --server.port 8501 > lab.log 2>&1 &
 ```
 
 - **Notebook profile:** if the hub has `jupyter-server-proxy`, open
@@ -207,8 +208,10 @@ tmux new -s lab
   copying the run folder back.
 - **With SSH:** `ssh -N -L 8501:127.0.0.1:8501 user@<gpu-host>`, then open http://localhost:8501.
 
-Run every long job (full pipeline, ODM, benchmarks) inside `tmux`, or with `nohup ... &` if tmux is
-missing. A closed browser tab or an idle-culled kernel kills a foreground process.
+**The box has no `tmux`.** Run every long job (setup, full pipeline, benchmarks) in the background:
+`nohup <command> > job.log 2>&1 &`, then watch it with `tail -f job.log` (Ctrl+C stops the watching,
+not the job; `ps aux | grep python` shows it is still running; `kill <pid>` stops it). A foreground
+process dies with a closed browser tab or an idle-culled kernel.
 
 ---
 
@@ -298,3 +301,119 @@ the working copy with its footage and reconstructions. It never prints a secret'
 
 **Treat every token that was on that machine as exposed and rotate it**, even after wiping: you
 cannot prove what the next user restores from a snapshot.
+
+---
+
+## 10. Getting the box back: the upload bundle
+
+The box comes back empty (§9 wiped it). Instead of cloning with a GitHub token on a shared machine,
+upload **one zip** that holds everything the box needs. Two scripts do it:
+
+| Script | Runs on | Does |
+|--------|---------|------|
+| `scripts/box_pack.py` | laptop | Zips the code **as it is in your working tree** (uncommitted work included), the clips, optionally the last handover's evidence, and `BUNDLE.json` (git state, sha256 per file). Stops if any code file looks like a token or private key |
+| `scripts/box_gdrive.py` | laptop | **Recommended.** After you upload the zip to Google Drive: checksums it and writes `box_fetch_paste.txt`, one block to paste into the box terminal |
+| `scripts/box_fetch_gdrive.sh` | box | gdown download (resumes, retries), catches Drive's web-page / quota answers, checks the sha256, then runs `box_restore.sh` from the zip |
+| `scripts/box_upload.py` | laptop | Sends the zip to the box's Jupyter server in resumable, checksummed parts (the browser upload fails at this size) |
+| `scripts/box_restore.sh` | box | Unpacks, verifies every checksum, checks the machine, builds `.venv`, fetches Blender / OpenMVS / VGGT code, gets the VGGT-Ω checkpoint (with your token), runs the tests, and prints the next commands. Safe to re-run; `--unpack-only` just refreshes the code |
+
+What is **not** in the bundle, and why: model weights (gated, re-downloaded with a fresh token),
+OpenMVS and Blender binaries (Linux builds, fetched by the restore script), the Python environment,
+and any credential.
+
+### 10.1 On the laptop
+
+```powershell
+# code + Esri (475 MB) + DJI_0047 (video + telemetry.csv, 778 MB): about 1.25 GB
+.venv\Scripts\python scriptsox_pack.py
+# also the last handover's evidence (manifests, georef, sparse models; no exports), ~40 MB
+.venv\Scripts\python scriptsox_pack.py --with-box-runs
+# other footage: files or folders (a folder keeps its telemetry next to the video)
+.venv\Scripts\python scriptsox_pack.py --clip "..\Drone Video Dataset\QGISFMV_Samples\MISB\<clip>.ts"
+```
+
+The zip lands in `dataox_upload\` (git-ignored). The script prints the exact box commands. Code only,
+for a quick refresh: `--no-default-clips` (about 2 MB).
+
+### 10.2 Sending it to the box: Google Drive + gdown (recommended)
+
+The Jupyter browser upload fails on a 1.3 GB file. Google Drive's browser upload does not (it resumes
+by itself), and the box pulls the file down with `gdown`. You paste one block into the box terminal.
+
+```powershell
+# 1. Laptop: pack (if not done) and checksum
+.venv\Scripts\python scripts\box_pack.py --with-box-runs
+.venv\Scripts\python scripts\box_gdrive.py
+# 2. Browser: drive.google.com -> New -> File upload -> data\box_upload\box_upload_<stamp>.zip
+#    When it finishes: right-click -> Share -> General access: "Anyone with the link" (Viewer) -> Copy link
+# 3. Laptop: turn the link into the box's commands
+.venv\Scripts\python scripts\box_gdrive.py --link "https://drive.google.com/file/d/<id>/view?usp=sharing"
+#    -> data\box_upload\box_fetch_paste.txt
+```
+
+4. Open `box_fetch_paste.txt`, put your fresh Hugging Face token on the `export HF_TOKEN=` line (or
+   delete that line), then copy all of it.
+5. On the box, open a Jupyter terminal and paste. The block writes `~/box_fetch_gdrive.sh` and starts
+   it in the background (`nohup`, log in `~/box_setup.log`, shown with `tail -f`; Ctrl+C stops only the
+   watching, and closing the tab does not stop the setup): install gdown, download to `~/box_upload.zip`, check the sha256,
+   then the full `box_restore.sh` (§10.3).
+
+If the download is interrupted, run `bash ~/box_fetch_gdrive.sh <id> <sha256>` again (the paste file's last
+line); gdown continues the partial file. Messages you may see:
+
+| Message | Meaning | Fix |
+|---------|---------|-----|
+| `Drive refused the file: Cannot retrieve the public link` | not shared, or Drive's daily download quota for the file | Share → "Anyone with the link"; for the quota, Drive → right-click → Make a copy, share the copy, `box_gdrive.py --link <copy link>` |
+| `... is not a zip (first bytes: <!DOCTYPE html>` | Drive sent its web page instead of the file | same as above; delete `~/box_upload.zip`, run again |
+| `checksum mismatch` | a different file on Drive than the one you packed, or a damaged download | `rm ~/box_upload.zip`, run again; check you shared the newest bundle |
+
+Keep the Drive file private again (or delete it) once the box has it: the bundle holds the code and the
+clips. Code refreshes later: `box_pack.py --no-default-clips` (about 2 MB), upload, share,
+`box_gdrive.py --link ... --unpack-only`, paste.
+
+**Alternative without Drive:** `scripts/box_upload.py` pushes the zip straight to the box's Jupyter server
+in resumable 100 MB parts:
+`.venv\Scripts\python scripts\box_upload.py --url "<your Jupyter tab address, with ?token=...>"`, then
+`bash ~/box_restore.sh ~/box_upload_<stamp>.zip` on the box (it joins and checks the parts first).
+
+### 10.3 Restoring on the box (Jupyter terminal)
+
+```bash
+export HF_TOKEN=hf_...            # fresh read-only token, this shell only; never write it to a file
+cd ~ && nohup bash box_restore.sh ~/box_upload_<stamp>.zip > ~/box_setup.log 2>&1 &   # -> ~/single-pass
+tail -f ~/box_setup.log           # Ctrl+C stops watching only; the restore keeps running
+```
+
+15–25 min the first time (pip, Blender, OpenMVS, the 4 GB checkpoint). Read the `!!` lines it prints:
+each one names what is missing and what the pipeline does without it. Then record the machine (its
+step 3 output) in your DEVLOG entry, as §8 asks. If it reports a bad part, re-run the laptop's upload
+command, then this again.
+
+Later code changes: `box_pack.py --no-default-clips` (about 2 MB), `box_upload.py` again, then
+`bash ~/box_restore.sh ~/box_upload_<new>.zip --unpack-only`.
+
+### 10.4 What to run on the box now (Stage 3 and the open box items)
+
+In order. Each writes a run folder under `data/interim/`; `stage4_report.py` prints Stages 3, 4 and 5
+together as JSON to paste back.
+
+```bash
+cd ~/single-pass && nohup bash scripts/box_stage3_runs.sh > box_runs.log 2>&1 &
+tail -f box_runs.log       # Ctrl+C stops watching only
+```
+
+`scripts/box_stage3_runs.sh` runs, in order: (1) Esri, every built stage (hybrid VGGT-Ω, so Stage 3
+reuses Track B's saved depth for the fill); (2) DJI_0047 (Stage 0 applies the camera FOV prior and the
+measured telemetry offset); (3) `stage4_report.py` for both, saved to `box_runs_report.json`, which is
+what to paste back.
+
+What to look for in Stage 3 (`fusion/fusion_report.json`, or the Stage Lab's Stage 3 page):
+`fill.frames_anchored` vs `frames_tried` and the refusal reasons, `fill.holdout_error_median_pct` (Zone 2
+accuracy: pass ≤ 2% of depth), `coverage_pct` vs `measured_coverage_pct` (how much the fill closed),
+`rejected_near_camera_pct` (26% on the laptop's DJI_0047 run), and `timings_s.fill` against the 120 s
+fusion allotment. To tune Stage 3 without re-running Stage 4, use the Stage 3 page's
+"re-run Stage 3 alone on an existing run".
+
+Before handing the box back: `bash scripts/box_collect.sh esri_s3` (now also collects each run's
+`fusion/`), download the tarball, then `bash scripts/box_wipe_credentials.sh --yes`, and rotate the token.
+

@@ -1,0 +1,2 @@
+# Shell scripts run on Linux (the GPU box): always LF, whatever core.autocrlf says.
+*.sh text eol=lf

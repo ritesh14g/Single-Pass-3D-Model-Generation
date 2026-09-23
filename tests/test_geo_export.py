@@ -211,11 +211,11 @@ def georeferenced_run(tmp_path_factory):
     geo_txt.write_text("\n".join(lines) + "\n")
     geo = run_geo(track_a["sparse"], geo_txt, root / "run" / "geo", cfg, telemetry_source="srt:x")
     export = run_export(track_a, geo["artifacts"]["georef"], root / "run" / "export", cfg)
-    return root / "run", geo, export, cfg
+    return root / "run", geo, export, cfg, track_a
 
 
 def test_end_to_end_georeference_recovers_the_gps(georeferenced_run):
-    _, geo, _, _ = georeferenced_run
+    _, geo, _, _, _ = georeferenced_run
     m = geo["metrics"]
     assert m["referenced"] and m["crs"].startswith("EPSG:32643")
     assert m["rms_all_m"] < 0.05 and m["scale_model_to_m"] == pytest.approx(12.0, rel=1e-3)
@@ -224,7 +224,7 @@ def test_end_to_end_georeference_recovers_the_gps(georeferenced_run):
 def test_end_to_end_formats_are_written_and_verified(georeferenced_run):
     from src.qa.stage5_eval import ExportOutputs, evaluate_export
 
-    run_dir, _, export, cfg = georeferenced_run
+    run_dir, _, export, cfg, _ = georeferenced_run
     produced = set(export["metrics"]["formats_produced"])
     assert {"ply", "las", "geotiff"} <= produced
     has_mesh = "mesh" in export["metrics"].get("track_a_keys", []) or "obj" in produced
@@ -241,6 +241,36 @@ def test_end_to_end_formats_are_written_and_verified(georeferenced_run):
         assert kpis[key].status == PASS, kpis[key].detail
     assert kpis["cam_vs_gps_rms_m"].status == PASS
     assert kpis["format_fbx"].status in (PASS, FAIL)  # FAIL only where no Blender is installed
+
+
+def test_end_to_end_stage3_zones_travel_with_the_export(georeferenced_run, tmp_path):
+    """Stage 3 on real Track A output, then export with its layers: zones in PLY/LAS, gaps copied."""
+    import json
+
+    import laspy
+
+    from src.export.stage import run_export
+    from src.fusion.stage import run_fusion
+    from src.qa.stage3_eval import FusionOutputs, evaluate_fusion
+
+    run_dir, _, _, cfg, track_a = georeferenced_run
+    georef = run_dir / "geo" / "georef.json"
+    fusion = run_fusion(track_a, georef, tmp_path / "fusion", cfg)
+    m = fusion["metrics"]
+    assert m["voxel"]["voxels"] > 0 and m["referenced"] and m["units"] == "m"
+    assert 0.0 <= m["coverage_pct"] <= 100.0
+    assert json.loads((tmp_path / "fusion" / "gaps.geojson").read_text())["type"] == "FeatureCollection"
+    export = run_export(track_a, georef, tmp_path / "export", cfg, fusion=fusion["artifacts"])
+    zones = export["metrics"]["zones"]
+    assert zones is not None and zones["coverage_pct"] == m["coverage_pct"]
+    assert export["metrics"]["coverage"]["coverage_pct"] == m["coverage_pct"]   # one coverage number
+    las = laspy.read(tmp_path / "export" / "cloud.las")
+    assert set(np.unique(np.asarray(las.zone))) <= {1, 2} and len(las.x) == m["points"] - m["rejected_near_camera"]
+    assert "zone" in (tmp_path / "export" / "cloud.ply").read_bytes()[:2048].decode("ascii", "ignore")
+    assert (tmp_path / "export" / "gaps.geojson").is_file()
+    (tmp_path / "manifest.json").write_text(json.dumps({"config": cfg.to_dict()}))
+    kpis = {k.key: k for k in evaluate_fusion(FusionOutputs.load(tmp_path), cfg).kpis}
+    assert kpis["gaps_geojson"].status == PASS and kpis["zone1_untouched"].status == PASS
 
 
 def test_unreferenced_run_is_reported_not_crashed(tmp_path):

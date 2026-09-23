@@ -42,10 +42,8 @@ recon:
 fusion:
   zones:
     voxel_gsd_multiple: 3.0
-  poisson:
-    depth: 9
-  plane_completion:
-    enabled: false
+  mono_depth:
+    max_frames: 15
 
 export:
   # FBX and full-resolution rasters are the slowest writers; a demo does not

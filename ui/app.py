@@ -64,6 +64,28 @@ def stage_page(key: str) -> None:
         lab.record_history(key, lab_input, preset, overrides, evaluation, run_dir, round(elapsed, 2))
         st.session_state[state_key] = (str(run_dir), lab_input.truth)
 
+    # Stages that can re-run alone on a finished run (tuning without rebuilding what feeds them).
+    if hasattr(panel, "existing_runs"):
+        with st.expander(f"…or re-run Stage {spec.number} alone on an existing run"):
+            runs = panel.existing_runs()
+            if not runs:
+                st.caption("No run directory with the inputs this stage needs yet.")
+            else:
+                chosen = st.selectbox("Run directory", runs, key=f"{key}_existing",
+                                      format_func=lambda p: str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else str(p))
+                st.caption("Writes this stage's outputs into that run directory (replacing earlier ones).")
+                if st.button(f"Re-run Stage {spec.number} here", key=f"{key}_rerun"):
+                    cfg = lab.build_config(preset, overrides)
+                    started = time.monotonic()
+                    with st.spinner(f"Running Stage {spec.number}…"):
+                        run_dir = panel.rerun(chosen, cfg)
+                    evaluation = panel.evaluate(run_dir, None)
+                    rerun_input = lab.LabInput(video=Path(run_dir), srt=None, csv=None, truth=None,
+                                               label=f"existing run {Path(run_dir).name}")
+                    lab.record_history(key, rerun_input, preset, overrides, evaluation, run_dir,
+                                       round(time.monotonic() - started, 2))
+                    st.session_state[state_key] = (str(run_dir), None)
+
     if state_key not in st.session_state:
         st.info("Pick an input and parameters, then run the stage.")
         st.divider()

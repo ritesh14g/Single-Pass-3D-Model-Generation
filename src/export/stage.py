@@ -3,12 +3,20 @@
 Each format is written independently: a failing writer (FBX is the fragile one, §8.3) is
 recorded with its reason and the rest are still produced. Nothing here changes geometry;
 it only moves Track A's outputs into the map frame fitted by the geo stage.
+
+When Stage 3 ran, its layers travel with the export: points it rejected as not scene surface
+are left out, every point carries ``zone`` (1 well / 2 thinly observed) and ``source`` (0 MVS,
+1 anchored monocular fill) in PLY and LAS, ``model_zones.glb`` colours the mesh by zone with
+unsupported faces marked inferred, and ``gaps.geojson`` / ``zone_map.tif`` are copied alongside.
+The DSM and orthophoto stay measured-only: the monocular fill never enters a raster.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -35,8 +43,29 @@ def _versions() -> dict[str, str]:
     return out
 
 
+def _fusion_layers(fusion: dict[str, Path] | None, n_points: int):
+    """(keep mask, zone per kept point, fill (xyz, rgb, weight, frames) | None, report) from Stage 3."""
+    if not fusion:
+        return None, None, None, None
+    from src.fusion.stage import read_fill_ply
+
+    keep = zone = fill = None
+    if fusion.get("point_zones") and Path(fusion["point_zones"]).is_file():
+        point_zone = np.load(fusion["point_zones"])
+        if len(point_zone) == n_points:
+            keep = point_zone > 0
+            zone = point_zone[keep]
+    if fusion.get("fill") and Path(fusion["fill"]).is_file():
+        fill = read_fill_ply(Path(fusion["fill"]))
+        if not len(fill[0]):
+            fill = None
+    report = (json.loads(Path(fusion["report"]).read_text(encoding="utf-8"))
+              if fusion.get("report") and Path(fusion["report"]).is_file() else None)
+    return keep, zone, fill, report
+
+
 def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: Any, *,
-               run_info: dict[str, Any] | None = None) -> dict[str, Any]:
+               run_info: dict[str, Any] | None = None, fusion: dict[str, Path] | None = None) -> dict[str, Any]:
     import pycolmap
 
     ecfg = cfg.get_path("export")
@@ -67,24 +96,46 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
 
     # -- dense cloud: PLY, LAS, rasters ------------------------------------------
     local = rgb = views = confidence = None
+    zones_info: dict[str, Any] | None = None
     if "dense" in track_a:
         xyz, rgb, views = writers.read_dense(track_a["dense"])
+        keep, zone, fill, fusion_report = _fusion_layers(fusion, len(xyz))
+        if keep is not None:
+            xyz, rgb, views = xyz[keep], rgb[keep], views[keep]
         local = georef.to_local(xyz)
         confidence = writers.confidence_from_views(views, int(ecfg.confidence_full_views))
-        map_xyz = local + np.asarray(offset)
+        # Point products (PLY, LAS) = measured points + Stage 3's anchored fill, each flagged.
+        cloud_local, cloud_rgb, cloud_views, cloud_conf, extra = local, rgb, views, confidence, None
+        if zone is not None:
+            extra = {"zone": zone, "source": np.zeros(len(zone), np.uint8)}
+            if fill is not None:
+                f_xyz, f_rgb, f_weight, f_frames = fill
+                cloud_local = np.r_[local, f_xyz]
+                cloud_rgb = np.r_[rgb, f_rgb]
+                cloud_views = np.r_[views, f_frames].astype(np.int32)
+                cloud_conf = np.r_[confidence, f_weight].astype(np.float32)
+                extra = {"zone": np.r_[zone, np.full(len(f_xyz), 2, np.uint8)],
+                         "source": np.r_[np.zeros(len(zone), np.uint8), np.ones(len(f_xyz), np.uint8)]}
+            zones_info = {"rejected_points": int((~keep).sum()), "fill_points": int(len(fill[0])) if fill else 0,
+                          "report": fusion_report}
+        map_xyz = cloud_local + np.asarray(offset)
         if "ply" in wanted:
-            path = attempt("ply", lambda: writers.write_ply(out_dir / "cloud.ply", local, rgb, views, confidence))
+            path = attempt("ply", lambda: writers.write_ply(out_dir / "cloud.ply", cloud_local, cloud_rgb, cloud_views,
+                                                            cloud_conf, extra=extra))
             if path:
-                files.append(writers.file_entry(path, "ply", points=len(local), frame="local"))
+                files.append(writers.file_entry(path, "ply", points=len(cloud_local), frame="local",
+                                                layers=sorted(extra or {})))
         if "las" in wanted:
-            path = attempt("las", lambda: writers.write_las(out_dir / "cloud.las", map_xyz, rgb, views, confidence,
-                                                            crs_string, list(ecfg.las.scale), int(ecfg.las.point_format)))
+            path = attempt("las", lambda: writers.write_las(out_dir / "cloud.las", map_xyz, cloud_rgb, cloud_views,
+                                                            cloud_conf, crs_string, list(ecfg.las.scale),
+                                                            int(ecfg.las.point_format), extra=extra))
             if path:
-                files.append(writers.file_entry(path, "las", points=len(local), frame="map", crs=crs_string))
-            if ecfg.tiling.enabled and len(local) > int(ecfg.tiling.max_points_per_tile):
+                files.append(writers.file_entry(path, "las", points=len(cloud_local), frame="map", crs=crs_string,
+                                                layers=sorted(extra or {})))
+            if ecfg.tiling.enabled and len(cloud_local) > int(ecfg.tiling.max_points_per_tile):
                 tiles = attempt("las_tiles", lambda: writers.write_las_tiles(
-                    out_dir / "tiles", map_xyz, rgb, views, confidence, crs_string, list(ecfg.las.scale),
-                    float(ecfg.tiling.tile_size_m)))
+                    out_dir / "tiles", map_xyz, cloud_rgb, cloud_views, cloud_conf, crs_string, list(ecfg.las.scale),
+                    float(ecfg.tiling.tile_size_m), extra=extra))
                 for tile in tiles or []:
                     files.append(writers.file_entry(tile, "las_tile", frame="map", crs=crs_string))
         if "geotiff" in wanted:
@@ -136,6 +187,17 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                         out_dir / "model_confidence.glb", mesh, local, confidence, extras))
                     if path:
                         files.append(writers.file_entry(path, "glb_confidence", frame="local"))
+                face_zones = (fusion or {}).get("mesh_face_zones")
+                if face_zones and Path(face_zones).is_file():
+                    face_zone = np.load(face_zones)
+                    if len(face_zone) == len(mesh.faces):
+                        path = attempt("glb_zones", lambda: writers.write_zones_glb(
+                            out_dir / "model_zones.glb", mesh, face_zone, extras))
+                        if path:
+                            files.append(writers.file_entry(path, "glb_zones", frame="local"))
+                    else:
+                        failures["glb_zones"] = (f"Stage 3 flagged {len(face_zone)} faces, the mesh has "
+                                                 f"{len(mesh.faces)}")
             if "fbx" in wanted:
                 blender = writers.find_blender(ecfg.fbx.blender_binary)
                 if blender is None:
@@ -147,9 +209,25 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                     if path:
                         files.append(writers.file_entry(path, "fbx", frame="local", converter=str(blender)))
 
+    # -- Stage 3 gap files ------------------------------------------------------------
+    for key, kind in (("gaps", "geojson_gaps"), ("zone_map_tif", "geotiff_zones")):
+        src = (fusion or {}).get(key)
+        if src and Path(src).is_file():
+            dst = out_dir / Path(src).name
+            shutil.copyfile(src, dst)
+            files.append(writers.file_entry(dst, kind, crs=crs_string if key == "zone_map_tif" else "EPSG:4326"))
+
     # -- coverage and the sidecar -----------------------------------------------------
     coverage = None
-    if local is not None and georef.referenced and "sparse" in track_a:
+    stage3 = (zones_info or {}).get("report") or {}
+    if stage3.get("ground") and georef.referenced:
+        # Stage 3 measured it on the same footprint grid, with its rejected points removed: one number.
+        g = stage3["ground"]
+        coverage = {"coverage_pct": g["coverage_pct"], "visible_m2": g["visible_m2"],
+                    "covered_m2": g["zone1_m2"] + g["zone2_m2"], "outside_camera_view_m2": g["outside_view_m2"],
+                    "ground_plane_z_m": g["ground_plane_z"], "cell_m": g["cell_m"],
+                    "source": "Stage 3 zone map (zone 1 + zone 2 of the ground the cameras saw)"}
+    elif local is not None and georef.referenced and "sparse" in track_a:
         coverage = attempt("coverage", lambda: rasters.coverage_percent(
             local, georef, pycolmap.Reconstruction(str(track_a["sparse"])), float(ecfg.coverage_cell_m)))
     produced = sorted({f["format"].split("_")[0] for f in files if f["bytes"] > 0} & set(FORMATS))
@@ -163,7 +241,7 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                               "offset": list(offset)},
         "scale_residual": {k: georef.stats.get(k) for k in ("rms_all_m", "rms_inliers_m", "horizontal_rms_m",
                                                             "vertical_rms_m", "inliers", "cameras")},
-        "coverage": coverage, "bounds_map": bounds,
+        "coverage": coverage, "bounds_map": bounds, "zones": _zones_block(zones_info),
         "confidence": f"views confirming each point / {int(ecfg.confidence_full_views)}, clipped to 1",
         "files": files, "formats_produced": produced, "formats_failed": failures,
         "processing": run_info or {}, "software": _versions(),
@@ -171,5 +249,23 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
     meta_path = writers.dump_json(out_dir / "metadata.json", metadata)
     log_event(log, logging.INFO, "export finished", produced=produced, failed=sorted(failures))
     metrics = {"formats_wanted": wanted, "formats_produced": produced, "formats_failed": failures,
-               "files": files, "coverage": coverage, "timings_s": timings, "crs": crs_string}
+               "files": files, "coverage": coverage, "timings_s": timings, "crs": crs_string,
+               "zones": _zones_block(zones_info)}
     return {"artifacts": {"metadata": meta_path, "folder": out_dir}, "metrics": metrics}
+
+
+def _zones_block(info: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Stage 3's headline numbers for ``metadata.json`` (None when Stage 3 did not run)."""
+    if not info:
+        return None
+    report = info.get("report") or {}
+    ground = report.get("ground") or {}
+    return {
+        "coverage_pct": report.get("coverage_pct"), "measured_coverage_pct": report.get("measured_coverage_pct"),
+        "zone1_pct": ground.get("zone1_pct"), "zone2_pct": ground.get("zone2_pct"), "zone3_pct": ground.get("zone3_pct"),
+        "gaps": report.get("gaps"), "fill_points": info["fill_points"], "rejected_points": info["rejected_points"],
+        "holdout_error_median_m": (report.get("fill") or {}).get("holdout_error_median_m"),
+        "mesh": report.get("mesh"),
+        "note": "zone 1 = measured, >= zone1_min_views at a sufficient angle; zone 2 = thin or monocular "
+                "(anchored, weight < zone 1); zone 3 = never observed, listed in gaps.geojson, never filled",
+    }

@@ -17,6 +17,9 @@ Note on numbering vs execution order: the spec numbers the occlusion engine
 (§6) as Stage 3 and the reconstruction tracks (§7) as Stage 4, but fusion
 consumes reconstruction output, so Stage 4 must *execute* before Stage 3.
 ``execution_order`` captures that; stage numbers follow the spec's headings.
+Stage 3 also works in metres, so it needs Stage 5's ``geo`` (it runs between
+``geo`` and ``export``): ``needs`` lists manifest stages a stage requires
+beyond those that execute before it.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ class StageSpec:
     execution_order: int
     manifest_stages: tuple[str, ...]     # names used in RunManifest / src.core.manifest
     budget_keys: tuple[str, ...]         # keys under budget.stages in config
+    needs: tuple[str, ...] = ()          # manifest stages owned by later stages that must run first
 
     @property
     def is_built(self) -> bool:
@@ -70,9 +74,11 @@ STAGES: tuple[StageSpec, ...] = (
     ),
     StageSpec(
         number=3, key="occlusion", title="Occluded surface reconstruction", spec_ref="§6",
-        summary="Three-zone classification, anchored monocular fusion via TSDF, honest gap reporting.",
-        status=StageStatus.PLANNED, execution_order=4,
-        manifest_stages=("fusion",), budget_keys=("fusion",),
+        summary="Three-zone voxel classification (views, triangulation angle, visibility), Zone 2 filled from "
+                "monocular depth anchored to Zone 1 (RANSAC scale/shift, residual gate, never overriding Zone 1), "
+                "mesh faces without support flagged as inferred, gaps.geojson + coverage percent.",
+        status=StageStatus.BUILT, execution_order=4,
+        manifest_stages=("fusion",), budget_keys=("fusion",), needs=("geo",),
     ),
     StageSpec(
         number=4, key="recon", title="Reconstruction tracks", spec_ref="§7",
@@ -132,4 +138,5 @@ def manifest_stages_through(stage: StageSpec) -> list[str]:
     """
     upstream = [s for s in built_stages() if s.execution_order < stage.execution_order]
     chain = upstream + [stage] if stage not in upstream else upstream
-    return [name for s in chain for name in s.manifest_stages]
+    names = [name for s in chain for name in s.manifest_stages]
+    return names[:-len(stage.manifest_stages)] + [n for n in stage.needs if n not in names] + names[-len(stage.manifest_stages):]
