@@ -63,7 +63,8 @@ def _stage3(run_dir: Path) -> dict:
         "rejected_near_camera_pct": r.get("rejected_near_camera_pct"), "timings_s": r.get("timings_s"),
         "fill_frames": [{k: f.get(k) for k in ("frame", "status", "reason", "scale", "shift", "residual_m", "residual_limit_m",
                                                "inlier_ratio", "holdout_error_pct", "band_px", "band_depth_m",
-                                               "region_px", "zone1_px", "points_in_targets")}
+                                               "region_px", "zone1_px", "points_in_targets",
+                                               "extrapolation_dropped_px", "expected_scale")}
                         for f in r.get("fill_frames", [])],
     }}
 

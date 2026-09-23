@@ -18,6 +18,7 @@ $PY -m src.cli run "$VIDEO" --out "$BASE" --stage ingest --stage condition > "${
 for model in vggt_omega vggt; do
   n=$([ "$model" = vggt_omega ] && echo 2 || echo 3)
   echo "== $n/5 Stage 4 with $model"
+  $PY -m src.core.runlock "data/interim/${TAG}_${model}" || exit 1
   rm -rf "data/interim/${TAG}_${model}" && cp -r "$BASE" "data/interim/${TAG}_${model}"
   $PY -m src.cli run "$VIDEO" --resume "data/interim/${TAG}_${model}" --stage track_a \
       --set recon.track_b.model=$model > "${TAG}_${model}.log" 2>&1 || echo "   Stage 4 with $model failed: see ${TAG}_${model}.log"

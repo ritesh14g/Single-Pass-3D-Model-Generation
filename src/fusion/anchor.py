@@ -8,10 +8,14 @@ For each frame chosen to look at thinly observed or unobserved ground:
      otherwise the Track B predictor run on this one frame.
   3. d_mvs ~ s * d_mono + t over B only, RANSAC (2-point samples), least squares on inliers.
   4. Inlier share below ``min_inlier_ratio`` or residual above ``max_residual_m``: the frame is
-     refused and its region stays Zone 3 — a bad anchor is worse than a gap.
+     refused and its region stays Zone 3 — a bad anchor is worse than a gap. Track B's saved
+     depth is already anchored to Track A, so its fit must also agree with the georeferencing
+     scale within ``cache_scale_tolerance``.
   5. The residual at the band is feathered into R over ``blend_band_px`` (C0 at the seam).
   6. R's pixels are back-projected; points whose ground cell is not a gap or thin cell, or whose
-     height leaves the measured surface's range, are dropped.
+     height leaves the measured surface's range, are dropped. So are pixels whose anchored depth
+     leaves the band's depth span by more than ``max_extrapolation_rel`` x the band depth: a fit
+     is trusted only near the depths it was fitted on.
 
 Fusion is a confidence-weighted voxel average on the Zone 1 voxel grid: a pixel's weight is
 ``zone2_weight_max`` x its confidence rank x the frame's inlier share, so always below Zone 1's
@@ -136,8 +140,11 @@ def render_depth(cam: CameraView, pts: np.ndarray, shape: tuple[int, int], voxel
 
 
 def anchor_frame(cam: CameraView, mono: np.ndarray, conf: np.ndarray, zone1_pts: np.ndarray, voxel: float,
-                 acfg: Any, rng: np.random.Generator):
-    """(filled depth [h,w] with NaN outside R, weight [h,w], AnchorFit | None, report dict)."""
+                 acfg: Any, rng: np.random.Generator, expected_scale: float | None = None):
+    """(filled depth [h,w] with NaN outside R, weight [h,w], AnchorFit | None, report dict).
+
+    ``expected_scale``: the scale the fit should find when the depth is already anchored (Track B's
+    saved maps are in Track A's model units, so metric = georef scale x depth); None = any scale."""
     from scipy import ndimage
 
     h, w = mono.shape
@@ -178,6 +185,12 @@ def anchor_frame(cam: CameraView, mono: np.ndarray, conf: np.ndarray, zone1_pts:
         return None, None, fit, {**report, "status": "refused", "reason": "inlier share below min_inlier_ratio"}
     if rms > limit:
         return None, None, fit, {**report, "status": "refused", "reason": "anchor residual above the limit"}
+    # A narrow band can fit any scale: Esri frame 216 (2,139 band px) found s = 267 on depth whose
+    # true scale was 1.0 and extrapolated it over 183k px, a third of the fill (box, 2026-09-23).
+    tol = float(acfg.cache_scale_tolerance)
+    if expected_scale and expected_scale > 0 and tol > 1 and abs(np.log(s / expected_scale)) > np.log(tol):
+        return None, None, fit, {**report, "status": "refused", "expected_scale": round(float(expected_scale), 5),
+                                 "reason": "scale disagrees with the georeferencing (depth already anchored)"}
 
     # C0 at the seam: each R pixel takes the residual of its nearest band inlier, fading to zero
     # over the blend band, so the fill meets Zone 1 instead of stepping off it.
@@ -189,6 +202,13 @@ def anchor_frame(cam: CameraView, mono: np.ndarray, conf: np.ndarray, zone1_pts:
     dseam, (ri, ci) = ndimage.distance_transform_edt(~seam, return_indices=True)
     fade = np.clip(1.0 - dseam / max(float(acfg.blend_band_px), 1.0), 0.0, 1.0)
     filled = np.where(region, s * mono + t + correction[ri, ci] * fade, np.nan).astype(np.float32)
+    # Trust the fit only near the depths it was fitted on.
+    lo, hi = np.percentile(target[inl], [2, 98])
+    reach = float(acfg.max_extrapolation_rel) * depth
+    far = region & ((filled < lo - reach) | (filled > hi + reach))
+    filled[far] = np.nan
+    region = region & ~far
+    report["extrapolation_dropped_px"] = int(far.sum())
     # Confidence rank within the frame, so a model's absolute confidence scale does not matter.
     rank = np.zeros((h, w), np.float32)
     if region.any():
@@ -269,6 +289,8 @@ def fill(scene: Scene, zones: ZoneResult, gm: GroundMap, cfg: Any, mono: MonoDep
         result.reason = "no gap or thin ground cell is in view"
         return result
     rng = np.random.default_rng(int(cfg.get_path("run.seed", 0)))
+    # Track B's saved maps were anchored in Track A's model units; the scene is metric.
+    expected_scale = float(getattr(scene.georef, "scale", 1.0) or 1.0) if source == "track_b_cache" else None
     zone1_pts = scene.points[zones.point_zone == ZONE1]
     z_lo, z_hi = np.percentile(scene.points[:, 2], [1, 99])
     margin = float(acfg.height_margin_m)
@@ -285,7 +307,7 @@ def fill(scene: Scene, zones: ZoneResult, gm: GroundMap, cfg: Any, mono: MonoDep
             result.frames.append({"frame": cam.name, "status": "skipped", "reason": f"{type(exc).__name__}: {exc}"})
             continue
         filled, weight, _, report = anchor_frame(cam, depth, conf, zone1_pts, zones.spacing or zones.grid.size,
-                                                 acfg, rng)
+                                                 acfg, rng, expected_scale=expected_scale)
         result.frames.append(report)
         if filled is not None:
             h, w = filled.shape

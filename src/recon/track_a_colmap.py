@@ -240,19 +240,27 @@ def _sparse(pycolmap, tcfg, images_dir, masks_dir, out_dir, names, hints, thread
                 cam.params = [focal, cam.width / 2, cam.height / 2] + [0.0] * (len(cam.params) - 3)
                 cam.has_prior_focal_length = True
                 handle.update_camera(cam)
-                # A field of view measured by the sensor is held fixed; a nominal one from the
-                # camera table is only a starting point, so bundle adjustment may refine it.
+                # A field of view measured by the sensor is held fixed. A nominal one from the
+                # camera table is too unless recon.track_a.nominal_focal = refine: a free focal
+                # bends straight nadir passes (DJI_0047: -29.6%, a folded model).
                 nominal = "camera table" in str(hints.get("hfov_source", ""))
-                fix_focal = not nominal
+                fix_focal = not nominal or str(tcfg.nominal_focal) != "refine"
                 if nominal:
                     focal_source += "_nominal"
                 log_event(log, logging.INFO, f"focal seeded from {focal_source}: {focal:.0f} px, "
-                                             + ("refined by BA" if nominal else "held fixed"))
+                                             + ("held fixed" if fix_focal else "refined by BA"))
         finally:
             handle.close()
     if tcfg.focal_from_telemetry and not fix_focal:
-        run.downgrade("focal length prior", "self-calibrated focal",
-                      "telemetry has no field of view or focal length; height/scale may drift on nadir flights")
+        # A nominal camera-table prior is used, only not held fixed: say that, not "no FOV"
+        # (the DJI_0047 box run reported "no field of view" with the Phantom 3 prior applied).
+        if focal_source.endswith("_nominal"):
+            run.downgrade("focal length prior", "nominal focal refined by BA",
+                          "camera-table field of view is nominal, so BA refines it; height/scale may drift "
+                          "on nadir flights")
+        else:
+            run.downgrade("focal length prior", "self-calibrated focal",
+                          "telemetry has no field of view or focal length; height/scale may drift on nadir flights")
 
     pairing = pycolmap.SequentialPairingOptions()
     pairing.overlap = int(tcfg.matching.sequential_overlap)

@@ -72,8 +72,8 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 0 | Input check | §1.3, §4 | 🟢 **BUILT** | `ui/stages/stage0_input_check.py` | `src/qa/stage0_eval.py` | Runs before ingest; PASS/WARN/BLOCK per check with a fix. Any container/codec FFmpeg reads; telemetry sniffed by content (KLV, SRT, embedded subtitle track, GoPro GPMF, CSV/TXT, DJI flight record, GPX, KML, GeoJSON/JSON, ULog, DataFlash, tlog). 13 sample clips triaged in 4-35 s each |
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs); S2-3 and S2-4 remain open |
-| 3 | Occluded surfaces | §6 | 🟢 **BUILT** | `ui/stages/stage3_occlusion.py` | `src/qa/stage3_eval.py` | **Runs after geo, before export** (works in metres). Voxel zones from confirming views + triangulation angle + z-buffer visibility; Zone 3 gaps → `gaps.geojson`; Zone 2 filled from VGGT depth anchored to Zone 1 (RANSAC scale/shift, depth-relative residual gate, never inside a Zone 1 voxel); unsupported mesh faces flagged inferred. DJI_0047 (laptop, no VGGT weights): 13.5 s, coverage 28.4%, 26% of the dense cloud rejected as stereo failures, fill skipped (logged). Box, Esri (2026-09-23): Stage 3 **81.8**, 61.5 s, Zone 1 47.1% / 2 19.5% / 3 33.4%, coverage 66.6%, **held-out Zone 2 error 0.26% of depth** (first real VGGT-Ω fill) — but the fill ran 2 of 35 frames (budget bug, fixed on the laptop, not yet re-run on the box) |
-| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Refinement BA: planned |
+| 3 | Occluded surfaces | §6 | 🟢 **BUILT** | `ui/stages/stage3_occlusion.py` | `src/qa/stage3_eval.py` | **Runs after geo, before export** (works in metres). Voxel zones from confirming views + triangulation angle + z-buffer visibility; Zone 3 gaps → `gaps.geojson`; Zone 2 filled from VGGT depth anchored to Zone 1 (RANSAC scale/shift, depth-relative residual gate, never inside a Zone 1 voxel); unsupported mesh faces flagged inferred. DJI_0047 (laptop, no VGGT weights): 13.5 s, coverage 28.4%, 26% of the dense cloud rejected as stereo failures, fill skipped (logged). Box, Esri (2026-09-23): Stage 3 **81.8**, 61.5 s, Zone 1 47.1% / 2 19.5% / 3 33.4%, coverage 66.6%, **held-out Zone 2 error 0.26% of depth** (first real VGGT-Ω fill), fill 2/35 frames (budget bug). **After the budget fix (box re-run): 86.4, 34/35 frames anchored, coverage 65.4 → 69.1%, held-out error 0.48% of depth, fill 28.9 s, Stage 5 90.0.** Frame 216's degenerate fit (s = 267) is now refused by a georef-scale check (verified on the box: 33/35 anchored, coverage **68.2%**, held-out 0.48%). DJI_0047 Stage 3 = 0% coverage because its Track A failed (S4-10) |
+| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Box DJI_0047 (4K, 136 frames, nominal Phantom 3 focal held fixed): **93.3/100, 1.35 m vs GPS**, Track A 1,831 s. Refinement BA: planned |
 | 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the box (Esri, FBX via headless Blender 4.2.3): Stage 5 **89.3**, coverage **72.6%**, 22 s. Since 2026-09-23 export carries Stage 3's layers (zone/source per point, `model_zones.glb`, `gaps.geojson`, `zone_map.tif`) and takes coverage from Stage 3 |
 | 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
 
@@ -149,6 +149,11 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `scripts/box_gdrive.py` | box | Laptop, recommended route: sha256 of the bundle + `box_fetch_paste.txt` for a Drive link |
 | `scripts/box_fetch_gdrive.sh` | box | Box: gdown download (resume, retries), Drive web-page/quota detection, sha256, then restore |
 | `scripts/box_stage3_runs.sh` | box | Esri + DJI_0047 runs and the Stage 3–5 report in one background job |
+| `scripts/box_stage3_rerun.sh` | box | After a code update: before report, Stage 3 + export re-run on esri_s3 / dji47_s3, after report |
+| `scripts/box_recon_diag.py` | box | Read-only Track A diagnosis of a run: focal vs prior, SfM vs GPS path shape, residual along the flight |
+| `scripts/box_dji_rerun.sh` | box | DJI_0047 from Track A on (Stages 0–2 reused), then report + diagnosis |
+| `scripts/box_summary.py` | box | One-screen summary of stage4_report / box_recon_diag JSON, to paste back |
+| `src/core/runlock.py` | core | One pipeline process per run folder (`.run.lock`, stale locks taken over; `python -m src.core.runlock <dir>` shell guard) |
 | `scripts/box_upload.py` | box | Laptop: send the zip to the box's Jupyter server via `/api/contents` in resumable 100 MB parts (4 MB requests), per-part + whole sha256 |
 | `scripts/box_restore.sh` | box | Box: unpack + verify, venv, Blender / OpenMVS / VGGT code, VGGT-Ω weights, tests, next commands |
 | `src/export/writers.py` | 5 | PLY / LAS (WKT compound CRS) / lossless textured OBJ / glb (+confidence) / FBX via Blender |
@@ -367,12 +372,15 @@ These remain, in priority order; each links its open issue:
 | ~~S5-4~~ | 5 | ~~Coverage % unmeasured on real footage~~ | **Closed 2026-09-22:** Esri 72.6% (124 178 of 171 045 m² seen). The gap is mostly the river and scene edges (no multi-view-consistent depth); Stage 3 must report it as unobserved/unreconstructable, not fill it |
 | S4-4 | 4 | KLV HFOV 81° / VFOV 66° is inconsistent with a 16:9 frame (81° H implies 51° V), so the telemetry FOV is nominal | Fixed focal from HFOV still measured −3.5% height error; acceptable, but prefer HFOV and log the VFOV mismatch |
 | LIC-1 | 4 | **VGGT licence vs the PS domain.** Every VGGT checkpoint carries a no-military / no-espionage acceptable-use clause (VGGT License AUP §2; VGGT-1B is also CC-BY-NC-4.0; VGGT-Ω is FAIR non-commercial research). The PS is set by NTRO and lists military reconnaissance and border mapping among applications | **Team decision 2026-09-22 (ritesh14g):** use VGGT for the competition prototype; the PS names disaster management and treats military use as one optional application, and a selected project would move to an in-house model built with government support. State this position and the licence terms in the README (§11). Track A (COLMAP BSD, OpenMVS AGPL) stays the licence-clean floor |
-| S3-1 | 3 | **The Zone 2 fill has never run with a real monocular model.** The laptop has no VGGT-Ω weights (gated; the token was rotated) and no VGGT-1B. Verified instead on DJI_0047's real geometry with a stand-in (Track A's mesh rendered per frame, distorted by a known scale/shift): s recovered 39.9–40.4 (true 40), inliers 80–84%, held-out error 0.52% of depth, filled points 0.54 m median from the surface | Box (CLOUD_GPU_GUIDE §10.4): Esri hybrid run reuses Track B's saved depth. Record frames anchored/refused, held-out error, coverage gain, fill seconds vs 120 s |
+| S3-1 | 3 | **The Zone 2 fill has never run with a real monocular model.** The laptop has no VGGT-Ω weights (gated; the token was rotated) and no VGGT-1B. Verified instead on DJI_0047's real geometry with a stand-in (Track A's mesh rendered per frame, distorted by a known scale/shift): s recovered 39.9–40.4 (true 40), inliers 80–84%, held-out error 0.52% of depth, filled points 0.54 m median from the surface | **Closed 2026-09-23 (box, Esri, VGGT-Ω saved depth):** 34/35 frames anchored, held-out Zone 2 error 0.48% of depth (0.51 m), coverage 65.4 → 69.1%, fill 28.9 s of a 120 s allotment. One degenerate fit found and guarded → S3-7 |
 | S3-2 | 3 | Camera footprints are traced on a flat ground plane, so rising terrain makes cameras see less than the plane says: gaps near the view edge (1–2 cells at ±2.4 m relief, 50 m height) | Reported as "edge of view", not "interior" (`fusion.gaps.edge_band_cells`). Proper fix: intersect footprint rays with the DSM |
 | S3-3 | 3 | **Spec deviations, stated:** (a) no TSDF: Zone 2 is fused as a confidence-weighted voxel average with the same rules (weight < Zone 1, never inside a Zone 1 voxel, surface threshold), and the fill is a point layer, not a re-meshed surface; (b) no Poisson density trimming: the mesher is OpenMVS Delaunay (S4-6), so §6.4 is met by flagging mesh faces with no measured support as inferred (`model_zones.glb`, zone 3) instead of trimming them; (c) §6.5 plane completion not built (stretch goal) | TSDF only if the viewer needs a watertight Zone 2 surface; the viewer (Stage 6) must draw zone 3 faces translucent with a legend |
 | S3-4 | 3 | Per-zone accuracy against ground truth (§8.5, §11) is not measured; the held-out ring is a proxy for Zone 2, and Zone 1 has only the camera-vs-GPS RMS | Stage 6 QA: cloud-to-cloud per zone against a reference (lidar, or the all-strips reconstruction in the single-pass simulation) |
 | S3-5 | 3 | The near-camera rule (0.1 × flight height) would also reject genuine surface on close-range inspection flights (a facade 5 m from the drone at 50 m altitude) | Fine for survey flights. For inspection footage set `fusion.zones.camera_clearance_fraction` lower, or 0 |
 | S3-6 | 3 | Photometric consistency is computed per voxel (median 0.867 on DJI_0047) but does not enter the zone decision | Decide on real data whether low consistency should demote Zone 1 → 2 |
+| S3-7 | 3 | **Degenerate anchor fits extrapolated over whole frames.** Esri box frame 216: band 2,139 px, region 183k px, fitted s = 267 / t = −148 on Track B's saved depth whose true scale is the georef's 0.996; inliers 58.5%, held-out 0.8% (the ring only tests near the band) — so it passed and gave 37,908 of 121,068 fill points | **Fixed and verified on the box 2026-09-23:** frame 216 refused ("scale disagrees with the georeferencing"); Esri 33/35 anchored, 102,908 fill points (was 121,068), coverage 65.4 → **68.2%** (69.1% included the bad frame), held-out error unchanged at 0.48%, Stage 3 still 86.4. Guards: cached depth must fit within `cache_scale_tolerance` (1.5×) of the georef scale; filled pixels leaving the band's depth span by > `max_extrapolation_rel` (15%) × band depth are dropped (`extrapolation_dropped_px` per frame). Frame 032 (band 378 px of 185k, 0 inliers) was already refused correctly |
+| S4-10 | 4 | **DJI_0047 full-resolution Track A failed on the box** (256 m vs GPS). Diagnosed (`box_recon_diag.py`): **two causes.** (1) **A second pipeline process in the same run folder** (the job was launched twice, `[2]+ Done`): at 08:36 UTC it entered Track A, wiped `sparse/` and deleted `database.db` while the first run was mapping; at 08:48 the first run's GPS-prior pass found 0 images (`priors: 0`) → no model. (2) **The first pass itself folded**: BA drove the nominal Phantom 3 focal −29.6% (1,563 vs 2,220 px); SfM camera path chord/length 0.23 vs GPS 1.00 (straight 903 m), cameras 23.7 m *below* the ground | **Closed 2026-09-23, verified on the box:** DJI_0047 re-run → focal 2,219.6 px (= prior), GPS priors 136, GPS-prior refinement kept, **camera centres vs GPS 1.35 m** (was 256), SfM path 906 vs GPS 903 m and straight (collinearity 0.0067 vs 0.0059), residual 0.6–2.0 m along the flight; Stage 4 **93.3** (was 76.7), anchor spread 1.77% (was 42%), dense 6.1 M points over 266,450 m². Fixes: `src/core/runlock.py` (run_pipeline holds `.run.lock`; the CLI refuses a second process; box scripts check before `rm -rf`); `recon.track_a.nominal_focal: fixed` (camera-table focal held fixed; `refine` restores BA refinement). Re-run: `scripts/box_dji_rerun.sh` |
+| S3-8 | 3 | **Stage 3 classification scales with cameras x voxels**: DJI_0047 (136 cameras, 6.1 M dense points) classify 115 s of a 136 s stage (Esri, 46 cameras / 2 M points: 27 s); over the 120 s allotment, so the Zone 2 fill stopped after 1 of 3 frames ("time budget") although a frame costs 1.6 s | Time the sub-steps (`_visibility`: every voxel projected + z-buffered per camera; `_photometric`: 136 4K images read, `np.add.at`; `_pair_angles`) and report them in `fusion_report.json`; then cull voxels per camera by footprint before projecting, read the conditioned images at z-buffer width, `bincount` instead of `ufunc.at`. Also: reserve the fill's own time instead of letting classification consume it |
 | T-1 | test | Stage 5 end-to-end fixture nondeterministic on the box: 2/430 failed with float32 overflow in the glTF writer; one `-k end_to_end` run hung > 10 min (Blender/OpenMVS on an absurd mesh?). Passed 14/14 alone | Deterministic fixture (seed or rendered 3-D scene, S4-2); export rejects non-finite / absurd coordinates before Blender/OpenMVS |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
@@ -2390,3 +2398,88 @@ fail fast in export on non-finite / absurd coordinates instead of passing them t
      Stage 3–5 numbers (laptop 320 px run: coverage 28.4%, 26% of points rejected).
   5. Then T-1, S3-1 closure in this log, Stage 5 open items (S5-1…S5-3) when asked, Stage 6.
 
+### 2026-09-23 (evening) — box re-run of Stage 3 with the fill-budget fix: tooling
+
+**Created** `scripts/box_stage3_rerun.sh`: the handover's next-session steps 1 and 3 as one background job:
+the before report (kept if it already exists), then `--resume … --stage fusion --stage export --force` on
+esri_s3 and dji47_s3, then `after_fix_report.json`. **Modified** `scripts/box_status.sh`: also
+recognises `box_rerun.log` and `*_rerun.log`. Code zip rebuilt: `data/box_upload/code/box_upload_20260923_2029.zip`
+(superseded the same evening by `box_upload_20260923_2049.zip`, see below).
+**Next:** the box results → handover steps 4–5.
+
+### 2026-09-23 (night) — box re-run results; two anchoring guards; DJI_0047 diagnosis tooling
+
+**Box re-run with the fill-budget fix (esri_s3 / dji47_s3, Stage 3 + export only):**
+- **Esri:** Stage 3 **86.4** (was 81.8); **34 of 35 frames anchored** (was 2); coverage **65.4 → 69.1%**
+  (measured → with fill); held-out Zone 2 error **0.48% of depth** (0.51 m); anchor residual 0.69 m;
+  121,068 fill points, 0 in Zone 1 voxels; fill 28.9 s, stage 64.6 s. Stage 5 90.0, all six formats.
+  Good frames fit s = 0.82–1.01, t = −2…+19 m against a georef scale of 0.996.
+- **Frame 032** (the refused one): 586 Zone 1 px, a 378 px band against a 185k px region: too little
+  measured surface in view; 0 inliers → refused. Correct behaviour, no change.
+- **Frame 216** (anchored, wrongly): band 2,139 px, s = **267**, t = −148, inliers 58.5% — a fit on a
+  narrow depth span, extrapolated over 183k px: 37,908 fill points, a third of the total. The held-out
+  ring (0.8%) could not catch it: it only tests depths next to the band → S3-7.
+- **DJI_0047:** Stage 3 68.2, coverage **0%**: its Zone 1 voxels exist (38.6% of mesh area) but lie
+  outside every camera footprint, because Track A's model is wrong (256 m RMS vs GPS) → S4-10. Its
+  one anchored frame fitted s = 45.7, which is plausible there (the first-pass SfM is not in metres).
+
+**Modified:** `src/fusion/anchor.py`: `anchor_frame(..., expected_scale=)` refuses a fit on Track B's
+saved (already anchored) depth outside `cache_scale_tolerance` of the georef scale; filled pixels outside
+the band's depth span ± `max_extrapolation_rel` × band depth are dropped (`extrapolation_dropped_px`);
+`fill()` passes the georef scale when the source is `track_b_cache`. `configs/default.yaml`: the two keys.
+`src/recon/track_a_colmap.py`: a nominal camera-table focal refined by BA is reported as "nominal focal
+refined by BA", not "telemetry has no field of view" (that text misled the DJI diagnosis).
+`tests/test_fusion.py`: +2 (the georef-scale refusal; the extrapolation limit).
+**Created:** `scripts/box_recon_diag.py` (read-only: focal vs prior, SfM vs GPS path shape, residual
+along the flight, Track A log lines; checked on data/box/runs/esri_full2: path lengths agree to 0.6%).
+Code zip: `data/box_upload/code/box_upload_20260923_2049.zip` (the 14:22 and 20:29 zips deleted).
+**Tests:** 433 passed (was 431).
+**Next:** box: `box_recon_diag.py` on dji47_s3; re-run `box_stage3_rerun.sh` (keep the first after-report
+as `after_budget_fix.json`) to confirm frame 216 is refused and coverage/held-out error hold; then S4-10,
+T-1, close S3-1, Stage 5 items when asked, Stage 6.
+
+### 2026-09-23 (late) — DJI_0047 diagnosed: two processes in one run folder + a folded first pass
+
+**What the diagnosis showed** (`box_recon_diag.py data/interim/dji47_s3`): see S4-10. Timeline from
+`run.jsonl` (UTC): 08:28 focal seeded, first-pass mapping (1,147 s); **08:36 a second process, 7 s old,
+logs `sparse_extract on CUDA unavailable → CPU: No registered database factory succeeded` (SQLite disk
+I/O error) and a 5.3 s `track_a_mvs` stage into the same run folder** — `_sparse` begins with
+`rmtree(sparse/)` and `database.db.unlink()`; 08:48 the first run writes GPS priors into the deleted
+database: 0 images → "GPS-prior mapping produced no model". Independently the first pass was already
+folded: focal −29.6% from the nominal prior, SfM path chord 6.96 vs length 30.93 model units (GPS: 901 vs
+903 m), residual 160–370 m everywhere along the flight. Esri (fixed telemetry focal): 0.6% path agreement.
+**Created:** `src/core/runlock.py`, `tests/test_runlock.py` (4), `scripts/box_dji_rerun.sh`,
+`scripts/box_summary.py`. **Modified:** `src/pipeline.py` (`run_pipeline` = lock + `_run_pipeline`),
+`src/cli.py` (RunLocked → a clear error), `src/recon/track_a_colmap.py` + `configs/default.yaml`
+(`recon.track_a.nominal_focal: fixed`), `scripts/box_full_run.sh`, `box_stage3_runs.sh`,
+`box_stage4_compare.sh` (runlock guard before `rm -rf`), `scripts/box_status.sh` (box_dji.log).
+**Decision:** a camera-table focal is held fixed like a telemetry one. Evidence: refined focal drifted to
+−17% height on Esri (§4) and −29.6% focal / a folded model on DJI_0047; fixed gave −1.4 to −4% on Esri.
+**Tests:** 437 passed. Code zip: `data/box_upload/code/box_upload_20260923_2111.zip`.
+**Pending from the box:** the Esri report with the S3-7 guards (the re-run finished; its report was not
+pasted yet); then the DJI_0047 re-run.
+
+### 2026-09-23 (late, cont.) — S3-7 guards verified on the box
+Esri re-run with the guards: **frame 216 refused** by the georef-scale check (s = 267 vs 0.996); 33/35
+frames anchored; 102,908 fill points (was 121,068); coverage 65.4 → **68.2%** (the earlier 69.1% counted
+frame 216's extrapolated points); held-out Zone 2 error 0.479% (unchanged); fill 27.9 s; Stage 3 86.4,
+Stage 5 90.0. **Modified:** `scripts/stage4_report.py` copies `extrapolation_dropped_px` and
+`expected_scale` per frame (the box summary read them as missing); `scripts/box_summary.py` skips the
+report's "PASTE EVERYTHING BELOW" banner. **Pending:** the DJI_0047 re-run (`box_dji_rerun.sh`).
+
+### 2026-09-23 (night) — DJI_0047 re-run: the Track A fixes verified; Stage 3 on a second real clip
+
+`box_dji_rerun.sh` (Track A → export on dji47_s3, Stages 0–2 reused), nominal focal held fixed, one
+process per folder:
+| DJI_0047 | before (folded, shared folder) | after |
+|---|---|---|
+| Focal | 1,563 px (−29.6%) | **2,219.6 px** (prior, fixed) |
+| GPS-prior refinement | no model (0 priors) | **kept, 136 priors** |
+| Camera centres vs GPS | 256 m | **1.35 m** |
+| Stage 4 / anchor spread | 76.7 / 42% | **93.3 / 1.77%** |
+| Stage 3 / Zone 1 / coverage | 68.2 / 0% / 0% | **90.9 / 76.7% / 87.7 → 87.8%** |
+| Stage 5 | 86.7 | **93.3**, all six formats |
+Gaps: 184, 24,072 m². Fill: 1 of 3 frames (time budget, S3-8), held-out 0.82%. Track A 1,831 s and the
+run 2,255 s against a 900 s budget (136 frames at 4K; S4-8). Two 2-frame SfM pieces dropped (too few GPS
+fixes). This also answers §4's open question (DJI_0047 with the camera FOV prior): **1.35 m vs GPS**.
+**Next:** S3-8 (Stage 3 speed on large clips), T-1, Stage 5 items when asked, Stage 6.

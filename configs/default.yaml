@@ -468,6 +468,10 @@ recon:
     # flight images + GPS only fix height/focal; a refined focal drifted to -17%
     # height on Esri, the fixed one measured -4% (DEVLOG §4).
     focal_from_telemetry: true
+    # A camera-table (nominal) focal: fixed | refine. Refined, it drifted -29.6% on DJI_0047's
+    # straight 900 m pass and folded the model (chord 23% of path length; 256 m vs GPS, box
+    # 2026-09-23). A nominal value is a few % off at worst, so it is held fixed too.
+    nominal_focal: fixed
     # Stage 2's dynamic-object masks keep features off moving objects.
     use_dynamic_masks: true
     sift:
@@ -661,6 +665,13 @@ fusion:
     # the region stays Zone 3.
     max_residual_m: 0.6
     max_residual_rel: 0.015
+    # Track B's saved depth is already anchored to Track A, so its fit should find the
+    # georeferencing scale: outside [1/x, x] of it -> refuse (Esri box: good frames 0.82-1.01
+    # against 0.996; frame 216 fitted 267 on a 2,139 px band).
+    cache_scale_tolerance: 1.5
+    # Filled pixels whose anchored depth leaves the band's depth span by more than this
+    # fraction of the band depth are dropped: the fit is only trusted near what it saw.
+    max_extrapolation_rel: 0.15
     # C0 seam: the band residual fades to zero over this many pixels into the fill.
     blend_band_px: 12
     pixel_stride: 2

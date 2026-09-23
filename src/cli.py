@@ -82,6 +82,7 @@ def run(
     run_dir, resume_dir, stages, force, mode,
 ) -> None:
     """Run the pipeline on VIDEO."""
+    from src.core.runlock import RunLocked
     from src.preflight import InputRejected
     from src.pipeline import RunInputs, run_pipeline
 
@@ -107,6 +108,8 @@ def run(
         click.echo()
         click.echo(rejected.report.text())
         raise click.ClickException(str(rejected)) from None
+    except RunLocked as locked:
+        raise click.ClickException(str(locked)) from None
 
     click.echo()
     _echo_status(result.manifest)

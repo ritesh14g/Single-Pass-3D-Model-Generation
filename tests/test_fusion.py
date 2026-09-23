@@ -188,6 +188,34 @@ def test_a_bad_anchor_is_refused_not_fused(scene, classified):
     assert filled is None and report["status"] == "refused"
 
 
+def test_already_anchored_depth_must_fit_the_georef_scale(scene, classified, cfg):
+    # Esri box frame 216: Track B's saved (anchored) depth fitted s = 267 against an expected 1.0.
+    cam = scene.cameras[6]
+    truth = _true_depth(cam, (240, 320))
+    mono = ((truth - 12.0) / 25.0).astype(np.float32)
+    zone1 = scene.points[classified.point_zone == ZONE1]
+    acfg = cfg.get_path("fusion.mono_depth")
+    args = (cam, mono, np.ones_like(mono), zone1, classified.grid.size, acfg)
+    filled, _, _, report = anchor.anchor_frame(*args, np.random.default_rng(0), expected_scale=1.0)
+    assert filled is None and report["status"] == "refused" and "georeferencing" in report["reason"]
+    filled, _, _, report = anchor.anchor_frame(*args, np.random.default_rng(0), expected_scale=24.0)
+    assert report["status"] == "anchored" and np.isfinite(filled).any()
+
+
+def test_fill_is_not_extrapolated_far_from_the_band_depths(scene, classified, cfg):
+    cam = scene.cameras[6]
+    truth = _true_depth(cam, (240, 320))
+    zone1 = scene.points[classified.point_zone == ZONE1]
+    region = ~np.isfinite(anchor.render_depth(cam, zone1, truth.shape, classified.grid.size)) & np.isfinite(truth)
+    # Right on the band, 20 m too deep inside the gap: 50 m band depth x 0.15 allows 7.5 m.
+    mono = ((np.where(region, truth + 20.0, truth) - 12.0) / 25.0).astype(np.float32)
+    filled, _, _, report = anchor.anchor_frame(cam, mono, np.ones_like(mono), zone1, classified.grid.size,
+                                               cfg.get_path("fusion.mono_depth"), np.random.default_rng(0))
+    assert report["status"] == "anchored"
+    assert report["extrapolation_dropped_px"] > 0.9 * report["region_px"]
+    assert np.isfinite(filled).sum() < 0.1 * report["region_px"]
+
+
 class _TruthMono:
     """A 'monocular' source that is the true surface under an unknown affine map."""
 

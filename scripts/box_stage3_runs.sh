@@ -14,6 +14,7 @@ echo "== $(date -u '+%H:%M:%S') 1/3 Esri -> data/interim/esri_s3"
 bash scripts/box_full_run.sh data/raw/Esri_multiplexer_1.mp4 esri_s3 > /dev/null
 grep -E "elapsed .* budget" esri_s3.log | tail -1
 echo "== $(date -u '+%H:%M:%S') 2/3 DJI_0047 -> data/interim/dji47_s3"
+$PY -m src.core.runlock data/interim/dji47_s3 || exit 1   # never delete a folder a live run is using
 rm -rf data/interim/dji47_s3
 $PY -m src.cli run data/raw/DJI_0047/DJI_0047.mp4 --csv data/raw/DJI_0047/telemetry.csv \
     --out data/interim/dji47_s3 > dji47_s3.log 2>&1 || echo "   DJI_0047 run failed: see dji47_s3.log"

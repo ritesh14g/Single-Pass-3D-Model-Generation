@@ -52,6 +52,7 @@ from src.core.device import chunk_frames_for_memory, configure_runtime, device_i
 from src.core.logging import get_logger, log_event, setup_logging
 from src.core.inputs import describe_optional_inputs, missing_inputs, summarize
 from src.core.manifest import RunManifest, StageStatus
+from src.core.runlock import run_lock
 from src.stages import STAGES, built_manifest_stages
 from src.ingest.frame_selector import FrameSelection, load_selection, select_frames
 from src.ingest.telemetry import TelemetryTable, load_telemetry
@@ -574,7 +575,13 @@ def run_pipeline(
     workdir = Path(cfg.get_path("run.workdir"))
     run_dir = Path(run_dir) if run_dir else workdir / make_run_id(video)
     run_dir.mkdir(parents=True, exist_ok=True)
+    # One process per run folder: a second one would delete the first one's working files.
+    with run_lock(run_dir):
+        return _run_pipeline(inputs, cfg, run_dir, stages, force)
 
+
+def _run_pipeline(inputs: RunInputs, cfg: Config, run_dir: Path, stages: list[str] | None,
+                  force: bool) -> RunResult:
     setup_logging(
         run_dir=run_dir,
         level=cfg.get_path("logging.level", "INFO"),
