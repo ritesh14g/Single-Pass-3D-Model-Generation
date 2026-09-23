@@ -2139,3 +2139,25 @@ translating flight; S0-3 `--telemetry` accepts several files but only the first 
 
 **Next:** box: DJI_0047 with the camera FOV prior and the measured offset, then decide on the σ 0.05 m
 pose-prior BA against lidar, not against GPS; then Stage 3, Stage 6.
+
+### Session — 2026-09-23 — ritesh14g (with Claude) — the GPU box was returned
+**The institute's box (20 GB H100 MIG, 3 cores, 56 GB) went to another user.** Everything worth
+keeping came off it first with `scripts/box_collect.sh`, then `scripts/box_wipe_credentials.sh --yes`
+removed the Hugging Face token, notebook and shell history, and the 36 GB working copy. The
+Hugging Face token has been rotated: treat the old one as exposed.
+
+**Kept, unpacked into `data/box/` (gitignored):** ten run folders with their manifests, scorecards,
+georeferencing, logs and telemetry tables, and the **`esri_full2` exports** — all six formats plus
+the confidence layer, re-verified after transfer (2,176,162 points, `EPSG:32617+5773`, coverage
+70.9%). Also `env/machine.txt` and `env/pip_freeze.txt`: the GPU, CUDA and package versions,
+without which the recorded timings are not comparable. Nothing was lost — the only uncommitted
+thing on the box was a stray `esri_dense.tar.gz`.
+
+**What this changes:** Stage 3, Stage 6, the input check and every laptop-scale test carry on as
+before. What now needs a future box: confirming accuracy on DJI_0047 with the camera FOV prior and
+the measured offset (its laptop run took 86 min and scored 15.9 m), the σ 0.05 m pose-prior BA
+decision (to be judged against lidar, not GPS), and any timed demo run. The `esri_full2` exports
+mean **Stage 6's viewer can be built against a real georeferenced model with no GPU**, and Stage 5
+can be re-run from the sparse models.
+
+**Next:** Stage 3 (occlusion zones and honest gap reporting), then Stage 6.
