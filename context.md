@@ -12,8 +12,9 @@ different, how it meets each judging criterion, and what is still to be built.
 - Every number has a source (`DEVLOG.md` issue ID or section). If you round a number, round it
   honestly; do not upgrade a 🟡 to a ✅.
 - Judges will ask. Section 12 has the likely questions with answers.
-- As of **26 Sept 2026**: Stages 0–5 built, Stage 6 (web viewer + QA report) planned.
-  444 automated tests pass.
+- As of **26 Sept 2026**: all stages 0–6 built (Stage 6 = web viewer + QA report, built 26 Sept).
+  491 automated tests pass. What still needs the GPU box: fresh runs for the deck images and
+  numbers, and the degradation benchmark (§4, Stage 6).
 
 ---
 
@@ -130,7 +131,7 @@ model to trust.
         │
  [5b] Export ─ OBJ, PLY, LAS, GeoTIFF (DSM + ortho), GLB, FBX + zone/confidence layers
         │
- [6] Web viewer + QA report  ⚪ planned
+ [6] Web viewer + QA report ─ three.js viewer, measurement, per-zone accuracy vs lidar, benchmarks
 ```
 
 Stage numbers follow the spec's section headings. Stage 3 runs after georeferencing because it
@@ -316,21 +317,36 @@ would have contributed a third of all fill points. It is now refused by the scal
 - Mesh faces with no measured support are *flagged* as inferred rather than trimmed.
 - Plane completion (§6.5, a stretch goal) was not built.
 
-### Stage 6: Web viewer + QA report ⚪ planned (from spec §8.4–8.5)
-- **Viewer** (three.js / Potree, single page), in the spec's priority order:
-  1. loads the `.glb` and orbits smoothly;
-  2. **confidence overlay toggle** (recolour by zone/confidence);
-  3. gap highlighting (Zone 3 regions);
-  4. **point-to-point measurement tool**;
-  5. stats panel: time, coverage %, accuracy estimate.
-- **QA report:**
-  - **Synthetic degradation harness:** blur, recompression, low light, shadows, GPS noise and
-    dynamic objects, reconstructed with and without conditioning, giving a table of error deltas.
-  - **Single-pass simulation:** reconstruct a multi-strip survey with all strips, then with one;
-    the difference is an honest single-pass accuracy number.
-  - Per-zone accuracy (Zone 1 vs Zone 2) against a reference.
-- **Inputs already exist:** exports + `model_zones.glb` + `gaps.geojson` + per-point confidence.
-  The viewer only has to display them.
+### Stage 6: Web viewer + QA report ✅ built 26 Sept (spec §8.4–8.5; runs automatically after export)
+- **Web viewer** (three.js, one page, works offline). Open it with
+  `.venv\Scripts\python -m src.cli view <run folder>`. It covers the spec's five priorities:
+  1. loads the model and orbits smoothly (one file carries texture + confidence + zone);
+  2. **Photo / Confidence / Zones toggle**: the same model recoloured in one click;
+  3. **gap outlines**: every Zone 3 region (Esri laptop run: 633) drawn on the model;
+  4. **measurement tool**: click two points → distance, horizontal, height difference, slope, both
+     ends in map coordinates, and a **warning when an end sits on inferred (Zone 3) or thinly
+     observed (Zone 2) surface**. Verified: picked points lie exactly on the mesh;
+  5. **stats panel**: time per stage, coverage, zone split, gaps, accuracy, CRS and heights.
+  - For slides: the **Screenshot** button saves a PNG; `?mode=zones&gaps=1` or `?mode=confidence`
+    in the address bar opens that view directly.
+- **QA report** (`<run>/qa/report.html`, one self-contained page): limitations first, every stage's
+  scorecard, time per stage against the budget, accuracy, benchmarks. Its own scorecard includes the
+  spec's **§11 definition-of-done checklist, measured from the run**.
+- **Per-zone accuracy against independent lidar** (`--reference`, any CRS; DEVLOG S3-4, S6-4):
+  - Esri laptop run vs USGS 3DEP lidar. Placement: **10.9 m** median, varying smoothly along the
+    flight. That is the KLV GPS track error found on 22 Sept, not the reconstruction.
+  - Within 100 m tiles, heights of every point: **Zone 1 RMS 2.9 m (NMAD 2.4 m), Zone 2 RMS 4.1 m
+    (NMAD 3.0 m)**. The zones rank trustworthiness correctly against independent ground truth.
+  - These are laptop-resolution numbers (CPU run, no Zone 2 fill). The box re-run will replace them
+    before the deck.
+- **Degradation benchmark** (`python -m src.cli bench degrade`): blur, compression, low light,
+  shadows, moving vehicles and GPS noise are injected into a clean clip. Each case is reconstructed
+  with and without our conditioning and measured against the clean run. 🟡 Built and tested; the real
+  table needs about 70 min of box time (S6-1).
+- **Single-pass simulation** (`python -m src.cli bench single-pass`): finds the flight strips,
+  reconstructs one strip alone and compares it with all strips. 🟡 Built and tested, but **neither
+  of our clips is a multi-strip survey** (Esri = one bent line, DJI_0047 = one line). The tool says
+  so. We need a multi-strip clip (S6-2).
 
 ---
 
@@ -417,8 +433,9 @@ Both are from the QGIS FMV sample set. The competition dataset arrives at the ev
   the GPS we are given. RTK/PPK input (supported, auto-weighted) is the path to sub-metre absolute
   accuracy, which is also the spec's stated position (§12.5).
 
-Say it this way. Do not claim "≤ 1 m achieved". Claim "≈1 m relative accuracy measured against
-lidar; absolute accuracy bounded by consumer GPS, and here is the evidence".
+Say it this way. Do not claim "≤ 1 m achieved". Claim "shape within 1.3 m horizontally and 1.7 m
+vertically of USGS lidar after one fit; well-observed surface measurably more accurate than thinly
+observed surface; absolute accuracy bounded by the GPS supplied, and here is the evidence".
 
 ---
 
@@ -426,12 +443,12 @@ lidar; absolute accuracy bounded by consumer GPS, and here is the evidence".
 
 | Criterion (weight) | What we deliver | Status | Evidence |
 |---|---|---|---|
-| **Accuracy (30%)** | GPS-anchored metric model, fixed focal, GPS-prior refinement with regression gate, per-zone confidence, lidar-validated | ✅ / 🟡 | 1.35 m (DJI) and 3.2 m (Esri) vs GPS; 1.3/1.7 m vs lidar after fit; per-zone accuracy vs reference is Stage 6 (S3-4) |
+| **Accuracy (30%)** | GPS-anchored metric model, fixed focal, GPS-prior refinement with regression gate, per-zone confidence, lidar-validated | ✅ / 🟡 | 1.35 m (DJI) and 3.2 m (Esri) vs GPS; 1.3/1.7 m vs lidar after fit; per zone vs lidar (laptop run): Zone 1 2.9 m, Zone 2 4.1 m RMS within 100 m tiles (S6-4: box numbers pending) |
 | **Completeness (20%)** | Three-zone engine, anchored Zone 2 fill, gaps reported with areas | ✅ | Coverage 68.2% (Esri, river-limited), 87.8% (DJI); 0 fill points in Zone 1 |
 | **Speed (20%)** | Time budget per stage with automatic degradation; VGGT depth instead of slow stereo | 🟡 **our biggest gap** | Esri 1.7 min video → 11 min end to end; DJI 4K 136 frames → 38 min. Target is 15 min for 10 min of video. See below |
 | **Innovation (15%)** | Honest zones, gated hybrid, refusal gates, KLV-native, input check | ✅ | §6 above |
 | **Scalability (10%)** | Streaming decode, chunked neural inference sized to GPU memory, tiled LAS export, voxel caps, resumable stages | ✅ / 🟡 | 6.1 M-point DJI cloud processed; Stage 3 classification 2.5× faster on a DJI-sized benchmark (laptop; box confirmation pending, S3-8) |
-| **UI (5%)** | Stage Lab (Streamlit) now; web viewer with confidence toggle and measurement tool | ✅ / ⚪ | Viewer = Stage 6 |
+| **UI (5%)** | Stage Lab (Streamlit) + three.js web viewer: photo / confidence / zone toggle, gap outlines, measurement with zone warnings, stats | ✅ | Stage 6, verified in a browser on the Esri run |
 
 **Speed, stated honestly (S4-8):**
 - Measured on a **20 GB MIG slice with only 3 CPU cores**:
@@ -496,19 +513,19 @@ references. Map the content below into them.
 2. **Problem:** the single-pass challenge in one picture: one flight line, a building seen from
    one side, occluded facades. The 8 challenges as icons.
 3. **Our solution:** the one-sentence pitch (§2) + the three-zone graphic (green / amber / red).
-4. **Architecture:** the pipeline diagram from §3 (redraw it cleanly); mark Stage 6 as "in
-   progress".
+4. **Architecture:** the pipeline diagram from §3 (redraw it cleanly). All seven stages are built.
 5. **Technical approach I, robustness:** Stage 0–2 table (challenge → our method).
 6. **Technical approach II, reconstruction:** the Track A + Track B hybrid, why VGGT for depth and
    COLMAP for poses (187.6 m vs 7.1 m), the fallback chain.
 7. **Technical approach III, occluded surfaces:** the zone table, the anchoring steps, "a bad
    anchor is worse than a gap", the frame 216 refusal story.
-8. **Results:** the §7 table + one screenshot of the textured model + one of `model_zones.glb` +
-   the lidar comparison.
+8. **Results:** the §7 table + viewer screenshots (Photo, Zones with gaps, a measurement with its
+   zone warning) + the per-zone lidar comparison (Stage 6).
 9. **Criteria fit:** the §8 table (keep the statuses).
 10. **Uniqueness:** the §6 list, four to five points maximum on the slide.
 11. **Feasibility and viability:** hardware used, runtime, open-source stack, licensing position,
-    what remains (Stage 6, speed levers) with a short plan.
+    what remains (speed levers, S4-8; the degradation table and a multi-strip clip for the
+    single-pass number, S6-1/S6-2) with a short plan.
 12. **Impact and applications:** disaster damage assessment first, then infrastructure, urban
     planning, border mapping, digital twins.
 13. **Limitations:** §10, stated confidently.
@@ -521,8 +538,12 @@ references. Map the content below into them.
 > orthophoto and zone images until then.
 
 **Visuals you can produce today:**
+- **The web viewer:** `.venv\Scripts\python -m src.cli view data\interim\recon_esri` opens the Esri
+  laptop run in the browser (zones, confidence, 633 gap outlines, measurement). Use its Screenshot
+  button. It is untextured (a laptop run). Photo-mode images wait for the box re-run (S4-11).
+- **The QA report:** `data\interim\recon_esri\qa\report.html` (open in any browser).
 - Stage Lab screenshots: `.venv\Scripts\python -m streamlit run ui/app.py`. It shows scorecards
-  and charts for Stages 0–5.
+  and charts for Stages 0–6. The Stage 6 page can show the viewer inside the Lab.
 - Exported data from the Esri run in `data/box/runs/esri_full2/export/`: LAS and GeoTIFF open in
   QGIS. The GLB/OBJ there have the black-texture fault; wait for the box re-run.
 - The newest Stage 3 outputs (`model_zones.glb`, `gaps.geojson`, `zone_map.tif`) for Esri and
@@ -536,7 +557,9 @@ references. Map the content below into them.
 ## 12. Likely judge questions, and our answers
 
 - **"Do you meet 1 m accuracy?"**
-  - Relative geometry: ≈1 m, measured against USGS lidar.
+  - Shape against USGS lidar: 1.3 m horizontal / 1.7 m vertical after one 7-parameter fit
+    (open ground). Point by point within 100 m tiles: Zone 1 2.9 m RMS, Zone 2 4.1 m (laptop run;
+    box numbers pending). Say which figure you quote.
   - Camera track vs GPS: 1.35 m on DJI.
   - Absolute placement is bounded by the GPS supplied: Esri's own GPS is 7–13 m off lidar.
   - With RTK/PPK, which the system detects and weights automatically, absolute accuracy follows.
@@ -580,7 +603,10 @@ references. Map the content below into them.
   - Claim "< 15 min" or "≤ 1 m everywhere".
   - Cite VGGT-Ω's own published benchmark gains. The authors flagged possible benchmark
     contamination (spec §3.3); cite our own measurements instead.
-  - Present Stage 6 (viewer, degradation harness, single-pass simulation) as built.
+  - Show degradation-table or single-pass numbers before the box has produced them (S6-1, S6-2).
+    The tools are built; the numbers are not measured yet.
+  - Mix the lidar figures: "1.3/1.7 m after a 7-parameter fit" and "2.9 m per point within tiles"
+    are different measurements. Name the one you quote.
   - Present the stage scores (0–100) as accuracy. They are our internal scorecards.
 
 ## 14. Glossary (for speaker notes)

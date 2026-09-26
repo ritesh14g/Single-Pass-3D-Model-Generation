@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Single-Pass 3D Viewer</title>
+<!--
+  PS-17 web viewer (spec §8.4). Built per run by src/viewer/package.py, which inlines
+  scene.json below and copies vendor/ (three.js r169, MIT). Serve the folder over HTTP:
+      python -m src.cli view <run_dir>
+  Priorities: 1 orbit, 2 confidence overlay, 3 gaps, 4 measurement, 5 stats.
+-->
+<style>
+  :root {
+    --bg: #eef1f4; --panel: rgba(255,255,255,0.94); --text: #1f2328; --muted: #57606a;
+    --border: #d0d7de; --accent: #0969da; --accent-text: #ffffff; --warn: #9a6700; --bad: #cf222e;
+    --good: #1a7f37; --shadow: 0 4px 18px rgba(0,0,0,0.12); --canvas: #dfe4ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117; --panel: rgba(22,27,34,0.94); --text: #e6edf3; --muted: #8d96a0;
+      --border: #30363d; --accent: #2f81f7; --accent-text: #ffffff; --warn: #d29922; --bad: #f85149;
+      --good: #3fb950; --shadow: 0 4px 18px rgba(0,0,0,0.5); --canvas: #161b22;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --panel: rgba(22,27,34,0.94); --text: #e6edf3; --muted: #8d96a0;
+    --border: #30363d; --accent: #2f81f7; --accent-text: #ffffff; --warn: #d29922; --bad: #f85149;
+    --good: #3fb950; --shadow: 0 4px 18px rgba(0,0,0,0.5); --canvas: #161b22;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #view { position: fixed; inset: 0; }
+  #view canvas { display: block; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow); backdrop-filter: blur(6px); }
+  #toolbar { top: 12px; left: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+    max-width: calc(100vw - 24px); }
+  #toolbar h1 { font-size: 15px; margin: 0; font-weight: 600; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 360px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; border-right: 1px solid var(--border); border-radius: 0; }
+  .seg button:last-child { border-right: 0; }
+  button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 10px; cursor: pointer; min-height: 32px; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #legend { bottom: 12px; left: 12px; padding: 8px 12px; font-size: 13px; max-width: min(420px, calc(100vw - 24px)); }
+  .ramp { height: 10px; border-radius: 3px; margin: 4px 0 2px;
+    background: linear-gradient(90deg, rgb(215,48,39), rgb(254,224,68), rgb(26,152,80)); }
+  .ramp-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  .sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  #stats { top: 12px; right: 12px; width: 300px; max-height: calc(100vh - 24px); overflow: auto; padding: 0; }
+  #stats summary { padding: 10px 12px; cursor: pointer; font-weight: 600; list-style: none; }
+  #stats summary::-webkit-details-marker { display: none; }
+  #stats .body { padding: 0 12px 12px; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .section h3 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 4px 0; }
+  #measure { top: 150px; left: 12px; width: 300px; padding: 10px 12px; display: none; max-height: calc(100vh - 300px); overflow: auto; }
+  #measure.show { display: block; }
+  .m-item { padding: 6px 0; border-top: 1px solid var(--border); }
+  .m-item:first-of-type { border-top: 0; }
+  .m-dist { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .flag { color: var(--warn); font-size: 12px; }
+  .flag.bad { color: var(--bad); }
+  #hint { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); padding: 16px 20px;
+    text-align: center; max-width: min(520px, calc(100vw - 32px)); }
+  #hint code { background: var(--canvas); padding: 1px 5px; border-radius: 4px; }
+  .progress { height: 6px; background: var(--border); border-radius: 3px; margin-top: 10px; overflow: hidden; }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .label3d { position: fixed; pointer-events: none; font-size: 12px; font-weight: 600; padding: 2px 6px;
+    border-radius: 5px; background: var(--panel); border: 1px solid var(--border); transform: translate(-50%, -130%);
+    white-space: nowrap; font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) {
+    #stats { width: auto; left: 12px; top: auto; bottom: 12px; max-height: 40vh; }
+    #stats:not([open]) { left: auto; }
+    #legend { display: none; }
+    #measure { width: auto; right: 12px; top: 150px; max-height: 30vh; }
+    #toolbar h1 { max-width: calc(100vw - 60px); }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<div id="view"></div>
+
+<div id="toolbar" class="panel">
+  <h1 id="title">3D model</h1>
+  <div class="row">
+    <div class="seg" role="group" aria-label="Colour by">
+      <button id="mode-texture" data-mode="texture">Photo</button>
+      <button id="mode-confidence" data-mode="confidence">Confidence</button>
+      <button id="mode-zones" data-mode="zones">Zones</button>
+    </div>
+  </div>
+  <div class="row">
+    <button id="btn-gaps" title="Outline regions no camera observed (Zone 3)">Gaps</button>
+    <button id="btn-measure" title="Click two points on the model">Measure</button>
+    <button id="btn-reset" title="Frame the whole model">Reset view</button>
+    <button id="btn-shot" title="Save the current view as PNG">Screenshot</button>
+    <button id="btn-theme" title="Light / dark">◐</button>
+  </div>
+</div>
+
+<div id="legend" class="panel"></div>
+
+<details id="stats" class="panel" open>
+  <summary>Run statistics</summary>
+  <div class="body" id="stats-body"></div>
+</details>
+
+<div id="measure" class="panel">
+  <div class="row" style="justify-content:space-between">
+    <strong>Measurements</strong>
+    <button id="btn-clear" style="min-height:26px;padding:2px 8px">Clear</button>
+  </div>
+  <div id="measure-help" class="note">Click a first point, then a second. Double-click sets the orbit centre.</div>
+  <div id="measure-list"></div>
+</div>
+
+<div id="hint" class="panel">Loading model…<div class="progress"><div id="progress"></div></div></div>
+
+<script id="scene-data" type="application/json">/*__SCENE_JSON__*/null</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const $ = (id) => document.getElementById(id);
+const hint = $('hint');
+const fmt = (v, d = 1, unit = '') => (v === null || v === undefined || Number.isNaN(v)) ? '—'
+  : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 })}${unit}`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---- theme --------------------------------------------------------------------------
+try { const t = localStorage.getItem('ps17-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+$('btn-theme').onclick = () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('ps17-theme', next); } catch (e) {}
+  scene.background = new THREE.Color(cssVar('--canvas'));
+};
+
+// ---- scene description (inlined by the packager, or fetched) ------------------------
+let S = JSON.parse($('scene-data').textContent);
+if (!S) {
+  try { S = await (await fetch('scene.json')).json(); } catch (e) { S = null; }
+}
+if (!S) { hint.innerHTML = 'No <code>scene.json</code>. Build the viewer with <code>python -m src.cli view &lt;run&gt;</code>.'; throw new Error('no scene'); }
+$('title').textContent = S.title || '3D model';
+document.title = `${S.title || 'Model'} · Single-Pass 3D Viewer`;
+
+// ---- three.js basics ----------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+$('view').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(cssVar('--canvas'));
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 1e6);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.12; controls.screenSpacePanning = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(0.4, 1, 0.3); scene.add(sun);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight);
+});
+
+// local Z-up (east, north, up) <-> three Y-up
+const toThree = (x, y, z) => new THREE.Vector3(x, z, -y);
+const toLocal = (v) => [v.x, -v.z, v.y];
+const offset = S.offset || [0, 0, 0];
+
+// ---- colour layers -------------------------------------------------------------------
+function confColour(c) {           // red -> yellow -> green, grey when unknown
+  if (c < 0) return [0.55, 0.55, 0.55];
+  const stops = [[215, 48, 39], [254, 224, 68], [26, 152, 80]];
+  const t = Math.min(Math.max(c, 0), 1) * 2, i = Math.min(Math.floor(t), 1), f = t - i;
+  return stops[i].map((a, k) => (a + (stops[i + 1][k] - a) * f) / 255);
+}
+const zoneRGB = {};
+for (const [k, v] of Object.entries(S.legend.zone_colours || {})) zoneRGB[k] = v.map((c) => c / 255);
+
+let mesh = null, texMaterial = null, layerMaterial = null, mode = null;
+const colourCache = {};
+function layerColours(kind) {
+  if (colourCache[kind]) return colourCache[kind];
+  const g = mesh.geometry, n = g.attributes.position.count, out = new Float32Array(n * 3);
+  const src = kind === 'confidence' ? g.attributes._confidence : g.attributes._zone;
+  for (let i = 0; i < n; i++) {
+    const v = src.getX(i);
+    const rgb = kind === 'confidence' ? confColour(v) : (zoneRGB[String(Math.round(v))] || [0.55, 0.55, 0.55]);
+    const lin = rgb.map((c) => Math.pow(c, 2.2));     // vertex colours are linear
+    out[3 * i] = lin[0]; out[3 * i + 1] = lin[1]; out[3 * i + 2] = lin[2];
+  }
+  return (colourCache[kind] = new THREE.BufferAttribute(out, 3));
+}
+function setMode(next) {
+  if (!mesh || !S.layers[next]) return;
+  mode = next;
+  for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
+  if (mode === 'texture') { mesh.material = texMaterial; }
+  else {
+    if (!mesh.geometry.attributes.normal) mesh.geometry.computeVertexNormals();
+    mesh.geometry.setAttribute('color', layerColours(mode));
+    mesh.material = layerMaterial;
+  }
+  renderLegend();
+}
+for (const b of document.querySelectorAll('[data-mode]')) {
+  b.disabled = !S.layers[b.dataset.mode];
+  if (b.disabled) b.title = 'Not available for this run';
+  b.onclick = () => setMode(b.dataset.mode);
+}
+
+function renderLegend() {
+  const L = $('legend');
+  if (mode === 'confidence') {
+    L.innerHTML = `<strong>Confidence</strong><div class="ramp"></div>
+      <div class="ramp-labels"><span>1 view</span><span>full</span></div>
+      <div class="note">${esc(S.legend.confidence || '')}. Grey: no measured point nearby.</div>`;
+  } else if (mode === 'zones') {
+    L.innerHTML = '<strong>Observation zones</strong>' + ['1', '2', '3'].map((k) => {
+      const c = (S.legend.zone_colours[k] || [128, 128, 128]).join(',');
+      return `<div><span class="sw" style="background:rgb(${c})"></span>${esc(S.legend.zones[k])}</div>`;
+    }).join('');
+  } else {
+    L.innerHTML = '<strong>Photo texture</strong><div class="note">Drag to orbit · right-drag to pan · wheel to zoom · double-click to re-centre</div>';
+  }
+  if (gapGroup && gapGroup.visible) {
+    L.innerHTML += `<div class="note"><span class="sw" style="background:rgb(${(S.legend.zone_colours['3'] || [207, 34, 46]).join(',')})"></span>Gap outlines: ground no camera observed (never filled)</div>`;
+  }
+}
+
+// ---- stats panel -----------------------------------------------------------------------
+function renderStats() {
+  const s = S.stats || {};
+  const rows = (pairs) => `<div class="kv">${pairs.filter(Boolean).map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join('')}</div>`;
+  let html = rows([
+    ['Video', esc(s.video || '—')],
+    ['Preset', esc(s.preset || '—')],
+    ['Processing time', s.total_seconds != null ? `${fmt(s.total_seconds / 60, 1)} min` : '—'],
+    s.budget_seconds ? ['Budget', `${fmt(s.budget_seconds / 60, 0)} min`] : null,
+  ]);
+  if (s.stage_seconds && Object.keys(s.stage_seconds).length) {
+    html += `<div class="section"><h3>Time per stage</h3>${rows(Object.entries(s.stage_seconds).map(([k, v]) => [k, `${fmt(v, 0)} s`]))}</div>`;
+  }
+  const z = s.zone_pct;
+  html += `<div class="section"><h3>Coverage</h3>${rows([
+    ['Visible ground reconstructed', fmt(s.coverage_pct, 1, '%')],
+    s.gaps && s.gaps.count != null ? ['Gaps (never observed)', `${fmt(s.gaps.count, 0)} · ${fmt(s.gaps.total_m2, 0)} m²`] : null,
+  ])}`;
+  if (z && z[1] != null) {
+    const zc = S.legend.zone_colours;
+    html += `<div class="bar">${[1, 2, 3].map((k) => `<div title="Zone ${k}: ${fmt(z[k], 1)}%" style="width:${z[k] || 0}%;background:rgb(${zc[k].join(',')})"></div>`).join('')}</div>
+      <div class="kv">${[1, 2, 3].map((k) => `<div class="k">Zone ${k}</div><div class="v">${fmt(z[k], 1, '%')}</div>`).join('')}</div>`;
+  }
+  html += '</div>';
+  html += `<div class="section"><h3>Accuracy</h3>${rows([
+    ['Cameras vs GPS (RMS)', fmt(s.cam_vs_gps_rms_m, 2, ' m')],
+    ['  inliers only', fmt(s.cam_vs_gps_rms_inliers_m, 2, ' m')],
+    ['  horizontal / vertical', `${fmt(s.horizontal_rms_m, 2)} / ${fmt(s.vertical_rms_m, 2)} m`],
+    s.gcp_check_rms_m != null ? ['GCP check points (RMS)', fmt(s.gcp_check_rms_m, 2, ' m')] : null,
+    s.holdout_error_median_m != null ? ['Zone 2 fill, held-out error', fmt(s.holdout_error_median_m, 2, ' m')] : null,
+  ])}<div class="note">${esc(s.accuracy_note || '')}</div></div>`;
+  html += `<div class="section"><h3>Georeferencing</h3>${rows([
+    ['CRS', esc(s.crs || 'not georeferenced')],
+    ['Heights', esc(s.vertical_datum || '—')],
+    ['Formats', esc((s.formats || []).join(', ') || '—')],
+    (s.formats_failed || []).length ? ['Not written', esc(s.formats_failed.join(', '))] : null,
+    ['Mesh', `${fmt(S.mesh.faces, 0)} faces`],
+  ])}</div>`;
+  if ((S.notes || []).length) html += `<div class="section note">${S.notes.map(esc).join('<br>')}</div>`;
+  $('stats-body').innerHTML = html;
+}
+renderStats();
+
+// ---- gaps -------------------------------------------------------------------------------
+let gapGroup = null;
+function buildGaps() {
+  gapGroup = new THREE.Group(); gapGroup.visible = false; gapGroup.renderOrder = 10;
+  const colour = new THREE.Color(...(zoneRGB['3'] || [0.8, 0.13, 0.18]));
+  const mat = new THREE.LineBasicMaterial({ color: colour, depthTest: false, transparent: true, opacity: 0.95 });
+  for (const gap of S.gaps || []) {
+    for (const ring of gap.rings) {
+      const pts = ring.map(([x, y, z]) => toThree(x, y, z));
+      const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), mat);
+      line.renderOrder = 10; gapGroup.add(line);
+    }
+  }
+  scene.add(gapGroup);
+  const btn = $('btn-gaps');
+  btn.disabled = !(S.gaps || []).length;
+  if (btn.disabled) btn.title = 'No gaps recorded for this run (Stage 3 did not run, or nothing was missed)';
+  btn.onclick = () => { gapGroup.visible = !gapGroup.visible; btn.classList.toggle('on', gapGroup.visible); renderLegend(); };
+}
+
+// ---- camera framing -----------------------------------------------------------------------
+let home = null;
+function frame() {
+  const box = new THREE.Box3().setFromObject(mesh), size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.length() / 2, 1);
+  const vHalf = THREE.MathUtils.degToRad(camera.fov / 2), hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+  const dist = radius / Math.tan(Math.min(vHalf, hHalf)) * 0.85;
+  camera.near = Math.max(radius / 5000, 0.05); camera.far = radius * 50; camera.updateProjectionMatrix();
+  camera.position.copy(centre).add(new THREE.Vector3(0, dist * 0.8, dist * 0.6));
+  controls.target.copy(centre); controls.update();
+  home = { pos: camera.position.clone(), target: centre.clone(), radius };
+}
+$('btn-reset').onclick = () => { if (home) { camera.position.copy(home.pos); controls.target.copy(home.target); controls.update(); } };
+$('btn-shot').onclick = () => {
+  renderer.render(scene, camera);
+  const a = document.createElement('a'); a.download = `${(S.title || 'model').replace(/[^\w.-]+/g, '_')}_${mode}.png`;
+  a.href = renderer.domElement.toDataURL('image/png'); a.click();
+};
+
+// ---- measurement ----------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let measuring = false, pending = null;
+const measurements = [];
+const measureGroup = new THREE.Group(); measureGroup.renderOrder = 20; scene.add(measureGroup);
+const labels = [];
+$('btn-measure').onclick = () => {
+  measuring = !measuring; $('btn-measure').classList.toggle('on', measuring);
+  $('measure').classList.toggle('show', measuring || measurements.length > 0);
+  renderer.domElement.style.cursor = measuring ? 'crosshair' : '';
+};
+$('btn-clear').onclick = () => {
+  measurements.length = 0; pending = null; measureGroup.clear();
+  for (const l of labels) l.el.remove(); labels.length = 0; renderMeasurements();
+};
+
+function pick(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(mesh, false)[0];
+  if (!hit) return null;
+  // the layers of the nearest corner of the hit face
+  const g = mesh.geometry, f = hit.face, P = g.attributes.position, p = new THREE.Vector3();
+  let best = f.a, bestD = Infinity;
+  for (const i of [f.a, f.b, f.c]) { p.fromBufferAttribute(P, i); const d = p.distanceToSquared(hit.point); if (d < bestD) { bestD = d; best = i; } }
+  return { point: hit.point.clone(), zone: Math.round(g.attributes._zone.getX(best)), confidence: g.attributes._confidence.getX(best) };
+}
+function marker(p) {
+  const s = new THREE.Mesh(new THREE.SphereGeometry(home.radius / 250, 12, 8),
+    new THREE.MeshBasicMaterial({ color: cssVar('--accent'), depthTest: false }));
+  s.position.copy(p); s.renderOrder = 21; measureGroup.add(s);
+}
+function addLabel(pos, text) { const el = document.createElement('div'); el.className = 'label3d'; el.textContent = text; document.body.appendChild(el); labels.push({ el, pos }); }
+function flags(end) {
+  const out = [];
+  if (end.zone === 3) out.push(['bad', 'on inferred surface (zone 3): not measured']);
+  else if (end.zone === 2) out.push(['', 'on thinly observed surface (zone 2)']);
+  if (end.confidence >= 0 && end.confidence < 0.4) out.push(['', `low confidence (${fmt(end.confidence, 2)})`]);
+  if (end.confidence < 0) out.push(['', 'no measured point nearby']);
+  return out;
+}
+function renderMeasurements() {
+  const list = $('measure-list');
+  list.innerHTML = measurements.map((m, i) => {
+    const a = toLocal(m.a.point), b = toLocal(m.b.point);
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    const d3 = Math.hypot(dx, dy, dz), dh = Math.hypot(dx, dy);
+    const map = (l) => l.map((v, k) => fmt(v + (offset[k] || 0), 2)).join(', ');
+    const fl = [...flags(m.a).map((f) => [f[0], 'A ' + f[1]]), ...flags(m.b).map((f) => [f[0], 'B ' + f[1]])];
+    return `<div class="m-item"><div class="m-dist">${fmt(d3, 2)} m</div>
+      <div class="kv"><div class="k">Horizontal</div><div class="v">${fmt(dh, 2)} m</div>
+      <div class="k">Height difference</div><div class="v">${fmt(dz, 2)} m</div>
+      <div class="k">Slope</div><div class="v">${dh > 0 ? fmt(Math.atan2(Math.abs(dz), dh) * 180 / Math.PI, 1, '°') : '—'}</div></div>
+      ${S.georeferenced ? `<div class="note">A ${map(a)}<br>B ${map(b)}<br>${esc(S.crs)}</div>` : '<div class="note">Not georeferenced: model units</div>'}
+      ${fl.map(([c, t]) => `<div class="flag ${c}">⚠ ${esc(t)}</div>`).join('')}</div>`;
+  }).reverse().join('');
+  $('measure-help').style.display = measurements.length ? 'none' : '';
+}
+let down = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!measuring || !mesh || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || e.button !== 0) return;
+  const end = pick(e); if (!end) return;
+  marker(end.point);
+  if (!pending) { pending = end; return; }
+  const m = { a: pending, b: end }; pending = null; measurements.push(m);
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([m.a.point, m.b.point]),
+    new THREE.LineBasicMaterial({ color: cssVar('--accent'), depthTest: false }));
+  line.renderOrder = 20; measureGroup.add(line);
+  addLabel(m.a.point.clone().add(m.b.point).multiplyScalar(0.5), `${fmt(m.a.point.distanceTo(m.b.point), 2)} m`);
+  renderMeasurements();
+});
+renderer.domElement.addEventListener('dblclick', (e) => {
+  if (!mesh) return; const end = pick(e); if (end) { controls.target.copy(end.point); controls.update(); }
+});
+
+// ---- load ---------------------------------------------------------------------------------
+const loader = new GLTFLoader();
+loader.load('scene.glb', (gltf) => {
+  gltf.scene.traverse((o) => { if (o.isMesh && !mesh) mesh = o; });
+  scene.add(gltf.scene);
+  texMaterial = mesh.material;
+  layerMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  frame(); buildGaps();
+  // ?mode=confidence|zones|texture&gaps=1 opens a given view (links for the deck and the Lab)
+  const q = new URLSearchParams(location.search);
+  const first = [q.get('mode'), 'texture', 'confidence', 'zones'].find((m) => m && S.layers[m]);
+  setMode(first || 'texture');
+  if (q.get('gaps') === '1' && !$('btn-gaps').disabled) $('btn-gaps').click();
+  if (!mode) { mesh.material = new THREE.MeshLambertMaterial({ color: 0xbbbbbb, side: THREE.DoubleSide }); renderLegend(); }
+  hint.remove();
+}, (ev) => {
+  if (ev.total) $('progress').style.width = `${(100 * ev.loaded / ev.total).toFixed(0)}%`;
+}, (err) => {
+  hint.innerHTML = location.protocol === 'file:'
+    ? 'The model cannot be loaded from a file:// page. Serve it with <code>python -m src.cli view &lt;run&gt;</code>.'
+    : `Could not load scene.glb: ${esc(err.message || err)}`;
+});
+
+const tmp = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+  for (const l of labels) {
+    tmp.copy(l.pos).project(camera);
+    const vis = tmp.z < 1;
+    l.el.style.display = vis ? '' : 'none';
+    l.el.style.left = `${(tmp.x + 1) / 2 * innerWidth}px`; l.el.style.top = `${(1 - tmp.y) / 2 * innerHeight}px`;
+  }
+});
+</script>
+</body>
+</html>

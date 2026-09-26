@@ -61,6 +61,8 @@ from src.export.stage import run_export
 from src.geo.stage import run_geo
 from src.preflight import InputRejected
 from src.fusion.stage import run_fusion
+from src.qa.degrade import inject_gps_noise
+from src.qa.stage import run_qa
 from src.recon.track_a_colmap import run_track_a
 
 log = get_logger(__name__)
@@ -80,6 +82,8 @@ class RunInputs:
     telemetry: list[Path] = field(default_factory=list)
     # Run even when the input check finds a blocking problem.
     accept_input: bool = False
+    # Independent reference surface (DSM GeoTIFF or LAS) for Stage 6 accuracy.
+    reference: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +93,7 @@ class RunInputs:
             "gcp": str(self.gcp) if self.gcp else None,
             "telemetry": [str(p) for p in self.telemetry],
             "accept_input": self.accept_input,
+            "reference": str(self.reference) if self.reference else None,
         }
 
 
@@ -169,6 +174,11 @@ def run_ingest(
         inputs.video, cfg, srt_path=inputs.srt, csv_path=inputs.csv, telemetry_paths=inputs.telemetry,
         frame_timestamps=selection.timestamps, video_duration_s=metadata.duration_s,
     )
+    # §8.5 degradation bench only (qa.inject.kind = gps_noise); never in a normal run.
+    noisy, injected = inject_gps_noise(telemetry.frame, cfg)
+    if injected:
+        telemetry.frame = noisy
+        telemetry.notes.append(f"QA injection: GPS noise {injected}")
     # The input check measured the telemetry-to-video offset from image motion vs GPS speed
     # (Stage 0). Applying it here means every later stage sees telemetry on the video's clock.
     offset = float(telemetry_offset_s or 0.0)
@@ -762,11 +772,22 @@ def _run_pipeline(inputs: RunInputs, cfg: Config, run_dir: Path, stages: list[st
                 st.warn(f"export: {fmt} not written ({reason})")
         result.completed_stages.append("export")
 
-    # -- QA ----------------------------------------------------------------------
-    # These stages are wired but not yet implemented; each records why it did
-    # not run so the manifest and QA report stay truthful about what produced
-    # the outputs rather than silently showing fewer stages.
-    implemented = {"preflight", "ingest", "condition", "track_a", "geo", "fusion", "export"}
+    # -- Stage 6: viewer + QA report (§8.4-8.5) ------------------------------------
+    if should("qa"):
+        if manifest.stages["export"].status is not StageStatus.DONE:
+            raise RuntimeError("the viewer and QA report need a completed export stage")
+        with budget.stage("qa") as sb, manifest.stage("qa") as st:  # noqa: F841
+            outcome = run_qa(run_dir, st.dir, cfg, reference=inputs.reference)
+            for key, path in outcome["artifacts"].items():
+                st.add_artifact(key, path)
+            st.add_metrics(outcome["metrics"])
+            for part, reason in outcome["metrics"]["failures"].items():
+                st.warn(f"qa: {part} not written ({reason})")
+        result.completed_stages.append("qa")
+
+    # Stages wired but not implemented record why they did not run, so the manifest and
+    # QA report stay truthful about what produced the outputs.
+    implemented = {"preflight", "ingest", "condition", "track_a", "geo", "fusion", "export", "qa"}
     for spec in STAGES:
         for name in spec.manifest_stages:
             if name in result.completed_stages or manifest.stages[name].status is StageStatus.DONE:

@@ -216,7 +216,15 @@ def reader_options(cfg) -> dict:
         "nvdec_gpu_id": int(video.get("nvdec_gpu_id", 0)),
         "nvdec_codecs": list(video.get("nvdec_codecs") or []) or None,
         "nvdec_allow_ts": bool(video.get("nvdec_allow_ts", False)),
+        "degrade": _qa_degrader(cfg),
     }
+
+
+def _qa_degrader(cfg):
+    """The §8.5 degradation hook when ``qa.inject`` asks for one (never in a normal run)."""
+    from src.qa.degrade import frame_degrader
+
+    return frame_degrader(cfg)
 
 
 # PyNvVideoCodec missing is a fact about the install, not the video: say it once.
@@ -238,8 +246,12 @@ class VideoReader:
         nvdec_gpu_id: int = 0,
         nvdec_codecs: Sequence[str] | None = None,
         nvdec_allow_ts: bool = False,
+        degrade=None,
     ):
         self.path = Path(path)
+        # QA only (src/qa/degrade.py): degrade(image, frame index) -> image, applied to every
+        # decoded frame so ingest and conditioning see the same degraded video.
+        self._degrade = degrade
         if not self.path.is_file():
             raise FileNotFoundError(f"video not found: {self.path}")
         if self.path.suffix.lower() not in SUPPORTED_SUFFIXES:
@@ -428,7 +440,9 @@ class VideoReader:
         finally:
             self.decode_s += time.perf_counter() - started
 
-    def _postprocess(self, image: np.ndarray) -> np.ndarray:
+    def _postprocess(self, image: np.ndarray, index: int = 0) -> np.ndarray:
+        if self._degrade is not None:
+            image = self._degrade(image, index)
         if self.max_width and image.shape[1] > self.max_width:
             scale = self.max_width / image.shape[1]
             image = cv2.resize(
@@ -464,7 +478,7 @@ class VideoReader:
                 break
             timestamp = self._timestamp(index)
             self._position = index + 1
-            yield Frame(index=index, timestamp_s=timestamp, image=self._postprocess(image))
+            yield Frame(index=index, timestamp_s=timestamp, image=self._postprocess(image, index))
             yielded += 1
             if max_frames is not None and yielded >= max_frames:
                 return
@@ -511,7 +525,7 @@ class VideoReader:
                 continue
             timestamp = self._timestamp(index)
             self._position = index + 1
-            yield Frame(index=index, timestamp_s=timestamp, image=self._postprocess(image))
+            yield Frame(index=index, timestamp_s=timestamp, image=self._postprocess(image, index))
 
     def read_one(self, index: int) -> Frame | None:
         for frame in self.read_indices([index]):

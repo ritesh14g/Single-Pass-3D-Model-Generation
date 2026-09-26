@@ -542,7 +542,7 @@ def table_from_frame(
 
     out = pd.DataFrame(index=frame.index)
     out["t"], wall = _csv_time_column(frame, resolved.get("t"), path)
-    for canonical in ("lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm"):
+    for canonical in ("lat", "lon", "alt_gps", "alt_baro", "roll", "pitch", "yaw", "focal_mm", "hfov_deg"):
         if canonical in resolved:
             out[canonical] = pd.to_numeric(frame[resolved[canonical]], errors="coerce")
     if wall is not None:

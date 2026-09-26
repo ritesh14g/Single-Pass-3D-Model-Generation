@@ -60,8 +60,8 @@ STAGE_ORDER = [
 STAGE_CONFIG_DEPS: dict[str, list[str]] = {
     "preflight": ["preflight", "ingest.telemetry"],
     # The input check's measured telemetry offset feeds ingest, so ingest is stale when it changes.
-    "ingest": ["ingest", "preflight"],
-    "condition": ["condition"],
+    "ingest": ["ingest", "preflight", "qa.inject"],
+    "condition": ["condition", "qa.inject"],
     "track_b": ["recon.track_b", "device"],
     "refine_ba": ["recon.refine_ba"],
     # The hybrid runs inside track_a, so the Track B model and the run mode change its output too.

@@ -15,6 +15,8 @@ data/box/
 data/box_upload/
 # terrain tiles fetched by the altitude-datum check (src/geo/vertical.py)
 data/cache/
+# independent reference surfaces (lidar, surveys) for Stage 6 accuracy
+data/reference/
 !data/**/.gitkeep
 
 # model weights

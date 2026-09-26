@@ -96,8 +96,10 @@ STAGES: tuple[StageSpec, ...] = (
     ),
     StageSpec(
         number=6, key="viewer_qa", title="Viewer & QA", spec_ref="§8.4-8.5",
-        summary="Web viewer with confidence overlay, degradation harness, single-pass benchmark.",
-        status=StageStatus.PLANNED, execution_order=6,
+        summary="Web viewer (three.js: photo / confidence / zone overlays, Zone 3 gap outlines, point-to-point "
+                "measurement with zone warnings, run stats) and the QA report (every stage's scorecard, time vs "
+                "budget, accuracy per zone against a reference surface, degradation and single-pass benchmarks).",
+        status=StageStatus.BUILT, execution_order=6,
         manifest_stages=("qa",), budget_keys=(),
     ),
 )

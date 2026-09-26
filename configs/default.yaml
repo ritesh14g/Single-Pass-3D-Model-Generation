@@ -209,6 +209,8 @@ ingest:
       pitch: [pitch, gimbalpitch, osd_pitch]
       yaw: [yaw, heading, gimbalyaw, osd_yaw]
       focal_mm: [focallength, focal, focal_mm]
+      # Horizontal field of view in degrees (the single-pass strip CSV carries KLV's; §8.5).
+      hfov_deg: [hfov_deg, hfov, horizontal_fov]
       # The takeoff (home) point, exact header match only. DJI_0047: HOME.height -19.91 m is the
       # ellipsoidal height of the ground there (terrain 7 m + geoid -26.3 m; S5-1).
       home_lat: [HOME.latitude, home_lat, home_latitude]
@@ -935,14 +937,88 @@ qa:
     # GCP check points (never fitted): RMS against surveyed coordinates, the PS's <= 1 m (S5-3).
     gcp_check_rms_pass_m: 1.0
     gcp_check_rms_warn_m: 3.0
+  # Stage 6a web viewer (§8.4), written by src/viewer/package.py into <run>/qa/viewer/.
+  viewer:
+    enabled: true
+    # WebGL's guaranteed texture size is 4096; 8192 works on every desktop GPU we tried.
+    max_texture_px: 8192
+    texture_jpeg_quality: 90
+    # A mesh vertex takes the confidence/zone of the nearest exported point within this distance;
+    # farther = unknown confidence (grey) / zone 3 (no measured support).
+    layer_max_distance_m: 2.0
+    # Gap outline vertices drawn, largest gap first (Esri laptop run: 633 gaps, 28k vertices;
+    # its largest gap alone has 1,052 rings).
+    max_gap_vertices: 200000
+    # `python -m src.cli view` serves the folder on this port (0 = any free port).
+    port: 8765
+  # Stage 6 scorecard bands, read by src/qa/stage6_eval.py.
+  stage6:
+    scene_mb_warn: 150.0
+    # Zone 1 point heights vs the reference surface; PS spatial accuracy <= 1 m.
+    zone1_rms_pass_m: 1.0
+    zone1_rms_warn_m: 3.0
+    # Horizontal placement vs the reference (phase correlation of height maps).
+    shift_pass_m: 1.0
+    shift_warn_m: 3.0
+    # §9: 15 min for a 10-minute video; the run's time is projected linearly to 10 minutes.
+    projected_budget_s: 900.0
+  # Independent reference surface for accuracy (§8.5): a DSM GeoTIFF or LAS/LAZ in any CRS
+  # (lidar, a survey). The CLI's --reference wins over this. null = agreement with GPS only.
+  reference:
+    file: null
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]
+    # Height maps are high-passed at this scale before the horizontal-shift correlation.
+    highpass_m: 20.0
+    # Points sampled against the reference (all of them below this).
+    max_points: 2000000
+    # Reference LAS classes left out of its surfaces (ASPRS 7 low noise, 18 high noise).
+    reference_exclude_classes: [7, 18]
+    # Local (relative) accuracy: each tile's 3D offset against the reference is found by NCC of
+    # height maps high-passed at local_highpass_m, searched within local_max_shift_m, and removed.
+    local_tile_m: 100.0
+    local_max_shift_m: 20.0
+    local_highpass_m: 10.0
+  # §8.5 degradation bench (src/qa/degrade.py; `python -m src.cli bench degrade`). Every case
+  # sets qa.inject; `qa.inject.kind: none` in every normal run.
+  inject:
+    kind: none
+    severity: moderate
+    seed: 0
   degrade:
     severities: [light, moderate, severe]
     types: [motion_blur, compression, low_light, shadow, gps_noise, dynamic_objects]
+    # Stages each case runs (no input check: its offset would come from clean frames).
+    stages: [ingest, condition, track_a, geo, fusion, export]
+    # The parameter per kind and severity:
+    #   motion_blur: kernel length in px at 1920 px width     compression: JPEG quality
+    #   low_light: brightness gain (gamma and noise follow)     shadow: frame share in shadow
+    #   gps_noise: [sigma m, gross-outlier rate]                dynamic_objects: moving vehicles
+    levels:
+      motion_blur: {light: 7, moderate: 15, severe: 31}
+      compression: {light: 40, moderate: 20, severe: 8}
+      low_light: {light: 0.6, moderate: 0.35, severe: 0.2}
+      shadow: {light: 0.15, moderate: 0.3, severe: 0.5}
+      gps_noise: {light: [1.0, 0.0], moderate: [3.0, 0.02], severe: [5.0, 0.05]}
+      dynamic_objects: {light: 3, moderate: 8, severe: 16}
+    gps_outlier_m: 30.0
+  # §8.5 single-pass simulation (src/qa/singlepass.py; `python -m src.cli bench single-pass`).
+  single_pass:
+    # A strip: moving faster than min_speed_ms, heading within turn_deg of its start
+    # (measured over window_s), at least min_length_m long.
+    window_s: 4.0
+    turn_deg: 30.0
+    min_speed_ms: 1.0
+    min_length_m: 100.0
+    # Two strips count as a survey when parallel and this far apart sideways.
+    min_spacing_m: 20.0
+    max_spacing_m: 400.0
+    stages: [ingest, condition, track_a, geo, fusion, export]
   report:
     formats: [json, html]
+    # Benchmark folders (src.cli bench) whose degradation.json / single_pass.json go in the report.
+    benchmark_dirs: []
 
 # ---------------------------------------------------------------------------
 # §9 — Performance budget. Enforced in code, not aspirational.

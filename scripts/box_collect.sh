@@ -3,20 +3,21 @@
 #
 #   bash scripts/box_collect.sh                 # code + evidence (small, a few MB)
 #   bash scripts/box_collect.sh esri_full2      # ... plus that run's six output formats
-#   bash scripts/box_collect.sh esri_full2 all  # ... plus every run's exports (large)
+#   bash scripts/box_collect.sh esri_s6 dji47_s6  # ... plus those runs' outputs (several names allowed)
+#   bash scripts/box_collect.sh all               # ... plus every run's exports (large)
 #
 # Always collected (small):
 #   * any work not yet pushed: a patch of uncommitted changes and untracked files
 #   * every run's manifest, metrics, scorecards, logs, telemetry and frame tables
 #   * each run's sparse reconstruction + georeferencing, so Stage 5 can be re-run without a GPU
 #   * what the machine was: GPU, CPU, memory, driver, CUDA, installed packages, tool versions
-# Optionally (named run): that run's export/ folder — OBJ/PLY/LAS/GeoTIFF/glb/FBX (~400 MB on Esri).
+# Optionally (named runs): export/ (OBJ/PLY/LAS/GeoTIFF/glb/FBX, ~400 MB on Esri) and qa/ (viewer + report).
+# Always: degradation / single-pass benchmark tables (data/interim/bench_*/*.json|md), small.
 #
 # Nothing is deleted and nothing is uploaded; the tarball lands in the home directory.
 set -uo pipefail
 
-RUN_EXPORTS=${1:-}
-ALL_EXPORTS=${2:-}
+RUN_NAMES=("$@")
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO" || exit 1
 STAMP=$(date +%Y%m%d_%H%M)
@@ -150,13 +151,21 @@ copy_exports() {
   say "   $name/export: ${size} MB"
   mkdir -p "$STAGE/runs/$name"
   cp -r "$src" "$STAGE/runs/$name/"
+  # Stage 6: the viewer package and the QA report
+  [ -d "data/interim/$name/qa" ] && cp -r "data/interim/$name/qa" "$STAGE/runs/$name/"
 }
-if [ -n "$RUN_EXPORTS" ]; then
+say "benchmarks: degradation / single-pass tables"
+for f in data/interim/bench_*/degradation.json data/interim/bench_*/degradation.md data/interim/*/single_pass.json; do
+  [ -f "$f" ] || continue
+  mkdir -p "$STAGE/runs/$(basename "$(dirname "$f")")"
+  cp "$f" "$STAGE/runs/$(basename "$(dirname "$f")")/"
+done
+if [ ${#RUN_NAMES[@]} -gt 0 ]; then
   say "exports: the finished 3-D outputs"
-  if [ "$ALL_EXPORTS" = "all" ]; then
+  if [ "${RUN_NAMES[0]}" = "all" ]; then
     for RUNDIR in data/interim/*/; do copy_exports "$(basename "$RUNDIR")"; done
   else
-    copy_exports "$RUN_EXPORTS"
+    for name in "${RUN_NAMES[@]}"; do copy_exports "$name"; done
   fi
 else
   say "exports: skipped (pass a run name to include them, e.g. 'bash scripts/box_collect.sh esri_full2')"

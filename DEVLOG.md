@@ -75,7 +75,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 3 | Occluded surfaces | §6 | 🟢 **BUILT** | `ui/stages/stage3_occlusion.py` | `src/qa/stage3_eval.py` | **Runs after geo, before export** (works in metres). Voxel zones from confirming views + triangulation angle + z-buffer visibility; Zone 3 gaps → `gaps.geojson`; Zone 2 filled from VGGT depth anchored to Zone 1 (RANSAC scale/shift, depth-relative residual gate, never inside a Zone 1 voxel); unsupported mesh faces flagged inferred. DJI_0047 (laptop, no VGGT weights): 13.5 s, coverage 28.4%, 26% of the dense cloud rejected as stereo failures, fill skipped (logged). Box, Esri (2026-09-23): Stage 3 **81.8**, 61.5 s, Zone 1 47.1% / 2 19.5% / 3 33.4%, coverage 66.6%, **held-out Zone 2 error 0.26% of depth** (first real VGGT-Ω fill), fill 2/35 frames (budget bug). **After the budget fix (box re-run): 86.4, 34/35 frames anchored, coverage 65.4 → 69.1%, held-out error 0.48% of depth, fill 28.9 s, Stage 5 90.0.** Frame 216's degenerate fit (s = 267) is now refused by a georef-scale check (verified on the box: 33/35 anchored, coverage **68.2%**, held-out 0.48%). DJI_0047 Stage 3 = 0% coverage because its Track A failed (S4-10) |
 | 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Box DJI_0047 (4K, 136 frames, nominal Phantom 3 focal held fixed): **93.3/100, 1.35 m vs GPS**, Track A 1,831 s. Refinement BA: planned |
 | 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the box (Esri, FBX via headless Blender 4.2.3): Stage 5 **89.3**, coverage **72.6%**, 22 s. Since 2026-09-23 export carries Stage 3's layers (zone/source per point, `model_zones.glb`, `gaps.geojson`, `zone_map.tif`) and takes coverage from Stage 3. **2026-09-26: S5-1/2/3 closed** — altitude datum measured against terrain (DJI_0047: ellipsoidal to 0.6 m; its 'altitude' was above-takeoff), orthophoto rendered from the textured mesh at texel resolution (Esri 0.14 m), GCPs with check-point accuracy KPI, LAS classified (ground / above / low noise). Found S4-11: all textures so far ~30–60% black (fixed; box re-run needed) |
-| 6 | Viewer & QA | §8.4–8.5 | ⚪ planned | — | — | |
+| 6 | Viewer & QA | §8.4–8.5 | 🟢 **BUILT** | `ui/stages/stage6_viewer_qa.py` | `src/qa/stage6_eval.py` | Manifest stage `qa`, after export. **Viewer** (`qa/viewer/`, `python -m src.cli view <run>`): one scene.glb with texture + per-vertex confidence + zone, photo / confidence / zones toggle, Zone 3 gap outlines draped on the model, point-to-point measurement (map coordinates, zone/confidence warnings per end), stats panel, screenshot; verified in headless Chrome on the Esri laptop run (633 gaps; picked points lie on the mesh to 0.00 m). **QA report** (`qa/report.html`): every stage's scorecard, time vs budget, limitations first, accuracy per zone against a reference surface (`--reference` lidar/DSM), benchmarks. **Esri vs USGS 3DEP lidar (laptop run):** placement 10.9 m median (KLV-limited, varies along the flight), Zone 1 height RMS 2.9 m / Zone 2 4.1 m within 100 m tiles: zones rank accuracy correctly. Degradation bench + single-pass simulation built (`src.cli bench`), not yet run on real footage (box; no multi-strip clip) |
 
 ---
 
@@ -180,8 +180,23 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `tests/test_ui_smoke.py` | UI | Every Lab page loads; Stage 1 runs from the UI |
 | `tests/fixtures.py` | test | Re-export of `src.qa.synthetic` |
 | `data/raw/demo_flight.*` | — | Local demo input (git-ignored) |
+| `viewer/index.html` | 6 | The web viewer page (three.js, no build step); `scene.json` inlined by the packager |
+| `viewer/vendor/` | 6 | three.js r169 + GLTFLoader / OrbitControls / BufferGeometryUtils (MIT), vendored so the demo works offline |
+| `src/viewer/package.py` | 6 | Export folder → `scene.glb` (Y-up, texture, `_CONFIDENCE` / `_ZONE` attributes), `scene.json` (stats, gaps in the local frame, legend) |
+| `src/viewer/serve.py` | 6 | Local HTTP server with correct MIME types (module scripts), background mode for the Lab |
+| `src/qa/metrics.py` | 6 | Accuracy vs a reference DSM/LAS in any CRS: per zone + source, ground points, horizontal shift, per-tile local accuracy |
+| `src/qa/report.py` | 6 | Consolidated QA report (JSON + self-contained HTML): scorecards, time, residuals, accuracy, benchmarks, limitations |
+| `src/qa/stage.py` | 6 | Stage 6 runner (manifest stage `qa`): viewer, accuracy, report; each part independent |
+| `src/qa/stage6_eval.py` | 6 | Stage 6 KPIs: viewer package, overlays, report, per-zone accuracy, §11 definition-of-done checklist |
+| `src/qa/degrade.py` | 6 | §8.5 degradation harness: decode-time injection (`qa.inject`), GPS noise, the bench runner and table |
+| `src/qa/singlepass.py` | 6 | §8.5 single-pass simulation: strip detection, one-strip clip + CSV, all-strips vs one-strip comparison |
+| `ui/stages/stage6_viewer_qa.py` | 6 | Stage 6 panel: re-run on any run with an export, embedded viewer, scorecards, accuracy tables |
+| `scripts/box_stage6.sh` | box | Esri + DJI_0047 fresh runs (viewer + report included) and the Esri degradation bench |
+| `tests/test_viewer_qa.py` | 6 | Scene glTF layout, packaging, zones/gaps, server MIME, metrics (shift, per-zone, LAS in another CRS, local), report, scorecard, CLI |
+| `tests/test_bench.py` | 6 | Degradations (deterministic, ordered), decode-time injection, GPS noise, bench orchestration/resume, strips, strip clip, single pass |
+| `data/reference/` | 6 | Independent reference surfaces (git-ignored): `esri_usgs3dep_2018_utm17n_egm96.laz` (14 M lidar points, our frame) |
 
-Empty placeholders: `docker/`, `viewer/`.
+Empty placeholder: `docker/`.
 
 ---
 
@@ -300,6 +315,11 @@ Each entry was measured, not guessed. Don't re-open one without new evidence.
 - ❌ **A fixed GCP weight (20).** 16 cameras still dragged check points 2 m off a 5 m survey shift; on
   136 cameras GCPs would barely count. Inverse variance (σ_GPS/σ_GCP)² instead.
 
+**Viewer & QA (Stage 6)**
+- ❌ **`cv2.phaseCorrelate` for the sub-pixel shift.** Read an injected 3 m shift as 2.42 m (centroid on a broad peak). Explicit cross-power spectrum + integer peak + parabola: 3.00 m.
+- ❌ **One global horizontal shift for Esri vs lidar.** Correlation peak 0.04: the model's misplacement varies along the flight (tiles from (4.5 E, −14.9 N) to (−5.6 E, +2.3 N)), so no single shift fits. Per-100 m-tile NCC (scores 0.37–0.66) instead.
+- ❌ **Capping gap outlines by ring count.** Esri's largest gap alone has 1,052 rings (holes): 1 of 633 gaps drawn. Cap by vertices.
+
 **Occluded surfaces (Stage 3)**
 - ❌ **A fixed-metre RANSAC band for the monocular anchor (0.25 m).** On DJI_0047 (60–500 m depth) a
   correct fit (s = 40.0 recovered for a true 40) kept only ~9% of the band as inliers, so every frame was
@@ -385,7 +405,7 @@ These remain, in priority order; each links its open issue:
 | S3-1 | 3 | **The Zone 2 fill has never run with a real monocular model.** The laptop has no VGGT-Ω weights (gated; the token was rotated) and no VGGT-1B. Verified instead on DJI_0047's real geometry with a stand-in (Track A's mesh rendered per frame, distorted by a known scale/shift): s recovered 39.9–40.4 (true 40), inliers 80–84%, held-out error 0.52% of depth, filled points 0.54 m median from the surface | **Closed 2026-09-23 (box, Esri, VGGT-Ω saved depth):** 34/35 frames anchored, held-out Zone 2 error 0.48% of depth (0.51 m), coverage 65.4 → 69.1%, fill 28.9 s of a 120 s allotment. One degenerate fit found and guarded → S3-7 |
 | S3-2 | 3 | Camera footprints are traced on a flat ground plane, so rising terrain makes cameras see less than the plane says: gaps near the view edge (1–2 cells at ±2.4 m relief, 50 m height) | Reported as "edge of view", not "interior" (`fusion.gaps.edge_band_cells`). Proper fix: intersect footprint rays with the DSM |
 | S3-3 | 3 | **Spec deviations, stated:** (a) no TSDF: Zone 2 is fused as a confidence-weighted voxel average with the same rules (weight < Zone 1, never inside a Zone 1 voxel, surface threshold), and the fill is a point layer, not a re-meshed surface; (b) no Poisson density trimming: the mesher is OpenMVS Delaunay (S4-6), so §6.4 is met by flagging mesh faces with no measured support as inferred (`model_zones.glb`, zone 3) instead of trimming them; (c) §6.5 plane completion not built (stretch goal) | TSDF only if the viewer needs a watertight Zone 2 surface; the viewer (Stage 6) must draw zone 3 faces translucent with a legend |
-| S3-4 | 3 | Per-zone accuracy against ground truth (§8.5, §11) is not measured; the held-out ring is a proxy for Zone 2, and Zone 1 has only the camera-vs-GPS RMS | Stage 6 QA: cloud-to-cloud per zone against a reference (lidar, or the all-strips reconstruction in the single-pass simulation) |
+| ~~S3-4~~ | 3 | ~~Per-zone accuracy against ground truth not measured~~ | **Closed 2026-09-26 (Stage 6, `src/qa/metrics.py`):** surface-to-surface, not cloud-to-cloud (dead end §4). Esri laptop run vs USGS 3DEP lidar: absolute Zone 1 RMS 6.8 m (placement 10.9 m median, telemetry-limited); within 100 m tiles Zone 1 RMS 2.86 / NMAD 2.43 m, Zone 2 RMS 4.14 / NMAD 3.03 m. Box runs (full resolution, fill on) still to measure: S6-4 |
 | S3-5 | 3 | The near-camera rule (0.1 × flight height) would also reject genuine surface on close-range inspection flights (a facade 5 m from the drone at 50 m altitude) | Fine for survey flights. For inspection footage set `fusion.zones.camera_clearance_fraction` lower, or 0 |
 | S3-6 | 3 | Photometric consistency is computed per voxel (median 0.867 on DJI_0047) but does not enter the zone decision | Decide on real data whether low consistency should demote Zone 1 → 2 |
 | S3-7 | 3 | **Degenerate anchor fits extrapolated over whole frames.** Esri box frame 216: band 2,139 px, region 183k px, fitted s = 267 / t = −148 on Track B's saved depth whose true scale is the georef's 0.996; inliers 58.5%, held-out 0.8% (the ring only tests near the band) — so it passed and gave 37,908 of 121,068 fill points | **Fixed and verified on the box 2026-09-23:** frame 216 refused ("scale disagrees with the georeferencing"); Esri 33/35 anchored, 102,908 fill points (was 121,068), coverage 65.4 → **68.2%** (69.1% included the bad frame), held-out error unchanged at 0.48%, Stage 3 still 86.4. Guards: cached depth must fit within `cache_scale_tolerance` (1.5×) of the georef scale; filled pixels leaving the band's depth span by > `max_extrapolation_rel` (15%) × band depth are dropped (`extrapolation_dropped_px` per frame). Frame 032 (band 378 px of 185k, 0 inliers) was already refused correctly |
@@ -393,6 +413,11 @@ These remain, in priority order; each links its open issue:
 | S4-11 | 4 | **Every textured mesh was mostly black.** OpenMVS 2.4 TextureMesh seam leveling painted the faces' own texels black: black share of the used atlas 48% (box Esri export), 31% (laptop DJI_0047), 61% (recon probe); 99% of Esri face centres sampled black. The scorecard only checked `textured: true` | **Fixed 2026-09-26 (laptop-verified, box re-run pending):** DJI_0047 re-textured: defaults 31.3% black, local-only off 20.5%, global-only off 43.5%, **both off 0.02%**. `recon.track_a.texture.seam_leveling: false`, explicit `--empty-color`; `meshing.texture_quality` measures the atlas after every run → Stage 4 KPI `texture_black_pct` (pass ≤ 2%, warn ≤ 10%). **All exported OBJ/GLB/FBX so far carry black textures: re-run Track A before using any model image in the deck** |
 | S3-8 | 3 | **Stage 3 classification scales with cameras x voxels**: DJI_0047 (136 cameras, 6.1 M dense points) classify 115 s of a 136 s stage (Esri, 46 cameras / 2 M points: 27 s); over the 120 s allotment, so the Zone 2 fill stopped after 1 of 3 frames ("time budget") although a frame costs 1.6 s | **Fixed 2026-09-23 (laptop benchmark, box confirmation on the next run):** DJI-shaped scene (136 nadir 4K cameras, 4.8 M points, 27 M view pairs): classify **52.9 → 20.8 s**, zones / views / angles identical, photometric within 0.016. `voxel_size` 18.2 → 2.1 s (1-D keys instead of `np.unique(axis=0)`), visibility 16.1 → ~4 s (frustum-footprint culling on a coarse xy index), angles 7.1 → 2.2 s (per-voxel minimum instead of a 27 M-pair lexsort), photometric 8.1 → 3.1 s (reduced JPEG decode on a thread pool, pairs grouped by camera once, one `bincount`). The fill always gets `budget_min_frames` (3). Per-step times now in `fusion_report.json` (`timings_s.classify_steps`) and the wall-time KPI |
 | T-1 | test | Stage 5 end-to-end fixture nondeterministic on the box: 2/430 failed with float32 overflow in the glTF writer; one `-k end_to_end` run hung > 10 min (Blender/OpenMVS on an absurd mesh?). Passed 14/14 alone | **Fixed 2026-09-23:** cause — the fixture pans a *flat* canvas (pure translation over a plane: focal unobservable) through an mp4v encode/decode that differs between the Windows and Linux OpenCV builds, and Track A self-calibrated the focal, so SfM sometimes degenerated. Now: frames cropped straight from the canvas, a 60° FOV hint held fixed, COLMAP seeded from `run.seed` (Track A, every run). Sparse model stable (focal 277.1 px, path 11.537 ± 0.001 over 3 builds); OpenMVS dense/mesh still vary with thread scheduling (mesh present 2 of 3), which the tests accept. Export refuses mesh formats for non-finite vertices or vertices > `export.mesh_max_extent_factor` (10) × the cloud's extent outside it (point formats still written); Blender timeout → `export.fbx.timeout_s`. `-k end_to_end` 3/3 green |
+| S6-1 | 6 | The degradation bench has not run on real footage | `bash scripts/box_stage6.sh` (13 Esri runs at moderate, ~70 min); then `src.cli qa … --bench` |
+| S6-2 | 6 | **No multi-strip clip for the single-pass simulation.** `bench single-pass --list-strips`: Esri = 2 legs of one bent line (24°, 320°), DJI_0047 = one 893 m line | Find a multi-strip survey (other QGISFMV DJI logs, public ODM datasets); state it as a limitation until then |
+| S6-3 | 6 | The viewer ships the full-resolution mesh (no decimation library installed; texture can't survive vertex-clustering): Esri box model 1.09 M faces ≈ 80 MB | Fine on a desktop; for phones add `fast_simplification` + re-bake, or a `qa.viewer.max_faces` untextured LOD |
+| S6-4 | 6 | Accuracy vs lidar measured on the laptop Esri run only (CPU, 52 cameras, no Zone 2 fill) | After the box re-run: `python -m src.cli qa data/box/runs/esri_s6 --reference data/reference/esri_usgs3dep_2018_utm17n_egm96.laz`; deck numbers come from there |
+| S6-5 | 6 | `compression` degradation is a JPEG round trip (8x8 DCT blocks), a stand-in for H.264 at a low bitrate: no ffmpeg binary is assumed | Re-encode with libx264 where ffmpeg exists, keeping the data stream (`-map 0 -c:d copy`) |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -2561,3 +2586,63 @@ resolution; now m²).
 **Next (box):** re-run both clips from ingest (`--resume … --stage ingest … --force` or a fresh run): DJI_0047
 needs the altitude fix from Stage 1 on; both need re-texturing (S4-11), then the rendered ortho, LAS classes,
 and the S3-8 timing check come for free. Collect the new exports for the deck.
+
+### 2026-09-26 — ritesh14g (with Claude) — Stage 6 (Viewer & QA): BUILT
+
+**Goal:** spec §8.4–8.5 — the viewer judges see and the QA evidence — buildable on the laptop, numbers
+filled in on the box.
+
+**Viewer (§8.4).** `qa/viewer/` per run, served by `python -m src.cli view <run|export|viewer dir>` (browsers
+refuse scene.glb from file://). One mesh, one download: `scene.glb` carries positions (Y-up), the texture
+(KHR_materials_unlit) and two custom vertex attributes three.js exposes as `_confidence` / `_zone`, so the
+Photo / Confidence / Zones toggle recolours the same geometry (instead of 3 × 80 MB glb files on Esri).
+Confidence per vertex = nearest exported point within 2 m; zone from `model_zones.glb` (incl. 3 = inferred).
+Gap outlines from gaps.geojson (lon/lat → local), draped on the model. Measurement: click two points →
+3-D / horizontal / height difference / slope, both ends in map coordinates, a warning when an end is on
+Zone 3 (inferred) or Zone 2 or low confidence. Stats panel: time per stage, coverage, zone split, gaps,
+camera-vs-GPS RMS, GCP check RMS, CRS/datum, formats. `?mode=zones&gaps=1` opens a given view (deck
+screenshots); a Screenshot button saves PNG. three.js r169 vendored (offline demo).
+**Verified in headless Chrome** (DevTools protocol): Esri laptop run, 633 gap outlines, two clicks → 399.46 m;
+both picked points lie on the mesh (8.42 / 12.91 m = the mesh height under each point), map-coordinate
+distance matches. DJI_0047 laptop export shows the old black texture (S4-11: box re-run needed).
+
+**QA (§8.5).** `qa/report.html` + `report.json`: every stage's scorecard (same evaluators as the Lab), time
+vs the §9 budget (projected to a 10-minute video), limitations stated first, accuracy, benchmarks.
+`src/qa/metrics.py`: reference DSM/LAS in any CRS (noise classes 7/18 excluded, vertical CRS converted when
+both define heights), point heights vs the reference surface per zone/source, ground points vs reference
+ground, horizontal shift, and **local accuracy**: each 100 m tile's own 3-D offset found by NCC of high-passed
+heights and removed. **Esri laptop run vs USGS 3DEP lidar** (reference saved as `data/reference/*.laz`):
+placement 10.9 m median, varying smoothly along the flight (the KLV track error found 2026-09-22); within
+tiles **Zone 1 RMS 2.86 m / NMAD 2.43 m, Zone 2 RMS 4.14 m / NMAD 3.03 m** — the zones rank trustworthiness
+correctly against independent ground truth. Laptop resolution, no fill: the deck needs the box run (S6-4).
+Degradation harness (`src.cli bench degrade`): injection at decode (`qa.inject`, deterministic per frame
+index, ingest and conditioning see the same frames, telemetry untouched) — motion blur, compression (JPEG
+proxy, S6-5), low light, shadows, dynamic objects — and GPS noise on the parsed telemetry; each case with and
+without conditioning (`condition.enabled` + `condition.gps.enabled` off), measured against the clean run
+(surface RMS, Zone 1 RMS, camera centres, registered, coverage); resumable; `degradation.md` table.
+Single-pass simulation (`src.cli bench single-pass`): strips from telemetry (PCA direction per strip),
+survey test (parallel strips 20–400 m apart), one strip cut to a clip + CSV on the clip clock (same altitude
+datum as the full run; CSV reader now takes `hfov_deg`), compared with the all-strips DSM. Neither Esri
+nor DJI_0047 is a multi-strip survey (S6-2).
+**Scorecard** (`stage6_eval.py`): viewer package, scene.glb re-opened, overlays, size; report, stages
+scored, per-zone accuracy (absolute and local), "zones rank accuracy", benchmarks; **§11 definition of
+done** measured from the run (end to end, projected 10-min time, six formats, RMS reported, coverage + gaps,
+per-zone accuracy). Esri laptop run: 78.9 (fails absolute accuracy and projected time: both true).
+
+**Created:** `viewer/index.html`, `viewer/vendor/` (three.js r169, MIT), `src/viewer/{__init__,package,serve}.py`,
+`src/qa/{metrics,report,stage,stage6_eval,degrade,singlepass}.py`, `ui/stages/stage6_viewer_qa.py`,
+`scripts/box_stage6.sh`, `tests/test_viewer_qa.py` (15), `tests/test_bench.py` (11), `data/reference/` (ignored).
+**Modified:** `src/stages.py` (Stage 6 BUILT), `src/pipeline.py` (`qa` stage after export; `RunInputs.reference`;
+GPS-noise injection after telemetry load), `src/cli.py` (`run --reference`, `qa`, `view`, `bench degrade`,
+`bench single-pass`), `src/core/manifest.py` (`qa.inject` invalidates ingest/condition), `src/ingest/video_reader.py`
+(decode-time `degrade` hook), `src/ingest/telemetry.py` (`hfov_deg` from CSV), `ui/stages/__init__.py`,
+`configs/default.yaml` (`qa.viewer`, `qa.stage6`, `qa.reference`, `qa.metrics.*`, `qa.inject`, `qa.degrade.*`,
+`qa.single_pass`, `csv_column_map.hfov_deg`), `scripts/box_collect.sh` (several runs, `qa/` folders, bench
+tables), `scripts/box_status.sh` (Stage 6 logs), `tests/test_stage1_eval.py` (registry includes `qa`), `.gitignore`
+(`data/reference/`).
+**Dead ends (also §4):** cv2.phaseCorrelate sub-pixel; one global shift on Esri; gap cap by rings.
+**Open issues:** S3-4 closed; S6-1…S6-5 added.
+**Tests:** 491 passed (was 466; +15 Stage 6 viewer/QA, +11 benchmarks, registry test updated).
+**Next (box):** `bash scripts/box_stage6.sh` (both clips fresh — S5-1, S4-11, ortho, LAS classes, viewer, report —
+then the degradation bench); collect with `bash scripts/box_collect.sh esri_s6 dji47_s6`; on the laptop run the
+lidar QA (S6-4) and take the deck screenshots from the viewer.

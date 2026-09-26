@@ -50,10 +50,10 @@ for name in names:
             print(f"   {icon.get(st, '   ')}{n:10s} {t}{extra}")
     print(f"   total so far {total / 60:.1f} min")
 PY
-  for f in box_runs.log box_rerun.log box_dji.log; do [ -f "$f" ] && grep -q "ALL DONE" "$f" && echo "ALL DONE ($f): paste the report(s) it names back"; done
+  for f in box_runs.log box_rerun.log box_dji.log box_stage6.log; do [ -f "$f" ] && grep -q "ALL DONE" "$f" && echo "ALL DONE ($f): paste the report(s) it names back"; done
   jobs_left=$(ps aux 2>/dev/null | grep -c "[s]rc.cli run")
   echo "pipeline processes running: $jobs_left"
-  LOG=$(ls -t *_s3.log *_rerun.log 2>/dev/null | head -1)
+  LOG=$(ls -t *_s3.log *_rerun.log *_run.log bench_*.log 2>/dev/null | head -1)
   [ -n "$LOG" ] && { echo "last line of $LOG:"; tail -1 "$LOG" | cut -c1-150; }
 }
 

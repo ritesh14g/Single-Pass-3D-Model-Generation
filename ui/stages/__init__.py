@@ -21,7 +21,7 @@ from __future__ import annotations
 from types import ModuleType
 
 from ui.stages import (stage0_input_check, stage1_ingest, stage2_condition, stage3_occlusion, stage4_recon,
-                       stage5_geo_export)
+                       stage5_geo_export, stage6_viewer_qa)
 
 PANELS: dict[str, ModuleType] = {
     stage0_input_check.KEY: stage0_input_check,
@@ -30,4 +30,5 @@ PANELS: dict[str, ModuleType] = {
     stage3_occlusion.KEY: stage3_occlusion,
     stage4_recon.KEY: stage4_recon,
     stage5_geo_export.KEY: stage5_geo_export,
+    stage6_viewer_qa.KEY: stage6_viewer_qa,
 }

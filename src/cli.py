@@ -7,6 +7,8 @@
     python -m src.cli inspect data/raw/flight.mp4
     python -m src.cli status data/interim/flight_20260912_101500
     python -m src.cli config --preset accurate --set budget.total_s=1800
+    python -m src.cli view data/interim/flight_20260912_101500          # Stage 6 web viewer
+    python -m src.cli qa data/interim/flight_20260912_101500 --reference lidar.las
 
 ``check`` is Stage 0, the input check: it answers "can this input produce the outputs,
 and if not, why, and what would fix it?" in well under a minute. ``run`` performs the same
@@ -68,6 +70,8 @@ def cli() -> None:
               help="Run even if the input check finds a blocking problem.")
 @click.option("--gcp", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Optional GCP file. The system is designed to work with zero GCPs.")
+@click.option("--reference", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Independent reference surface (DSM GeoTIFF or LAS/LAZ, any CRS) for Stage 6 accuracy per zone.")
 @click.option("--out", "run_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Run directory. Defaults to <workdir>/<video stem>_<timestamp>.")
 @click.option("--resume", "resume_dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
@@ -78,7 +82,7 @@ def cli() -> None:
 @click.option("--mode", type=click.Choice(["A", "B", "hybrid", "auto"]),
               help="Reconstruction mode (spec §7.4). Overrides the config.")
 def run(
-    video: Path, preset, config_files, overrides, srt, csv_path, telemetry_paths, accept_input, gcp,
+    video: Path, preset, config_files, overrides, srt, csv_path, telemetry_paths, accept_input, gcp, reference,
     run_dir, resume_dir, stages, force, mode,
 ) -> None:
     """Run the pipeline on VIDEO."""
@@ -95,7 +99,7 @@ def run(
         raise click.UsageError("--resume and --out are mutually exclusive")
 
     inputs = RunInputs(video=video, srt=srt, csv=csv_path, gcp=gcp, telemetry=list(telemetry_paths),
-                       accept_input=accept_input)
+                       accept_input=accept_input, reference=reference)
     try:
         result = run_pipeline(
             inputs=inputs,
@@ -236,6 +240,133 @@ def status(run_dir: Path, as_json: bool) -> None:
         return
     click.echo(f"\n  run {manifest.run_id}")
     _echo_status(manifest)
+
+
+@cli.command(name="qa")
+@click.argument("run_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@_common_config_options
+@click.option("--reference", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Reference surface (DSM GeoTIFF or LAS/LAZ, any CRS) for accuracy per zone.")
+@click.option("--bench", "bench_dirs", multiple=True, type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Benchmark folder (from `bench`) to include in the report. Repeatable.")
+def qa_command(run_dir: Path, preset, config_files, overrides, reference, bench_dirs) -> None:
+    """Stage 6 on a finished run (e.g. one copied from the GPU box): viewer + QA report in RUN_DIR/qa."""
+    from src.core.runlock import RunLocked, run_lock
+    from src.qa.stage import run_qa
+
+    cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
+    setup_logging(run_dir=None, level="INFO", jsonl=False)
+    try:
+        with run_lock(run_dir):
+            outcome = run_qa(run_dir, run_dir / "qa", cfg, reference=reference, benchmark_dirs=list(bench_dirs))
+    except RunLocked as locked:
+        raise click.ClickException(str(locked)) from None
+    for key, path in outcome["artifacts"].items():
+        click.echo(f"  {key:<13} {path}")
+    for part, reason in outcome["metrics"]["failures"].items():
+        click.secho(f"  {part} not written: {reason}", fg="yellow")
+    scores = {k: v for k, v in outcome["metrics"]["stage_scores"].items() if v is not None}
+    if scores:
+        click.echo("  scores: " + ", ".join(f"{k} {v}" for k, v in scores.items()))
+
+
+@cli.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@_common_config_options
+@click.option("--port", type=int, default=None, help="Port (default qa.viewer.port; 0 = any free port).")
+@click.option("--rebuild", is_flag=True, help="Rebuild the viewer from the export even if it exists.")
+@click.option("--no-browser", is_flag=True, help="Do not open a browser window.")
+def view(path: Path, preset, config_files, overrides, port, rebuild, no_browser) -> None:
+    """Open the web viewer for PATH: a run folder, its export/ folder, or a built viewer folder."""
+    import webbrowser
+
+    from src.viewer.package import build_viewer
+    from src.viewer.serve import make_server, url_of
+
+    cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
+    vcfg = cfg.get_path("qa.viewer")
+    if (path / "scene.glb").is_file() and not rebuild:
+        folder = path
+    else:
+        export = path if (path / "metadata.json").is_file() else path / "export"
+        folder = (export.parent / "qa" / "viewer")
+        if rebuild or not (folder / "scene.glb").is_file():
+            setup_logging(run_dir=None, level="INFO", jsonl=False)
+            click.echo(f"  building the viewer from {export} ...")
+            build_viewer(export, folder, vcfg)
+    try:
+        server = make_server(folder, int(vcfg.port if port is None else port))
+    except OSError:
+        server = make_server(folder, 0)
+    url = url_of(server)
+    click.echo(f"  viewer: {url}   (folder {folder}; Ctrl+C to stop)")
+    if not no_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("  stopped")
+    finally:
+        server.server_close()
+
+
+@cli.group()
+def bench() -> None:
+    """§8.5 benchmarks: the degradation table and the single-pass simulation (GPU box work)."""
+
+
+@bench.command(name="degrade")
+@click.argument("video", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@_common_config_options
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path),
+              help="Bench folder: one run per case + degradation.json / degradation.md.")
+@click.option("--kind", "kinds", multiple=True, help="Degradation kind(s); default qa.degrade.types.")
+@click.option("--severity", "severities", multiple=True, help="Severity(ies); default qa.degrade.severities.")
+@click.option("--telemetry", "telemetry_paths", multiple=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Telemetry file(s). Repeatable.")
+def bench_degrade(video, preset, config_files, overrides, out_dir, kinds, severities, telemetry_paths) -> None:
+    """Clean run + every kind x severity, with and without conditioning (resumable)."""
+    from src.qa.degrade import cases, run_degradation_bench
+
+    cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
+    n = len(cases(kinds or cfg.get_path("qa.degrade.types"), severities or cfg.get_path("qa.degrade.severities"))) + 1
+    click.echo(f"  {n} runs into {out_dir} (finished ones are reused)")
+    result = run_degradation_bench(video, out_dir, cfg, kinds=list(kinds) or None,
+                                   severities=list(severities) or None, telemetry=list(telemetry_paths))
+    click.echo(result["table_md"])
+    click.echo(f"  include it in a report: python -m src.cli qa <run> --bench {out_dir}")
+
+
+@bench.command(name="single-pass")
+@click.argument("video", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@_common_config_options
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option("--full-run", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="An existing all-strips run of VIDEO to use as the reference.")
+@click.option("--strip", type=int, default=None, help="Strip index (default: the longest).")
+@click.option("--telemetry", "telemetry_paths", multiple=True,
+              type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Telemetry file(s). Repeatable.")
+@click.option("--list-strips", is_flag=True, help="Only list the strips of --full-run and exit.")
+def bench_single_pass(video, preset, config_files, overrides, out_dir, full_run, strip, telemetry_paths,
+                      list_strips) -> None:
+    """All strips vs one strip of a multi-strip survey (§8.5)."""
+    import pandas as pd
+
+    from src.qa.singlepass import find_strips, run_single_pass
+
+    cfg = load_config(preset=preset, overrides=list(overrides), extra_files=list(config_files))
+    if list_strips:
+        if not full_run:
+            raise click.UsageError("--list-strips needs --full-run")
+        found = find_strips(pd.read_parquet(Path(full_run) / "ingest" / "telemetry.parquet"), cfg.get_path("qa.single_pass"))
+        for i, s in enumerate(found["strips"]):
+            click.echo(f"  {i}: {s['t0']:>7.1f}-{s['t1']:>7.1f} s  {s['length_m']:>7.1f} m  heading {s['heading_deg']:5.1f}")
+        click.echo(f"  multi-strip survey: {found['is_multi_strip']} {found['reason']}")
+        return
+    result = run_single_pass(video, out_dir, cfg, telemetry=list(telemetry_paths), full_run=full_run, strip=strip)
+    click.echo(json.dumps({k: v for k, v in result.items() if k not in ("summary_html", "accuracy")}, indent=2,
+                          default=str))
+    click.echo(f"  include it in a report: python -m src.cli qa <run> --bench {out_dir}")
 
 
 @cli.command(name="config")
