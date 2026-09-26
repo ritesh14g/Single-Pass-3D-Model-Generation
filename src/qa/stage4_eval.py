@@ -215,6 +215,13 @@ def _dense_mesh_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
                            "~2 on a clean surface; ~1 means the mesh is fragments"))
     ev.kpis.append(Kpi("textured", g, "Textured mesh", bool(r.get("textured")), "yes",
                        PASS if r.get("textured") else WARN))
+    black = (r.get("texture") or {}).get("black_pct")
+    if black is not None:
+        ev.kpis.append(Kpi("texture_black_pct", g, "Black texture (share of the used atlas)", float(black),
+                           f"<= {_band(cfg, 'texture_black_pass_pct')}",
+                           _lower_better(float(black), _band(cfg, "texture_black_pass_pct"),
+                                         _band(cfg, "texture_black_warn_pct")),
+                           "faces whose texels came out black; OpenMVS seam leveling did this (S4-11)", unit="%"))
 
 
 def _runtime_kpis(ev: StageEvaluation, r: dict, degradations: list[dict]) -> None:

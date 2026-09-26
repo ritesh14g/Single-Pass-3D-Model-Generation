@@ -86,7 +86,7 @@ def write_ply(path: Path, local_xyz: np.ndarray, rgb: np.ndarray, views: np.ndar
 
 def write_las(path: Path, map_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarray, confidence: np.ndarray,
               crs_string: str | None, scale: list[float], point_format: int = 3,
-              extra: dict[str, np.ndarray] | None = None) -> Path:
+              extra: dict[str, np.ndarray] | None = None, classification: np.ndarray | None = None) -> Path:
     import laspy
     from pyproj import CRS
 
@@ -110,13 +110,15 @@ def write_las(path: Path, map_xyz: np.ndarray, rgb: np.ndarray, views: np.ndarra
     las.confidence = confidence
     for name, values in (extra or {}).items():
         setattr(las, name, np.asarray(values, np.uint8))
-    las.classification = np.ones(len(map_xyz), np.uint8)  # 1 = unclassified
+    # ASPRS codes from src/export/classify.py (2 ground, 1 unclassified, 7 low noise); 1 without it.
+    las.classification = (np.ones(len(map_xyz), np.uint8) if classification is None
+                          else np.asarray(classification, np.uint8))
     las.write(str(path))
     return Path(path)
 
 
 def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, scale, tile_m: float,
-                    extra: dict[str, np.ndarray] | None = None) -> list[Path]:
+                    extra: dict[str, np.ndarray] | None = None, classification: np.ndarray | None = None) -> list[Path]:
     """One LAS per ``tile_m`` x ``tile_m`` map cell (§8.2 tiling, the Scalability criterion)."""
     folder.mkdir(parents=True, exist_ok=True)
     keys = np.floor(map_xyz[:, :2] / tile_m).astype(np.int64)
@@ -125,7 +127,8 @@ def write_las_tiles(folder: Path, map_xyz, rgb, views, confidence, crs_string, s
         sel = np.all(keys == key, axis=1)
         out.append(write_las(folder / f"tile_{int(key[0] * tile_m)}_{int(key[1] * tile_m)}.las",
                              map_xyz[sel], rgb[sel], views[sel], confidence[sel], crs_string, scale,
-                             extra={k: v[sel] for k, v in (extra or {}).items()}))
+                             extra={k: v[sel] for k, v in (extra or {}).items()},
+                             classification=None if classification is None else classification[sel]))
     return out
 
 

@@ -17,10 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from src.qa.stage1_eval import FAIL, INFO, PASS, WARN, Kpi, StageEvaluation
 
 DEFAULTS = {"cam_vs_gps_rms_pass_m": 1.0, "cam_vs_gps_rms_warn_m": 5.0, "inlier_fraction_pass": 0.9,
-            "inlier_fraction_warn": 0.7, "coverage_pass_pct": 90.0, "coverage_warn_pct": 70.0}
+            "inlier_fraction_warn": 0.7, "coverage_pass_pct": 90.0, "coverage_warn_pct": 70.0,
+            "gcp_check_rms_pass_m": 1.0, "gcp_check_rms_warn_m": 3.0}
 
 
 @dataclass
@@ -106,8 +109,7 @@ def evaluate_export(outputs: ExportOutputs, cfg: Any) -> StageEvaluation:
                            "WKT in LAS, EPSG in GeoTIFF, offset in OBJ/glb/PLY sidecars"))
         ortho = frame["vertical_epsg"] is not None or frame["gps_altitude_datum"] == "orthometric"
         ev.kpis.append(Kpi("vertical_datum", grp, "Heights", frame["vertical_datum"], "orthometric",
-                           PASS if ortho else WARN, "; ".join(frame.get("notes") or [])
-                           + (" GPS altitude datum assumed ellipsoidal (DJI)." if frame["gps_altitude_datum_assumed"] else "")))
+                           PASS if ortho else WARN, "; ".join(frame.get("notes") or []) + _datum_detail(frame, g)))
         rms = float(g.get("rms_all_m", float("nan")))
         ev.kpis.append(Kpi("cam_vs_gps_rms_m", grp, "Camera centres vs GPS (RMS, all)", rms,
                            f"<= {_band(cfg, 'cam_vs_gps_rms_pass_m')} m (PS spatial accuracy)",
@@ -123,6 +125,22 @@ def evaluate_export(outputs: ExportOutputs, cfg: Any) -> StageEvaluation:
                            f"{g.get('inliers')} of {g.get('cameras')} within {g.get('inlier_threshold_m')} m"))
         ev.kpis.append(Kpi("ground_constraint", grp, "Straight-path roll constraint", bool(g.get("ground_constraint")),
                            "-", INFO, f"track collinearity {g.get('track_collinearity')} (< 0.1 turns it on)"))
+        gcp = g.get("gcp")
+        if gcp:
+            # S5-3. Check points are never fitted: their residual is accuracy against surveyed truth.
+            notes = "; ".join(gcp.get("notes") or [])
+            if gcp.get("check_rms_m") is not None:
+                rms_chk = float(gcp["check_rms_m"])
+                ev.kpis.append(Kpi("gcp_check_rms_m", grp, "GCP check points (independent accuracy)", rms_chk,
+                                   f"<= {_band(cfg, 'gcp_check_rms_pass_m')}",
+                                   PASS if rms_chk <= _band(cfg, "gcp_check_rms_pass_m") else
+                                   WARN if rms_chk <= _band(cfg, "gcp_check_rms_warn_m") else FAIL,
+                                   f"{gcp['check']} check points: horizontal {gcp.get('check_horizontal_rms_m')} m, "
+                                   f"vertical {gcp.get('check_vertical_rms_m')} m" + (f"; {notes}" if notes else ""),
+                                   unit="m"))
+            ev.kpis.append(Kpi("gcp_control", grp, "Ground control points used", int(gcp.get("control") or 0), "-",
+                               INFO if gcp.get("control") else WARN,
+                               f"control RMS {gcp.get('control_rms_m')} m after the fit" + (f"; {notes}" if notes else "")))
 
     grp = "Formats (re-opened)"
     files = {f["format"]: f for f in meta.get("files", [])}
@@ -149,6 +167,22 @@ def evaluate_export(outputs: ExportOutputs, cfg: Any) -> StageEvaluation:
         ev.kpis.append(Kpi("zones_layer", grp, "Stage 3 layers (zones glb, LAS/PLY zone, gaps.geojson)", ok,
                            "written", PASS if ok else WARN,
                            f"{detail}; LAS layers {layers}; gaps.geojson {'yes' if 'geojson_gaps' in files else 'no'}"))
+
+    if "las" in files:
+        # S5-3: read the classes back from the file, not from the export's own report.
+        import laspy
+
+        try:
+            codes = np.asarray(laspy.read(str(files["las"]["path"])).classification)
+            share = {c: float((codes == c).mean()) for c in (1, 2, 7)}
+            classified = share[2] > 0
+            ev.kpis.append(Kpi("las_classified", grp, "LAS classified (ground / above / noise)", classified,
+                               "ground class present", PASS if classified else WARN,
+                               f"ground {share[2]:.1%}, above ground {share[1]:.1%}, low noise {share[7]:.1%} "
+                               "(ASPRS 2 / 1 / 7)"))
+        except Exception as exc:  # noqa: BLE001
+            ev.kpis.append(Kpi("las_classified", grp, "LAS classified (ground / above / noise)", False,
+                               "ground class present", WARN, f"{type(exc).__name__}: {exc}"))
 
     grp = "Coverage"
     cov = meta.get("coverage")
@@ -180,3 +214,15 @@ def save_evaluation(evaluation: StageEvaluation, path: Path | str) -> Path:
     path = Path(path)
     path.write_text(json.dumps(evaluation.to_dict(), indent=2, default=str), encoding="utf-8")
     return path
+
+
+def _datum_detail(frame: dict, g: dict) -> str:
+    """How the telemetry altitude's datum was decided (S5-1): measured against terrain, or assumed."""
+    check = g.get("altitude_datum") or {}
+    datum = frame.get("gps_altitude_datum")
+    if frame.get("gps_altitude_datum_assumed"):
+        why = check.get("detail") or "no datum check ran"
+        return f" GPS altitude datum ASSUMED {datum} ({why})."
+    if check.get("method") in ("terrain check", "terrain at takeoff"):
+        return f" GPS altitude datum measured {datum}: {check.get('detail')}."
+    return f" GPS altitude datum {datum} (source or config)."

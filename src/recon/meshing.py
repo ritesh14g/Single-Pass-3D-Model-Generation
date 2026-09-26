@@ -69,3 +69,35 @@ def clean_mesh(src: Path, dst: Path, min_component_fraction: float) -> dict[str,
     mesh.export(dst)
     stats.update(vertices=len(mesh.vertices), faces=len(mesh.faces))
     return stats
+
+
+def texture_quality(obj_path: Path, empty_color: tuple[int, int, int], tolerance: int = 24,
+                    black_level: int = 8) -> dict:
+    """Share of the used texture atlas that is black (S4-11), from the OBJ's MTL ``map_Kd`` images.
+
+    OpenMVS fills unused atlas space with ``empty_color``; everything else is face texture or
+    patch padding copied from the photos, so black there means the faces lost their colour."""
+    import cv2
+
+    obj_path = Path(obj_path)
+    mtls = []
+    with obj_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for _, line in zip(range(200), fh):                   # mtllib sits in the header
+            if line.startswith("mtllib"):
+                mtls.append(obj_path.parent / line.split(None, 1)[1].strip())
+    images = []
+    for mtl in (m for m in mtls if m.is_file()):
+        for line in mtl.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip().lower().startswith("map_kd"):
+                images.append(obj_path.parent / line.split(None, 1)[1].strip())
+    used = black = 0
+    for image in images:
+        img = cv2.imread(str(image), cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+        rgb = img[:, :, ::-1].astype(np.int16)
+        in_use = np.abs(rgb - np.array(empty_color, np.int16)).max(axis=2) > tolerance
+        used += int(in_use.sum())
+        black += int((in_use & (rgb.max(axis=2) < black_level)).sum())
+    return {"images": len(images), "used_texels": used,
+            "black_pct": round(100.0 * black / used, 2) if used else None}

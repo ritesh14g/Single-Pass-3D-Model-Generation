@@ -41,3 +41,9 @@ def blurry_flight(tmp_path_factory):
     return fixtures.make_flight_video(
         directory / "blurry.mp4", frames=60, overlap=0.9, blur_every=5, blur_length=25, seed=11
     )
+
+
+@pytest.fixture(autouse=True)
+def _offline_terrain(monkeypatch):
+    """Tests never fetch terrain tiles (S5-1 datum check): a test that needs terrain passes its own DEM."""
+    monkeypatch.setattr("src.geo.vertical._fetch_tile", lambda *a, **k: None)

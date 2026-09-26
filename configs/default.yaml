@@ -199,7 +199,9 @@ ingest:
           time_s, elapsed]
       lat: [lat, latitude, gpslatitude, osd_lat]
       lon: [lon, long, longitude, gpslongitude, osd_lon]
-      # DJI/AirData: OSD.altitude is above sea level, OSD.height is above the takeoff point.
+      # DJI/AirData: OSD.height is above the takeoff point. OSD.altitude is NOT always absolute:
+      # in DJI_0047's AirData CSV it equals OSD.height. src/geo/vertical.py detects that and adds the
+      # home altitude (home_alt below), then measures the datum (S5-1).
       alt_gps: [alt, altitude, gpsaltitude, osd_alt, altitude_msl, altitude_above_seaLevel(meters)]
       alt_baro: [baroalt, barometricaltitude, relativealtitude, osd_relalt, height, relative_height,
                  height_above_takeoff(meters)]
@@ -207,6 +209,11 @@ ingest:
       pitch: [pitch, gimbalpitch, osd_pitch]
       yaw: [yaw, heading, gimbalyaw, osd_yaw]
       focal_mm: [focallength, focal, focal_mm]
+      # The takeoff (home) point, exact header match only. DJI_0047: HOME.height -19.91 m is the
+      # ellipsoidal height of the ground there (terrain 7 m + geoid -26.3 m; S5-1).
+      home_lat: [HOME.latitude, home_lat, home_latitude]
+      home_lon: [HOME.longitude, home_lon, home_longitude]
+      home_alt: ["HOME.height [m]", "HOME.altitude [m]", home_alt, home_altitude]
     # A flight-log CSV/TXT with no header row (a bare numeric GPS dump) has
     # its columns assigned positionally in this order instead of guessed.
     headerless_column_order: [lat, lon, alt_gps]
@@ -545,6 +552,12 @@ recon:
     texture:
       enabled: true
       export_type: obj
+      # OpenMVS 2.4 seam leveling painted the faces' own texels black: 20-61% of the used atlas
+      # on every run checked (box Esri 48%, laptop DJI_0047 31%, recon probe 61%); with both off,
+      # 0.0% (DJI_0047 re-textured 2026-09-26). Local only off: 20.5%; global only off: 43.5%.
+      seam_leveling: false
+      # Colour OpenMVS paints unused atlas space (--empty-color); the black-texel check skips it.
+      empty_color: [255, 127, 39]
     openmvs:
       # auto = tools/openmvs/bin (Linux) or tools/openmvs/vc17/x64/Release (Windows).
       bin_dir: auto
@@ -709,9 +722,28 @@ geo:
     # GPS altitude is ellipsoidal; most deliverables want orthometric.
     geoid_model: EGM96
     output_datum: orthometric
-    # Datum of the telemetry altitude. auto: KLV (MISB ST 0601 tag 15) is MSL/orthometric;
-    # DJI SRT/CSV is taken as WGS84-ellipsoidal (spec §8.1) and flagged as assumed.
+    # Datum of the telemetry altitude. auto: measured by datum_check when it can decide;
+    # else KLV (MISB ST 0601 tag 15) is MSL/orthometric, and anything else is taken as
+    # WGS84-ellipsoidal (spec §8.1) and flagged as assumed. ellipsoidal | orthometric force it.
     gps_altitude_datum: auto
+    # S5-1: the telemetry's altitude of the takeoff ground vs a terrain model there decides the
+    # datum (orthometric: equal; ellipsoidal: terrain + geoid undulation). DJI_0047: home -19.91 m,
+    # terrain 7 m, N -26.3 m -> ellipsoidal to 0.6 m. Also turns above-takeoff "altitude" absolute.
+    datum_check:
+      enabled: true
+      # Local terrain model (GeoTIFF, orthometric heights); used first when set.
+      dem_file: null
+      # Public terrain tiles (AWS Open Data "Terrain Tiles", SRTM/3DEP-derived, ~20-40 m cells),
+      # fetched once per tile and cached. Offline: the check reports it and the assumption stands.
+      online: true
+      tile_url: https://s3.amazonaws.com/elevation-tiles-prod/geotiff/{z}/{x}/{y}.tif
+      zoom: 12
+      cache_dir: data/cache/dem
+      timeout_s: 10
+      # A datum is accepted when it fits within this; |N| must be >= 2x this to tell them apart.
+      tolerance_m: 8.0
+      # "altitude" within this of height-above-takeoff everywhere = it is not absolute.
+      relative_match_m: 1.0
   similarity:
     ransac_iterations: 2000
     # Rejects gross GPS outliers only. Esri's residuals are 5-7 m and systematic (S4-1); a
@@ -720,9 +752,20 @@ geo:
     inlier_threshold_m: 10.0
     min_cameras: 8
   gcp:
-    # Optional. The system must work with zero GCPs (§8.1).
+    # Optional. The system must work with zero GCPs (§8.1). An OpenDroneMap gcp_list.txt
+    # (CRS line, then "geo_x geo_y geo_z im_x im_y image [name]"); the CLI's --gcp wins over this.
     file: null
-    weight: 20.0
+    # Weights by inverse variance: a GCP counts (gps_sigma_m / sigma_m)^2 GPS fixes (3 m vs 5 cm:
+    # 3600), so a few surveyed points outweigh a long flight's GPS, as they should. A fixed weight
+    # of 20 left check points 2 m from a 5 m survey shift with only 16 cameras (test, 2026-09-26).
+    sigma_m: 0.05
+    gps_sigma_m: 3.0
+    # Names starting with these are check points: reported, never fitted (independent accuracy).
+    check_prefixes: [chk, check, cp_]
+    # GCP heights as surveyed: orthometric (usual) or ellipsoidal; a compound CRS line overrides.
+    height_datum: orthometric
+    # A GCP whose triangulation reprojects worse than this was probably mis-clicked: dropped.
+    max_reprojection_px: 5.0
 
 # ---------------------------------------------------------------------------
 # Stage 5 — Export (§8.2)
@@ -748,9 +791,40 @@ export:
     # Fill gaps up to this many cells from the nearest valid cell; larger stay nodata.
     fill_max_cells: 3
     nodata: -9999.0
+    # S5-2: the orthophoto is rendered top-down from the textured mesh when Stage 4 made one
+    # (auto | cloud). Resolution auto = the texture's own ground size (Esri ~0.14 m vs the cloud's
+    # 0.5 m), no finer than ortho_min_resolution_m and coarsened until <= ortho_max_pixels.
+    ortho_source: auto
+    ortho_resolution_m: auto
+    ortho_min_resolution_m: 0.05
+    ortho_max_pixels: 100000000
+    # Triangles whose ground bounding box exceeds this are Delaunay skirts, not surface: skipped
+    # (Esri's median face is ~0.1 m²).
+    ortho_max_triangle_m2: 100.0
+    # Cells farther than this many DSM cells from measured surface stay transparent.
+    ortho_support_cells: 2
   las:
     point_format: 3
     scale: [0.001, 0.001, 0.001]
+    # S5-3: ASPRS classes by a progressive morphological filter (src/export/classify.py):
+    # 2 ground, 1 above ground (vegetation/buildings, not separated), 7 low noise. Water is ground.
+    # Synthetic (5% slope, building, trees, noise): ground recall 100%, building 0%, trees 0%.
+    # Esri: river and road ground, canopy above; 22% of points ground; 5.6 s for 2.2 M points.
+    classify:
+      enabled: true
+      cell_m: 1.0
+      # Largest object the filter removes (buildings wider than this stay "ground").
+      max_window_m: 40.0
+      # Terrain slope the filter tolerates; 0.3 let 8-10% of tree points through as ground.
+      slope: 0.15
+      dh0_m: 0.3
+      dh_max_m: 2.5
+      # Height of a cell: this percentile of its points, not the minimum (water noise: 1% of
+      # Esri's points lie > 36 m under the terrain).
+      low_percentile: 10.0
+      despike_cells: 11
+      ground_threshold_m: 0.5
+      noise_below_m: 2.0
   glb:
     draco_compression: false
   fbx:
@@ -840,6 +914,9 @@ qa:
     # A clean surface has ~2 faces per vertex; ~1 means fragments (S4-6).
     faces_per_vertex_pass: 1.8
     faces_per_vertex_warn: 1.4
+    # Black share of the used texture atlas (S4-11): seam leveling gave 20-61%, a good atlas 0%.
+    texture_black_pass_pct: 2.0
+    texture_black_warn_pct: 10.0
     # Track B hybrid: median disagreement between a frame's Track A points and its scaled
     # VGGT depth (box, Esri: 0.85%), and the share of frames whose depth was anchored.
     anchor_spread_pass_pct: 2.0
@@ -855,6 +932,9 @@ qa:
     # Share of the ground the cameras saw that the dense cloud covers (§1.4 "entire visible scene").
     coverage_pass_pct: 90.0
     coverage_warn_pct: 70.0
+    # GCP check points (never fitted): RMS against surveyed coordinates, the PS's <= 1 m (S5-3).
+    gcp_check_rms_pass_m: 1.0
+    gcp_check_rms_warn_m: 3.0
   metrics:
     cloud_to_cloud_max_dist_m: 5.0
     percentiles: [50, 95]

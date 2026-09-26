@@ -13,6 +13,8 @@ data/outputs/*
 data/box/
 # bundles packed for the GPU box (scripts/box_pack.py)
 data/box_upload/
+# terrain tiles fetched by the altitude-datum check (src/geo/vertical.py)
+data/cache/
 !data/**/.gitkeep
 
 # model weights

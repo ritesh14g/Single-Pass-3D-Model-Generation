@@ -314,3 +314,118 @@ def test_unreferenced_run_is_reported_not_crashed(tmp_path):
         pytest.skip("no local sparse model to reuse")
     out = run_geo(sparse.parent, geo_txt, tmp_path / "geo", load_config())
     assert out["metrics"]["referenced"] is False and out["metrics"]["downgrades"]
+
+
+# -- S5-2: orthophoto rendered from the textured mesh --------------------------------------
+def _quad(x0, x1, y0, y1, z, uv0, uv1):
+    """Two triangles covering a rectangle at height z, mapped to a uv rectangle."""
+    v = np.array([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]], float)
+    t = np.array([[uv0[0], uv0[1]], [uv1[0], uv0[1]], [uv1[0], uv1[1]], [uv0[0], uv1[1]]], float)
+    return v, np.array([[0, 1, 2], [0, 2, 3]]), t
+
+
+def test_ortho_render_samples_the_texture_and_keeps_the_top_surface():
+    # Texture: left half red, right half blue, top-right corner quarter the empty colour.
+    tex = np.zeros((100, 100, 3), np.uint8)
+    tex[:, :50] = (200, 0, 0)
+    tex[:, 50:] = (0, 0, 200)
+    tex[:20, 80:] = (255, 127, 39)
+    ground, gf, guv = _quad(0, 10, 0, 10, 0.0, (0.0, 0.0), (0.49, 1.0))      # red ground
+    roof, rf, ruv = _quad(4, 6, 4, 6, 5.0, (0.51, 0.0), (0.79, 1.0))          # blue roof above it
+    empty, ef, euv = _quad(8, 9, 8, 9, 6.0, (0.82, 0.82), (0.98, 0.98))       # no-photo face
+    v = np.r_[ground, roof, empty]
+    f = np.r_[gf, rf + 4, ef + 8]
+    uv = np.r_[guv, ruv, euv]
+    grid = rasters.Grid(0.0, 10.0, 0.1, 100, 100)
+    img, hit = rasters.render_ortho(v, f, uv, tex, grid, max_triangle_px=20000, empty_color=(255, 127, 39))
+    at = lambda x, y: img[int((10.0 - y) / 0.1), int(x / 0.1)]            # noqa: E731
+    assert tuple(at(1.0, 1.0)[:3]) == (200, 0, 0) and at(1.0, 1.0)[3] == 255
+    assert tuple(at(5.0, 5.0)[:3]) == (0, 0, 200)                         # the roof hides the ground
+    assert at(8.5, 8.5)[3] == 0                                             # empty texel: transparent
+    assert 0.95 < hit < 1.0
+
+
+def test_ortho_skips_skirt_triangles_and_masks_unsupported_cells():
+    tex = np.full((10, 10, 3), 90, np.uint8)
+    v, f, uv = _quad(0, 100, 0, 100, 0.0, (0, 0), (1, 1))                    # one huge triangle pair
+    grid = rasters.Grid(0.0, 100.0, 1.0, 100, 100)
+    img, hit = rasters.render_ortho(v, f, uv, tex, grid, max_triangle_px=4096)
+    assert hit == 0.0                                                        # 10,000-cell faces are skirts
+    dsm = np.full((10, 10), -9999.0, np.float32)
+    dsm[2:4, 2:4] = 1.0
+    mask = rasters.support_mask(dsm, -9999.0, rasters.Grid(0.0, 100.0, 10.0, 10, 10), grid, 0)
+    assert mask[25, 25] and not mask[75, 75] and mask.sum() == 400
+
+
+def test_texel_size_reads_metres_per_texel():
+    v, f, uv = _quad(0, 20, 0, 20, 0.0, (0, 0), (1, 1))                      # 20 m on 100 texels
+    assert rasters.texel_size(v, f, uv, (100, 100, 3)) == pytest.approx(0.2, rel=1e-6)
+
+
+# -- S5-3: ground control points --------------------------------------------------------------
+def _gcp_file(path, rec, georef, shift, names):
+    """GCPs at real sparse points, observed where SfM saw them, surveyed at map + shift."""
+    lines = ["EPSG:32643+5773"]
+    points = sorted(rec.points3D.values(), key=lambda p: -p.track.length())[:len(names)]
+    for name, point in zip(names, points):
+        e, n, h = georef.to_map(np.asarray(point.xyz)[None, :])[0] + np.asarray(shift)
+        for el in point.track.elements[:4]:
+            image = rec.images[el.image_id]
+            x, y = image.points2D[el.point2D_idx].xy
+            lines.append(f"{e:.3f} {n:.3f} {h:.3f} {x:.2f} {y:.2f} {image.name} {name}")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_gcps_triangulate_fit_and_check_points_measure_accuracy(georeferenced_run, tmp_path):
+    import pycolmap
+
+    from src.geo.georef import Georef, georeference
+
+    run_dir, _, _, cfg, track_a = georeferenced_run
+    rec = pycolmap.Reconstruction(str(track_a["sparse"]))
+    base = Georef.load(run_dir / "geo" / "georef.json")
+    geo_txt = run_dir.parent / "geo.txt"
+    names = ["GCP1", "GCP2", "GCP3", "GCP4", "CHK1", "CHK2"]
+
+    same = georeference(track_a["sparse"], geo_txt, cfg, telemetry_source="srt:x",
+                        gcp_path=_gcp_file(tmp_path / "same.txt", rec, base, (0, 0, 0), names))
+    g = same.stats["gcp"]
+    assert g["control"] == 4 and g["check"] == 2 and not g["notes"]
+    assert g["control_rms_m"] < 0.1 and g["check_rms_m"] < 0.1
+    assert all(p["reproj_px"] < 2 for p in g["points"])
+
+    # Survey says everything is 5 m further east than the GPS does: 4 GCPs at 5 cm vs 16 GPS fixes at 3 m.
+    moved = georeference(track_a["sparse"], geo_txt, cfg, telemetry_source="srt:x",
+                         gcp_path=_gcp_file(tmp_path / "moved.txt", rec, base, (5.0, 0, 0), names))
+    g = moved.stats["gcp"]
+    assert g["check_rms_m"] < 0.3                                  # the model follows the survey
+    assert moved.stats["rms_all_m"] > 4.0                          # and the GPS disagreement shows
+
+
+def test_gcp_file_problems_are_reported_not_fatal(georeferenced_run, tmp_path):
+    from src.geo.georef import georeference
+
+    run_dir, _, _, cfg, track_a = georeferenced_run
+    bad = tmp_path / "bad.txt"
+    bad.write_text("EPSG:32643\n781000 1435000 900 10 10 no_such_frame.jpg GCP1\n")
+    g = georeference(track_a["sparse"], run_dir.parent / "geo.txt", cfg, telemetry_source="srt:x",
+                     gcp_path=bad).stats["gcp"]
+    assert g["control"] == 0 and "needs 2" in g["notes"][0]
+    worse = tmp_path / "worse.txt"
+    worse.write_text("EPSG:32643\n1 2\n")
+    g = georeference(track_a["sparse"], run_dir.parent / "geo.txt", cfg, telemetry_source="srt:x",
+                     gcp_path=worse).stats["gcp"]
+    assert "unusable" in g["notes"][0]
+
+
+def test_weighted_umeyama_matches_repetition():
+    from src.recon.alignment import umeyama
+
+    rng = np.random.default_rng(2)
+    src = rng.normal(size=(10, 3))
+    dst = src * 3 + rng.normal(scale=0.1, size=(10, 3))
+    w = np.r_[np.full(8, 1.0), 5.0, 5.0]
+    rep = np.r_[np.arange(8), np.full(5, 8), np.full(5, 9)]
+    a, b = umeyama(src, dst, w), umeyama(src[rep], dst[rep])
+    assert a[0] == pytest.approx(b[0]) and np.allclose(a[1], b[1]) and np.allclose(a[2], b[2])

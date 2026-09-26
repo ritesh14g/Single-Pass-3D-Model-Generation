@@ -193,6 +193,8 @@ def run_track_a(
             metrics["textured"] = textured is not None
             if textured is not None:
                 artifacts["textured"] = textured
+                # Look at the pixels, not the flag: "textured: true" hid black textures (S4-11).
+                metrics["texture"] = meshing.texture_quality(textured, tuple(tcfg.texture.empty_color))
     metrics["timings_s"] = run.timings
     metrics["downgrades"] = run.downgrades
 
@@ -623,10 +625,14 @@ def _texture(tcfg, mesh, out_dir, mvs_dir, threads, bin_dir, run):
             with run.timed("openmvs_import"):
                 openmvs.run_tool(bin_dir, "InterfaceCOLMAP", mvs_dir, "-i", str(out_dir / "dense"), "-o", str(scene),
                                  "--image-folder", str(out_dir / "dense" / "images"), threads=threads)
+        r, g, b = (int(c) for c in tcfg.texture.empty_color)
+        options = ["--export-type", str(tcfg.texture.export_type), "--empty-color", str((r << 16) | (g << 8) | b)]
+        if not bool(tcfg.texture.seam_leveling):
+            # S4-11: seam leveling turned the faces' texels black (20-61% of the atlas).
+            options += ["--global-seam-leveling", "0", "--local-seam-leveling", "0"]
         with run.timed("texture"):
             openmvs.run_tool(bin_dir, "TextureMesh", mvs_dir, "-i", str(scene), "-m", str(mesh),
-                             "-o", str(out_dir / "textured.mvs"), "--export-type", str(tcfg.texture.export_type),
-                             threads=threads)
+                             "-o", str(out_dir / "textured.mvs"), *options, threads=threads)
     except openmvs.OpenMvsError as exc:
         run.downgrade("TextureMesh", "untextured mesh", str(exc))
         return None

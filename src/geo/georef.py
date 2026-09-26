@@ -76,11 +76,14 @@ def _ground_normal(points: np.ndarray, centres: np.ndarray) -> np.ndarray:
 
 
 def fit_similarity(model: np.ndarray, world: np.ndarray, *, iterations: int, threshold_m: float,
-                   min_inliers: int, ground_points: np.ndarray | None = None, seed: int = 0):
+                   min_inliers: int, ground_points: np.ndarray | None = None, seed: int = 0,
+                   anchors: tuple[np.ndarray, np.ndarray, float] | None = None):
     """RANSAC similarity from camera centres (``model``) to GPS (``world``).
 
     Returns ``(transform, inlier mask, info)``. With ``ground_points`` (the reconstruction's
     sparse points) and a near-collinear track, virtual ground pairs fix the roll about the path.
+    ``anchors`` = (model points, world points, weight): ground control points, in every fit with
+    ``weight`` times a camera's weight; inliers are still judged on the cameras (S5-3).
     """
     n = len(model)
     info: dict[str, Any] = {"cameras": n}
@@ -99,8 +102,12 @@ def fit_similarity(model: np.ndarray, world: np.ndarray, *, iterations: int, thr
     else:
         info["ground_constraint"] = False
 
+    anchor_m, anchor_w, anchor_weight = anchors if anchors is not None else (np.empty((0, 3)), np.empty((0, 3)), 1.0)
+
     def fit(idx):
-        return umeyama(np.vstack([model[idx], extra_m]), np.vstack([world[idx], extra_w]))
+        weights = np.r_[np.ones(len(idx) + len(extra_m)), np.full(len(anchor_m), float(anchor_weight))]
+        return umeyama(np.vstack([model[idx], extra_m, anchor_m]), np.vstack([world[idx], extra_w, anchor_w]),
+                       weights)
 
     rng = np.random.default_rng(seed)
     best, best_key = np.ones(n, bool), (-1, np.inf)
@@ -132,7 +139,8 @@ def fit_similarity(model: np.ndarray, world: np.ndarray, *, iterations: int, thr
     return transform, best, info, residual
 
 
-def georeference(sparse_model: Path, geo_path: Path | None, cfg: Any, *, telemetry_source: str = "") -> Georef:
+def georeference(sparse_model: Path, geo_path: Path | None, cfg: Any, *, telemetry_source: str = "",
+                 altitude: dict[str, Any] | None = None, gcp_path: Path | None = None) -> Georef:
     """Fit ``sparse_model`` to ``geo_path``; an identity, unreferenced result when there is no GPS."""
     import pycolmap
 
@@ -152,7 +160,9 @@ def georeference(sparse_model: Path, geo_path: Path | None, cfg: Any, *, telemet
     horizontal = utm_epsg(float(np.mean(lon)), float(np.mean(lat)))
     if str(gcfg.crs.target) not in ("auto", "", "None"):
         horizontal = int(str(gcfg.crs.target).split(":")[-1])
-    datum, assumed = gps_altitude_datum(telemetry_source, str(gcfg.vertical.get("gps_altitude_datum", "auto")))
+    altitude = altitude or {}
+    datum, assumed = gps_altitude_datum(telemetry_source, str(gcfg.vertical.get("gps_altitude_datum", "auto")),
+                                        altitude.get("datum"))
     want_ortho = str(gcfg.vertical.output_datum) == "orthometric"
     enh, vertical, geoid_applied, note = gps_to_map(lon, lat, alt, horizontal_epsg=horizontal,
                                                     geoid_model=str(gcfg.vertical.geoid_model),
@@ -168,12 +178,49 @@ def georeference(sparse_model: Path, geo_path: Path | None, cfg: Any, *, telemet
     model = np.array([im.projection_center() for im in matched])
     local = enh - np.asarray(offset)
     ground = np.array([p.xyz for p in rec.points3D.values()]) if rec.num_points3D() else None
+    control, gcp_notes = [], []
+    gcp_file = gcp_path or gcfg.gcp.get("file")
+    if gcp_file:
+        from src.geo import gcp as gcpmod
+
+        try:
+            control, gcp_notes = gcpmod.load_control(rec, Path(str(gcp_file)), gcfg.gcp, horizontal, vertical, offset)
+        except Exception as exc:  # noqa: BLE001 - a bad GCP file is reported, never fatal
+            gcp_notes = [f"GCP file unusable: {type(exc).__name__}: {exc}"]
+    fitted = [c for c in control if not c["check"]]
+    gcp_weight = (float(gcfg.gcp.gps_sigma_m) / max(float(gcfg.gcp.sigma_m), 1e-6)) ** 2
+    anchors = (np.array([c["model"] for c in fitted]), np.array([c["local"] for c in fitted]),
+               gcp_weight) if fitted else None
     scfg = gcfg.similarity
     transform, inliers, info, residual = fit_similarity(
         model, local, iterations=int(scfg.ransac_iterations), threshold_m=float(scfg.inlier_threshold_m),
-        min_inliers=int(scfg.min_cameras), ground_points=ground)
+        min_inliers=int(scfg.min_cameras), ground_points=ground, anchors=anchors)
+    if gcp_file:
+        info["gcp"] = _gcp_report(control, gcp_notes, transform, str(gcp_file))
+    info["altitude_datum"] = {**{k: v for k, v in altitude.items() if k != "home"}, "used": datum,
+                              "assumed": assumed}
     info.update(referenced=True, gps_frames=len(matched), registered=len(images),
                 per_camera=[{"frame": im.name, "residual_m": round(float(r), 3), "inlier": bool(ok)}
                             for im, r, ok in zip(matched, residual, inliers)])
     scale, rot, trans = transform
     return Georef(frame, float(scale), rot, trans, info)
+
+
+def _gcp_report(control: list[dict[str, Any]], notes: list[str], transform, source: str) -> dict[str, Any]:
+    """Residual of every GCP after the fit: control points (fitted) and check points (independent)."""
+    points = []
+    for c in control:
+        err = apply(transform, c["model"][None, :])[0] - c["local"]
+        points.append({"name": c["name"], "check": c["check"], "views": c["views"], "reproj_px": c["reproj_px"],
+                       "error_m": round(float(np.linalg.norm(err)), 3),
+                       "horizontal_m": round(float(np.hypot(err[0], err[1])), 3), "vertical_m": round(float(err[2]), 3)})
+
+    def rms(rows, key="error_m"):
+        return round(float(np.sqrt(np.mean([r[key] ** 2 for r in rows]))), 3) if rows else None
+
+    control_rows = [p for p in points if not p["check"]]
+    check_rows = [p for p in points if p["check"]]
+    return {"file": source, "control": len(control_rows), "check": len(check_rows),
+            "control_rms_m": rms(control_rows), "check_rms_m": rms(check_rows),
+            "check_horizontal_rms_m": rms(check_rows, "horizontal_m"),
+            "check_vertical_rms_m": rms(check_rows, "vertical_m"), "points": points, "notes": notes}

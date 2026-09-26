@@ -61,10 +61,13 @@ def utm_epsg(lon: float, lat: float) -> int:
     return (32600 if lat >= 0 else 32700) + zone
 
 
-def gps_altitude_datum(telemetry_source: str, configured: str) -> tuple[str, bool]:
-    """(datum, assumed) for the telemetry's altitude."""
+def gps_altitude_datum(telemetry_source: str, configured: str,
+                       measured: str | None = None) -> tuple[str, bool]:
+    """(datum, assumed) for the telemetry's altitude: configured > measured (S5-1) > KLV > assumed."""
     if configured in ("ellipsoidal", "orthometric"):
         return configured, False
+    if measured in ("ellipsoidal", "orthometric"):
+        return measured, False
     if str(telemetry_source).lower().startswith("klv"):
         return "orthometric", False  # ST 0601 tag 15: sensor true altitude, MSL
     return "ellipsoidal", True

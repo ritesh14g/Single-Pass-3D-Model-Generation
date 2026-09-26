@@ -33,16 +33,19 @@ def read_geo_enu(path: Path) -> dict[str, np.ndarray]:
     return {r[0]: np.array([east[i], north[i], alt[i] - alt[0]]) for i, r in enumerate(rows)}
 
 
-def umeyama(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-    """Least-squares similarity (scale, rotation, translation) mapping ``src`` onto ``dst``."""
-    mu_s, mu_d = src.mean(0), dst.mean(0)
+def umeyama(src: np.ndarray, dst: np.ndarray, weights: np.ndarray | None = None) -> tuple[float, np.ndarray, np.ndarray]:
+    """Least-squares similarity (scale, rotation, translation) mapping ``src`` onto ``dst``;
+    ``weights`` per pair (GCPs count more than GPS fixes, S5-3)."""
+    w = np.ones(len(src)) if weights is None else np.asarray(weights, np.float64)
+    w = w / w.sum()
+    mu_s, mu_d = w @ src, w @ dst
     cs, cd = src - mu_s, dst - mu_d
-    u, d, vt = np.linalg.svd(cd.T @ cs / len(src))
+    u, d, vt = np.linalg.svd((cd * w[:, None]).T @ cs)
     sign = np.eye(3)
     if np.linalg.det(u @ vt) < 0:
         sign[2, 2] = -1
     rot = u @ sign @ vt
-    scale = float(np.trace(np.diag(d) @ sign) / cs.var(0).sum())
+    scale = float(np.trace(np.diag(d) @ sign) / (w @ (cs ** 2).sum(1)))
     return scale, rot, mu_d - scale * rot @ mu_s
 
 

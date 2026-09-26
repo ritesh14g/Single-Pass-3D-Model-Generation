@@ -25,7 +25,7 @@ import numpy as np
 
 from src import __version__
 from src.core.logging import get_logger, log_downgrade, log_event
-from src.export import rasters, writers
+from src.export import classify, rasters, writers
 from src.geo.georef import Georef
 
 log = get_logger(__name__)
@@ -94,6 +94,23 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
     extras = {"crs": crs_string, "offset": list(offset), "vertical_datum": frame.vertical_datum if frame else None,
               "note": "vertices are map coordinates minus offset (east, north, up before glTF's Y-up rotation)"}
 
+    mesh_src = track_a.get("textured") or track_a.get("mesh")
+    mesh_state: dict[str, Any] = {}
+
+    def mesh_local():
+        """The Stage 4 mesh in the local map frame, loaded once; None if absent or rejected."""
+        if "mesh" not in mesh_state:
+            mesh_state["mesh"] = None
+            if mesh_src is not None:
+                loaded = attempt("mesh_load", lambda: writers.load_mesh(Path(mesh_src)))
+                if loaded is not None:
+                    loaded.vertices = georef.to_local(np.asarray(loaded.vertices))
+                    broken = writers.mesh_is_broken(np.asarray(loaded.vertices), local,
+                                                    float(ecfg.mesh_max_extent_factor))
+                    mesh_state["broken"] = broken
+                    mesh_state["mesh"] = None if broken else loaded
+        return mesh_state["mesh"]
+
     # -- dense cloud: PLY, LAS, rasters ------------------------------------------
     local = rgb = views = confidence = None
     zones_info: dict[str, Any] | None = None
@@ -126,16 +143,22 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                 files.append(writers.file_entry(path, "ply", points=len(cloud_local), frame="local",
                                                 layers=sorted(extra or {})))
         if "las" in wanted:
+            classes, class_info = None, None
+            if ecfg.las.classify.enabled and frame is not None:       # needs metres and a z-up frame
+                got = attempt("las_classify", lambda: classify.ground_classes(cloud_local, ecfg.las.classify))
+                if got:
+                    classes, class_info = got
             path = attempt("las", lambda: writers.write_las(out_dir / "cloud.las", map_xyz, cloud_rgb, cloud_views,
                                                             cloud_conf, crs_string, list(ecfg.las.scale),
-                                                            int(ecfg.las.point_format), extra=extra))
+                                                            int(ecfg.las.point_format), extra=extra,
+                                                            classification=classes))
             if path:
                 files.append(writers.file_entry(path, "las", points=len(cloud_local), frame="map", crs=crs_string,
-                                                layers=sorted(extra or {})))
+                                                layers=sorted(extra or {}), classification=class_info))
             if ecfg.tiling.enabled and len(cloud_local) > int(ecfg.tiling.max_points_per_tile):
                 tiles = attempt("las_tiles", lambda: writers.write_las_tiles(
                     out_dir / "tiles", map_xyz, cloud_rgb, cloud_views, cloud_conf, crs_string, list(ecfg.las.scale),
-                    float(ecfg.tiling.tile_size_m), extra=extra))
+                    float(ecfg.tiling.tile_size_m), extra=extra, classification=classes))
                 for tile in tiles or []:
                     files.append(writers.file_entry(tile, "las_tile", frame="map", crs=crs_string))
         if "geotiff" in wanted:
@@ -149,35 +172,64 @@ def run_export(track_a: dict[str, Path], georef_path: Path, out_dir: Path, cfg: 
                                                frame.vertical_datum if frame else "model units",
                                                float(ecfg.raster.nodata))
                 valid = float((dsm != float(ecfg.raster.nodata)).mean())
-                return paths, {"resolution_m": res, "width": grid.width, "height": grid.height,
-                               "valid_fraction": round(valid, 3), "filled_cells": filled}
+                info = {"resolution_m": res, "width": grid.width, "height": grid.height,
+                        "valid_fraction": round(valid, 3), "filled_cells": filled}
+                ortho_info = {**info, "source": "dense cloud colours"}
+                rendered = _mesh_ortho(grid, dsm) if str(ecfg.raster.ortho_source) != "cloud" else None
+                if rendered is not None:
+                    ortho_info = rendered
+                return paths, info, ortho_info
+
+            def _mesh_ortho(grid, dsm):
+                """S5-2: the orthophoto rendered from the textured mesh, at the texture's resolution."""
+                mesh = mesh_local() if track_a.get("textured") is not None else None
+                texture = rasters.texture_image(mesh) if mesh is not None else None
+                if texture is None:
+                    return None
+                rcfg = ecfg.raster
+                vertices, faces, uv = np.asarray(mesh.vertices), np.asarray(mesh.faces), np.asarray(mesh.visual.uv)
+                res = rasters.texel_size(vertices, faces, uv, texture.shape) if str(rcfg.ortho_resolution_m) == "auto" \
+                    else float(rcfg.ortho_resolution_m)
+                res = max(float(res or grid.res), float(rcfg.ortho_min_resolution_m))
+                span_x, span_y = grid.width * grid.res, grid.height * grid.res
+                while (span_x / res) * (span_y / res) > float(rcfg.ortho_max_pixels):
+                    res *= 1.25
+                ogrid = rasters.Grid(grid.x0, grid.y1, res, int(np.ceil(span_x / res)), int(np.ceil(span_y / res)))
+                image, hit = rasters.render_ortho(vertices, faces, uv, texture, ogrid,
+                                                  max_triangle_px=max(int(float(rcfg.ortho_max_triangle_m2)
+                                                                          / res ** 2), 1),
+                                                  empty_color=tuple(cfg.get_path("recon.track_a.texture.empty_color")))
+                supported = rasters.support_mask(dsm, float(rcfg.nodata), grid, ogrid, int(rcfg.ortho_support_cells))
+                image[~supported] = 0
+                rasters.write_ortho(out_dir / "orthophoto.tif", ogrid, image, offset,
+                                    frame.horizontal_epsg if frame else None,
+                                    "orthophoto rendered top-down from the textured mesh; band 4 = alpha")
+                return {"resolution_m": round(res, 3), "width": ogrid.width, "height": ogrid.height,
+                        "valid_fraction": round(float((image[:, :, 3] > 0).mean()), 3),
+                        "source": "textured mesh (rendered)", "mesh_hit_fraction": round(hit, 3)}
 
             got = attempt("geotiff", geotiffs)
             if got:
-                (dsm_path, ortho_path), raster_info = got
+                (dsm_path, ortho_path), raster_info, ortho_info = got
                 files.append(writers.file_entry(dsm_path, "geotiff_dsm", crs=crs_string, **raster_info))
-                files.append(writers.file_entry(ortho_path, "geotiff_ortho", crs=crs_string, **raster_info))
+                files.append(writers.file_entry(ortho_path, "geotiff_ortho", crs=crs_string, **ortho_info))
 
     # -- mesh: OBJ, glTF binary (+ confidence), FBX -------------------------------------
-    mesh_src = track_a.get("textured") or track_a.get("mesh")
     obj_path = None
     if mesh_src is None:
         for fmt in ("obj", "glb", "fbx"):
             if fmt in wanted:
                 failures[fmt] = "Stage 4 produced no mesh (dense point cloud only)"
     if mesh_src is not None and any(f in wanted for f in ("obj", "glb", "fbx")):
-        mesh = attempt("mesh_load", lambda: writers.load_mesh(Path(mesh_src)))
-        if mesh is not None:
-            mesh.vertices = georef.to_local(np.asarray(mesh.vertices))
-            broken = writers.mesh_is_broken(np.asarray(mesh.vertices), local, float(ecfg.mesh_max_extent_factor))
-            if broken:
-                # Never hand absurd geometry to the writers: it overflowed float32 in glTF and hung
-                # Blender for > 10 min on the box (T-1). The point formats still go out.
-                for fmt in ("obj", "glb", "fbx"):
-                    if fmt in wanted:
-                        failures[fmt] = f"Stage 4 mesh rejected: {broken}"
-                log_downgrade(log, "mesh export", "skipped (point formats only)", broken)
-                mesh = None
+        mesh = mesh_local()
+        broken = mesh_state.get("broken")
+        if broken:
+            # Never hand absurd geometry to the writers: it overflowed float32 in glTF and hung
+            # Blender for > 10 min on the box (T-1). The point formats still go out.
+            for fmt in ("obj", "glb", "fbx"):
+                if fmt in wanted:
+                    failures[fmt] = f"Stage 4 mesh rejected: {broken}"
+            log_downgrade(log, "mesh export", "skipped (point formats only)", broken)
         if mesh is not None:
             if "obj" in wanted or "fbx" in wanted:
                 if track_a.get("textured") is not None and str(mesh_src).lower().endswith(".obj"):

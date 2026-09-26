@@ -14,10 +14,12 @@ log = get_logger(__name__)
 
 
 def run_geo(sparse_model: Path, geo_path: Path | None, out_dir: Path, cfg: Any, *,
-            telemetry_source: str = "") -> dict[str, Any]:
+            telemetry_source: str = "", altitude: dict[str, Any] | None = None,
+            gcp: Path | None = None) -> dict[str, Any]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    georef = georeference(Path(sparse_model), geo_path, cfg, telemetry_source=telemetry_source)
+    georef = georeference(Path(sparse_model), geo_path, cfg, telemetry_source=telemetry_source, altitude=altitude,
+                          gcp_path=gcp)
     path = georef.save(out_dir / "georef.json")
     artifacts: dict[str, Path] = {"georef": path}
     downgrades: list[str] = []

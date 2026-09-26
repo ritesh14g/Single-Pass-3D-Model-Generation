@@ -137,6 +137,10 @@ class TelemetryTable:
     # How the telemetry clock was tied to the video's: {"method": "video_clock" | "recording_flag"
     # | "wall_clock" | "offset" | "log_start", ...}. The input check reads it.
     alignment: dict[str, Any] = field(default_factory=dict)
+    # The log's home (takeoff) record when it has one: {"lat", "lon", "alt"} (S5-1).
+    home: dict[str, float] | None = None
+    # How the altitude was made absolute and which datum it is in (src/geo/vertical.py).
+    altitude_check: dict[str, Any] = field(default_factory=dict)
 
     # -- Construction -------------------------------------------------------
     @classmethod
@@ -249,6 +253,8 @@ class TelemetryTable:
             "scale_free": self.scale_free,
             "notes": list(self.notes),
         }
+        if self.altitude_check:
+            info["altitude"] = dict(self.altitude_check)
         if self.has_gps:
             info["bounds"] = {
                 "lat_min": float(self.frame["lat"].min()),
@@ -310,7 +316,7 @@ class TelemetryTable:
         if added:
             notes.append(f"filled {', '.join(sorted(set(added)))} from {other.source}")
         return TelemetryTable(frame=frame, source=f"{self.source}+{other.source}", notes=notes,
-                              alignment=self.alignment)
+                              alignment=self.alignment, home=self.home or other.home)
 
 
 # --------------------------------------------------------------------------
@@ -558,6 +564,7 @@ def table_from_frame(
             notes.append(note)
     out = out[keep]
     table = TelemetryTable.from_records(out.to_dict("records"), source=source)
+    table.home = _home_record(frame, resolved)
     if table.is_empty:
         return table
     table.alignment = alignment
@@ -647,6 +654,18 @@ def _csv_time_column(frame: pd.DataFrame, column: str | None, path: Path) -> tup
     return pd.Series(np.arange(len(frame), dtype=float), index=frame.index), None
 
 
+def _home_record(frame: pd.DataFrame, resolved: Mapping[str, str]) -> dict[str, float] | None:
+    """The log's home (takeoff) point from its home_lat / home_lon / home_alt columns (S5-1)."""
+    home: dict[str, float] = {}
+    for key, name in (("home_lat", "lat"), ("home_lon", "lon"), ("home_alt", "alt")):
+        if key in resolved:
+            values = pd.to_numeric(frame[resolved[key]], errors="coerce").dropna()
+            values = values[values != 0] if name != "alt" else values
+            if len(values):
+                home[name] = float(values.median())
+    return home or None
+
+
 def _normalize_header(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
@@ -694,7 +713,8 @@ def resolve_csv_columns(
                 break
 
     for canonical, spellings in column_map.items():
-        if canonical in resolved:
+        # home_* only by exact header: "HOME.height" must never fall back to "HOME.goHomeHeight".
+        if canonical in resolved or canonical.startswith("home_"):
             continue
         candidates: list[tuple[int, str]] = []
         for spelling in spellings:
@@ -916,6 +936,17 @@ def load_telemetry(
             reason="no KLV, SRT, CSV or EXIF source yielded usable rows",
         )
         return TelemetryTable.empty("no telemetry source available; model is scale-free")
+
+    # S5-1: make an above-takeoff "altitude" absolute and measure the datum against terrain.
+    from src.geo.vertical import resolve_altitude
+
+    primary.altitude_check = resolve_altitude(primary, cfg)
+    primary.frame["valid_flags"] = _compute_flags(primary.frame)
+    if primary.altitude_check.get("relative_fixed"):
+        primary.notes.append(primary.altitude_check["relative_fixed"])
+    if primary.altitude_check.get("detail"):
+        log_event(log, logging.INFO, f"altitude datum: {primary.altitude_check.get('datum') or 'not decided'} "
+                                     f"({primary.altitude_check['detail']})", event="altitude_datum")
 
     if not primary.has_gps:
         log_downgrade(log, "GPS", "scale-free reconstruction", "telemetry had no usable lat/lon")
