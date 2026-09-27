@@ -265,6 +265,49 @@ def tile_offsets(ours: Surface, ref: Surface, tile_m: float, max_shift_m: float,
     return out
 
 
+def doming(tiles: list[dict[str, Any]], min_tiles: int = 6) -> dict[str, Any] | None:
+    """Bowl-shaped height error along the flight (S4-7), from the per-tile height offsets.
+
+    SfM on a single strip can bend the surface (radial distortion traded for curvature): the
+    classic symptom is a model low mid-strip and high at both ends. Each tile's own height
+    offset against the reference is fitted as ``a + b*x + c*y + k*s^2`` (a tilted plane, which
+    georeferencing may leave, plus a bowl along the flight axis ``s``: the tiles' principal axis),
+    weighted by the tile's match score. ``sag_m`` = k * (half span)^2, the ends' height relative
+    to the middle; positive = ends high (a bowl). ``sag_sigma_m`` is its standard error from the
+    fit residuals: a sag inside ~2 sigma is not distinguishable from noise.
+    """
+    rows = [t for t in tiles if t.get("up_m") is not None and np.isfinite(t["up_m"])]
+    if len(rows) < min_tiles:
+        return None
+    cx = np.array([(t["x0"] + t["x1"]) / 2 for t in rows])
+    cy = np.array([(t["y0"] + t["y1"]) / 2 for t in rows])
+    up = np.array([t["up_m"] for t in rows])
+    w = np.sqrt(np.clip([t.get("score", 1.0) for t in rows], 1e-3, None))
+    xy = np.c_[cx - cx.mean(), cy - cy.mean()]
+    axis = np.linalg.svd(xy, full_matrices=False)[2][0]
+    s = xy @ axis
+    s -= (s.max() + s.min()) / 2
+    half = float((s.max() - s.min()) / 2)
+    if half <= 0:
+        return None
+    design = np.c_[np.ones_like(s), xy, s ** 2]
+    coef, *_ = np.linalg.lstsq(design * w[:, None], up * w, rcond=None)
+    resid = up - design @ coef
+    dof = max(len(up) - design.shape[1], 1)
+    sigma2 = float(np.sum((w * resid) ** 2) / dof)
+    try:
+        cov = sigma2 * np.linalg.inv((design * w[:, None]).T @ (design * w[:, None]))
+        k_sigma = float(np.sqrt(max(cov[3, 3], 0.0)))
+    except np.linalg.LinAlgError:
+        k_sigma = float("nan")
+    sag, sag_sigma = float(coef[3] * half ** 2), k_sigma * half ** 2
+    return {"tiles": len(up), "span_m": round(2 * half, 1), "sag_m": round(sag, 3),
+            "sag_sigma_m": round(sag_sigma, 3),
+            "significant": bool(np.isfinite(sag_sigma) and abs(sag) > 2 * sag_sigma),
+            "tilt_m_per_km": round(float(np.hypot(coef[1], coef[2]) * 1000), 3),
+            "residual_rms_m": round(float(np.sqrt(np.mean(resid ** 2))), 3)}
+
+
 def accuracy_vs_reference(export_dir: Path, reference: Path, qcfg: Any) -> dict[str, Any]:
     """Our export (dsm.tif + cloud.las) against a reference surface; per-zone vertical errors."""
     import laspy
@@ -328,6 +371,9 @@ def accuracy_vs_reference(export_dir: Path, reference: Path, qcfg: Any) -> dict[
             "points_after_tile_offset": {k: error_stats(resid[m]) for k, m in groups.items()},
             "tile_offsets": [{k: (round(v, 3) if isinstance(v, float) else v) for k, v in t_.items()} for t_ in tiles],
         }
+        dome = doming(tiles)
+        if dome is not None:
+            result["local"]["doming"] = dome
         if ground.any():
             result["local"]["ground_after_tile_offset"] = {k: error_stats(resid[m & ground]) for k, m in groups.items()
                                                           if k != "zone2_fill"}

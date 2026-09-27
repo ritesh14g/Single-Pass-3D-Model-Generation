@@ -117,7 +117,8 @@ class IlluminationResult:
 # (a) Exposure drift
 # --------------------------------------------------------------------------
 def fit_gain_bias(
-    reference: np.ndarray, target: np.ndarray, transform: Sequence[float] | None = None
+    reference: np.ndarray, target: np.ndarray, transform: Sequence[float] | None = None,
+    block: int = 1, symmetric: bool = False,
 ) -> ExposureTransform:
     """Fit ``reference ~= gain * target + bias`` between two overlapping frames.
 
@@ -140,9 +141,18 @@ def fit_gain_bias(
     parallax on tall structures, and specular highlights all violate
     brightness constancy locally, and a handful of such pixels would otherwise
     tilt the line.
+
+    ``block`` and ``symmetric`` answer S2-9. A per-pixel least-squares slope is
+    biased toward 0 by anything that decorrelates the pair (regression
+    dilution: slope = r * sd_y / sd_x), and an affine warp of an oblique,
+    parallax-rich view leaves r ~ 0.83, so every link read ~0.79 and 49 links
+    composed to 0.0003 on Esri. Comparing ``block`` x ``block`` means instead of
+    pixels makes a few pixels of misregistration irrelevant (r 0.96), and the
+    symmetric (geometric-mean) slope sd_y / sd_x does not shrink with r at all,
+    so A->B and B->A are exact inverses.
     """
     if transform is not None:
-        fitted = _fit_paired(reference, target, transform)
+        fitted = _fit_paired(reference, target, transform, block=block, symmetric=symmetric)
         if fitted is not None:
             return fitted
 
@@ -164,7 +174,8 @@ def fit_gain_bias(
 
 
 def _fit_paired(
-    reference: np.ndarray, target: np.ndarray, transform: Sequence[float]
+    reference: np.ndarray, target: np.ndarray, transform: Sequence[float],
+    block: int = 1, symmetric: bool = False,
 ) -> ExposureTransform | None:
     """Trimmed least-squares gain/bias over the region two frames share."""
     from src.ingest.frame_selector import denormalize_transform
@@ -180,8 +191,17 @@ def _fit_paired(
     coverage = cv2.warpAffine(
         np.ones((h, w), dtype=np.float32), matrix, (w, h), flags=cv2.INTER_NEAREST, borderValue=0
     )
+    block = max(int(block), 1)
+    if block > 1:
+        bw, bh = w // block, h // block
+        if bw < 2 or bh < 2:
+            return None
+        crop = (slice(0, bh * block), slice(0, bw * block))
+        tgt_luma, warped, coverage = (
+            cv2.resize(a[crop], (bw, bh), interpolation=cv2.INTER_AREA) for a in (tgt_luma, warped, coverage))
+    min_samples = max(_MIN_PAIRED_PIXELS // (block * block), 50)
     valid = coverage > 0.99
-    if int(valid.sum()) < _MIN_PAIRED_PIXELS:
+    if int(valid.sum()) < min_samples:
         return None
 
     x = tgt_luma[valid].astype(np.float64)
@@ -189,7 +209,7 @@ def _fit_paired(
     # Clipped pixels carry no radiometric information: a blown highlight stays
     # blown whatever the gain, so including them biases the slope toward 1.
     unclipped = (x > 2) & (x < 253) & (y > 2) & (y < 253)
-    if int(unclipped.sum()) < _MIN_PAIRED_PIXELS:
+    if int(unclipped.sum()) < min_samples:
         return None
     x, y = x[unclipped], y[unclipped]
 
@@ -197,19 +217,30 @@ def _fit_paired(
     if spread < 5.0:
         return ExposureTransform(1.0, 0.0, fit_quality=0.0, paired_fit=True)
 
-    slope, intercept = np.polyfit(x, y, 1)
+    slope, intercept = _line(x, y, symmetric)
     for _ in range(_TRIM_ITERATIONS):
         residual = np.abs(slope * x + intercept - y)
         keep = residual <= max(float(np.percentile(residual, _TRIM_PERCENTILE)), 1.0)
-        if int(keep.sum()) < _MIN_PAIRED_PIXELS:
+        if int(keep.sum()) < min_samples:
             break
-        slope, intercept = np.polyfit(x[keep], y[keep], 1)
+        slope, intercept = _line(x[keep], y[keep], symmetric)
 
     residual = float(np.sqrt(np.mean((slope * x + intercept - y) ** 2)))
     quality = float(np.clip(1.0 - residual / max(spread, 1e-6), 0.0, 1.0))
     return ExposureTransform(
         paired_fit=True,
         gain=float(slope), bias=float(intercept), fit_quality=quality)
+
+
+def _line(x: np.ndarray, y: np.ndarray, symmetric: bool) -> tuple[float, float]:
+    """``y ~ slope * x + intercept``: least squares, or the symmetric geometric-mean line."""
+    if not symmetric:
+        slope, intercept = np.polyfit(x, y, 1)
+        return float(slope), float(intercept)
+    sx, sy = float(np.std(x)), float(np.std(y))
+    r = float(np.corrcoef(x, y)[0, 1]) if sx > 0 and sy > 0 else 0.0
+    slope = (sy / sx if sx > 0 else 1.0) * (1.0 if r >= 0 else -1.0)
+    return slope, float(np.mean(y) - slope * np.mean(x))
 
 
 class ExposureChain:
@@ -224,6 +255,13 @@ class ExposureChain:
     or an out-of-range gain is replaced by the identity for that step, which
     keeps the chain anchored rather than letting one bad frame skew everything
     after it.
+
+    Even unbiased links random-walk when composed (Esri, block-mean symmetric
+    fit: cumulative gain 0.85-1.54 over 49 links on a clip whose frame means
+    stay within 1-2%), so each composed transform also decays toward the
+    identity by ``leak`` per link (gain ** (1 - leak), bias * (1 - leak)): the
+    walk becomes bounded (leak 0.2: 0.91-1.13), and a genuine exposure step is
+    still corrected for the frames right after it, fading over ~1/leak links.
     """
 
     def __init__(self, cfg: Any):
@@ -236,6 +274,10 @@ class ExposureChain:
         # computes gain*pixel + bias, so an unbounded bias saturates the frame
         # to solid white: 20 of 53 conditioned images were pure 255 (S2-10).
         self.max_bias = abs(float(chain_cfg["max_bias"]))
+        # S2-9: block-mean, symmetric link fits and a decay toward the identity.
+        self.fit_block = int(chain_cfg.get("fit_block_px", 1))
+        self.symmetric = str(chain_cfg.get("fit_method", "ols")) == "symmetric"
+        self.leak = float(np.clip(float(chain_cfg.get("leak", 0.0)), 0.0, 1.0))
         self.transforms: dict[int, ExposureTransform] = {}
         # The gain the chain would have reached with no bounds, per frame. Only
         # a diagnostic: never applied to an image.
@@ -266,7 +308,7 @@ class ExposureChain:
             self._cumulative = ExposureTransform(1.0, 0.0)
             self._unclamped_gain = 1.0
         else:
-            step = fit_gain_bias(self._previous, image, geometry)
+            step = fit_gain_bias(self._previous, image, geometry, block=self.fit_block, symmetric=self.symmetric)
             if step.fit_quality < 0.5 or not (self.min_gain <= step.gain <= self.max_gain):
                 self.rejected_links += 1
                 log_event(
@@ -280,6 +322,9 @@ class ExposureChain:
                 step = ExposureTransform(1.0, 0.0, fit_quality=step.fit_quality)
             composed_gain = self._cumulative.gain * step.gain
             composed_bias = self._cumulative.gain * step.bias + self._cumulative.bias
+            if self.leak > 0:
+                composed_gain = composed_gain ** (1.0 - self.leak)
+                composed_bias *= 1.0 - self.leak
             # A second accumulator that is never clamped. Once a frame is
             # pinned to a bound the clamped value becomes the next frame's
             # base, so the chain forgets where it really was; this keeps the
@@ -395,6 +440,15 @@ def detect_shadows(image: np.ndarray, cfg: Any) -> tuple[np.ndarray, float]:
         empty = np.zeros(image.shape[:2], dtype=bool)
         return empty, 0.0
 
+    # Shadows are large structures: detect on a reduced copy and scale the mask back up. At 4K the
+    # region gates on the full frame cost ~1 s/frame (speed work, 2026-09-27); at 1280 px ~0.1 s.
+    full_hw = image.shape[:2]
+    work_width = int(shadow_cfg.get("work_width", 0) or 0)
+    if 0 < work_width < image.shape[1]:
+        scale = work_width / image.shape[1]
+        image = cv2.resize(image, (work_width, max(int(round(image.shape[0] * scale)), 1)),
+                           interpolation=cv2.INTER_AREA)
+
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     saturation = hsv[:, :, 1].astype(np.float32) / 255.0
     value = hsv[:, :, 2].astype(np.float32) / 255.0
@@ -433,6 +487,9 @@ def detect_shadows(image: np.ndarray, cfg: Any) -> tuple[np.ndarray, float]:
     low_sat = saturation <= float(shadow_cfg["max_saturation"])
 
     mask = sky_lit & not_bright & low_sat
+    mask = _shadow_regions(mask, value, shadow_cfg)
+    if mask.shape != full_hw:
+        mask = cv2.resize(mask.astype(np.uint8), (full_hw[1], full_hw[0]), interpolation=cv2.INTER_NEAREST).astype(bool)
 
     dilate = int(shadow_cfg["dilate_px"])
     if dilate > 0 and mask.any():
@@ -440,6 +497,62 @@ def detect_shadows(image: np.ndarray, cfg: Any) -> tuple[np.ndarray, float]:
         mask = cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
 
     return mask, float(mask.mean())
+
+
+def _shadow_regions(mask: np.ndarray, value: np.ndarray, shadow_cfg: Any) -> np.ndarray:
+    """Keep the candidate regions that behave like cast shadows (S2-3).
+
+    The pixel gates alone flag any dark, bluish, grey texel: 32% of the repo test scene at
+    precision 0.32, and 36% of clean Esri frames. A cast shadow is a region, not a texel: it
+    spans many texture elements and is darker than the sunlit ground around it. So after
+    closing small holes, a connected region is kept only when it covers at least
+    ``min_region_fraction`` of the frame and its mean brightness is below ``region_dark_ratio``
+    times the mean of a ``ring_fraction``-wide ring around it. Kept regions are then closed by
+    ``fill_fraction``: texels inside a real shadow that missed the pixel gates (a red roof in
+    shade is not much bluer) join it, and nothing the region test dropped can come back.
+    """
+    min_fraction = float(shadow_cfg.get("min_region_fraction", 0.0))
+    dark_ratio = float(shadow_cfg.get("region_dark_ratio", 1.0))
+    if not mask.any() or (min_fraction <= 0 and dark_ratio >= 1.0):
+        return mask
+    h, w = mask.shape
+    diag = float(np.hypot(h, w))
+    close = max(int(round(float(shadow_cfg.get("close_fraction", 0.0)) * diag)), 0)
+    m = mask.astype(np.uint8)
+    density_window = max(int(round(float(shadow_cfg.get("density_window_fraction", 0.0)) * diag)), 0)
+    if density_window > 1:
+        # A shadow is mostly candidate texels; texture that merely looks shadowy is scattered.
+        density = cv2.blur(mask.astype(np.float32), (2 * density_window + 1,) * 2)
+        m = (density >= float(shadow_cfg.get("min_density", 0.5))).astype(np.uint8)
+    if close > 0:
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * close + 1,) * 2))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    min_area = min_fraction * h * w
+    ring = max(int(round(float(shadow_cfg.get("ring_fraction", 0.02)) * diag)), 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ring + 1,) * 2)
+    keep = np.zeros(count, dtype=bool)
+    for label in range(1, count):
+        x, y, bw, bh, area = stats[label]
+        if area < min_area:
+            continue
+        if dark_ratio >= 1.0:
+            keep[label] = True
+            continue
+        x0, y0 = max(x - ring, 0), max(y - ring, 0)
+        x1, y1 = min(x + bw + ring, w), min(y + bh + ring, h)
+        region = labels[y0:y1, x0:x1] == label
+        around = cv2.dilate(region.astype(np.uint8), kernel).astype(bool) & ~(m[y0:y1, x0:x1] > 0)
+        if not around.any():
+            keep[label] = True       # a shadow filling the frame has no sunlit ring to compare with
+            continue
+        v = value[y0:y1, x0:x1]
+        keep[label] = float(v[region].mean()) < dark_ratio * float(v[around].mean())
+    kept = keep[labels] if density_window <= 1 else keep[labels] & mask
+    fill = max(int(round(float(shadow_cfg.get("fill_fraction", 0.0)) * diag)), 0)
+    if fill > 0 and kept.any():
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * fill + 1,) * 2)
+        return cv2.morphologyEx(kept.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
+    return kept & mask
 
 
 def shadow_weight_map(shadow_mask: np.ndarray, cfg: Any) -> np.ndarray:

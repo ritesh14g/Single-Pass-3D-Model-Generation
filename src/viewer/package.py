@@ -102,9 +102,11 @@ def _texture_jpeg(mesh, max_px: int, quality: int) -> tuple[bytes | None, tuple[
 
 # -- glTF ------------------------------------------------------------------------------------
 def write_scene_glb(path: Path, vertices_local: np.ndarray, faces: np.ndarray, uv: np.ndarray | None,
-                    texture_jpeg: bytes | None, confidence: np.ndarray, zone: np.ndarray, extras: dict) -> Path:
+                    texture_jpeg: bytes | None, confidence: np.ndarray, zone: np.ndarray, extras: dict,
+                    colours: np.ndarray | None = None) -> Path:
     """One glTF 2.0 binary mesh: Y-up positions, optional texture, and custom attributes
-    ``_CONFIDENCE`` (float 0-1, -1 = unknown) and ``_ZONE`` (float 0 unknown, 1/2/3)."""
+    ``_CONFIDENCE`` (float 0-1, -1 = unknown) and ``_ZONE`` (float 0 unknown, 1/2/3).
+    ``colours`` (uint8 RGB per vertex, COLOR_0) is the photo layer of an untextured mesh (lite LOD)."""
     import pygltflib as g
 
     y_up = (np.c_[vertices_local, np.ones(len(vertices_local))] @ writers.Z_UP_TO_Y_UP.T)[:, :3].astype(np.float32)
@@ -134,6 +136,11 @@ def write_scene_glb(path: Path, vertices_local: np.ndarray, faces: np.ndarray, u
         # OBJ UV origin is bottom-left, glTF's top-left.
         gl_uv = np.c_[uv[:, 0], 1.0 - uv[:, 1]].astype(np.float32)
         attributes.TEXCOORD_0 = accessor(gl_uv, g.VEC2, g.FLOAT, g.ARRAY_BUFFER)
+    if colours is not None:
+        acc = accessor(np.ascontiguousarray(np.asarray(colours, np.uint8)[:, :3]), g.VEC3, g.UNSIGNED_BYTE,
+                       g.ARRAY_BUFFER)
+        accessors[acc].normalized = True
+        attributes.COLOR_0 = acc
     custom = {"_CONFIDENCE": accessor(confidence.astype(np.float32), g.SCALAR, g.FLOAT, g.ARRAY_BUFFER),
               "_ZONE": accessor(zone.astype(np.float32), g.SCALAR, g.FLOAT, g.ARRAY_BUFFER)}
     for name, index in custom.items():
@@ -149,6 +156,10 @@ def write_scene_glb(path: Path, vertices_local: np.ndarray, faces: np.ndarray, u
         materials.append(g.Material(pbrMetallicRoughness=g.PbrMetallicRoughness(
             baseColorTexture=g.TextureInfo(index=0), metallicFactor=0.0, roughnessFactor=1.0),
             doubleSided=True, extensions={"KHR_materials_unlit": {}}))
+    elif colours is not None:
+        materials.append(g.Material(pbrMetallicRoughness=g.PbrMetallicRoughness(
+            baseColorFactor=[1.0, 1.0, 1.0, 1.0], metallicFactor=0.0, roughnessFactor=1.0),
+            doubleSided=True, extensions={"KHR_materials_unlit": {}}))
     else:
         materials.append(g.Material(pbrMetallicRoughness=g.PbrMetallicRoughness(
             baseColorFactor=[0.75, 0.75, 0.75, 1.0], metallicFactor=0.0, roughnessFactor=1.0), doubleSided=True))
@@ -160,11 +171,68 @@ def write_scene_glb(path: Path, vertices_local: np.ndarray, faces: np.ndarray, u
         meshes=[g.Mesh(primitives=[g.Primitive(attributes=attributes, indices=indices, material=0)])],
         accessors=accessors, bufferViews=views, buffers=[g.Buffer(byteLength=len(blob))],
         materials=materials, textures=textures, images=images, samplers=samplers,
-        extensionsUsed=["KHR_materials_unlit"] if images else [], extras=extras,
+        extensionsUsed=["KHR_materials_unlit"] if images or colours is not None else [], extras=extras,
     )
     gltf.set_binary_blob(blob)
     gltf.save_binary(str(path))
     return Path(path)
+
+
+def lite_mesh(vertices: np.ndarray, faces: np.ndarray, uv: np.ndarray | None, texture: Any,
+              confidence: np.ndarray, zone: np.ndarray, max_faces: int) -> dict[str, np.ndarray] | None:
+    """A decimated copy for phones (S6-3): ``max_faces`` faces, photo colour per vertex.
+
+    The textured mesh is split at every atlas seam (OpenMVS packs one patch per view), so it is
+    first welded by position; decimating the split mesh would tear at each seam, and a texture
+    cannot follow collapsed vertices. Each welded vertex takes the mean texture colour at its UVs;
+    after quadric decimation (fast_simplification) a kept vertex averages the colour and
+    confidence of the vertices collapsed into it and keeps the *least* trusted zone among them,
+    so a zone-3 warning is never lost to decimation. None when the library is missing.
+    """
+    try:
+        import fast_simplification
+    except ImportError:
+        return None
+    welded, inverse = np.unique(np.round(vertices, 3), axis=0, return_inverse=True)
+    inverse = np.asarray(inverse).ravel()
+    tri = inverse[faces]
+    tri = tri[(tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])]
+    n = len(welded)
+
+    def mean_by(index: np.ndarray, values: np.ndarray, size: int) -> np.ndarray:
+        count = np.maximum(np.bincount(index, minlength=size), 1)
+        return np.stack([np.bincount(index, values[:, k], minlength=size) / count
+                         for k in range(values.shape[1])], 1)
+
+    rgb = np.full((len(vertices), 3), 190.0)
+    if uv is not None and texture is not None:
+        image = np.asarray(texture.convert("RGB"))
+        h, w = image.shape[:2]
+        px = np.clip((uv[:, 0] % 1.0) * (w - 1), 0, w - 1).astype(int)
+        py = np.clip((1.0 - uv[:, 1] % 1.0) * (h - 1), 0, h - 1).astype(int)
+        rgb = image[py, px].astype(float)
+    known = confidence >= 0
+    conf_w = mean_by(inverse, np.c_[np.where(known, confidence, 0.0), known.astype(float)], n)
+    colour_w = mean_by(inverse, rgb, n)
+    zone_w = np.zeros(n, np.float32)
+    np.maximum.at(zone_w, inverse, zone.astype(np.float32))
+
+    reduction = 1.0 - max_faces / max(len(tri), 1)
+    if reduction > 0:
+        _, _, collapses = fast_simplification.simplify(welded, tri, reduction, return_collapses=True)
+        points, tri, mapping = fast_simplification.replay_simplification(welded, tri, collapses)
+        mapping = np.asarray(mapping).ravel()
+        m = len(points)
+        colour = mean_by(mapping, colour_w, m)
+        num = mean_by(mapping, conf_w, m)            # mean of means: fine for a phone preview
+        zone_out = np.zeros(m, np.float32)
+        np.maximum.at(zone_out, mapping, zone_w)
+    else:
+        points, colour, zone_out, num = welded, colour_w, zone_w, conf_w
+    conf_out = np.where(num[:, 1] > 0, num[:, 0] / np.maximum(num[:, 1], 1e-9), -1.0)
+    return {"vertices": np.asarray(points, np.float64), "faces": np.asarray(tri, np.int64),
+            "colours": np.clip(colour, 0, 255).astype(np.uint8), "confidence": conf_out.astype(np.float32),
+            "zone": zone_out}
 
 
 # -- gaps ------------------------------------------------------------------------------------
@@ -304,6 +372,21 @@ def build_viewer(export_dir: Path, out_dir: Path, vcfg: Any, *, run_summary: dic
     offset = list((meta.get("coordinate_frames") or {}).get("offset") or [0.0, 0.0, 0.0])
     extras = {"offset": offset, "crs": meta.get("crs"), "frame": "local map frame, Y-up (east, up, -north)"}
     glb = write_scene_glb(out_dir / "scene.glb", vertices, faces, uv, texture, confidence, zone, extras)
+    lite_info = None
+    lite_path = out_dir / "scene_lite.glb"
+    lite_path.unlink(missing_ok=True)
+    lite_max = int(vcfg.get("lite_max_faces", 0) or 0)
+    if lite_max > 0 and len(faces) > lite_max:
+        material = getattr(getattr(mesh, "visual", None), "material", None)
+        image = getattr(material, "image", None) or getattr(material, "baseColorTexture", None)
+        lite = lite_mesh(vertices, faces, uv, image, confidence, zone, lite_max)
+        if lite is None:
+            notes.append("no fast_simplification: phones get the full model (pip install fast_simplification)")
+        else:
+            write_scene_glb(lite_path, lite["vertices"], lite["faces"], None, None, lite["confidence"],
+                            lite["zone"], {**extras, "lod": "lite"}, colours=lite["colours"])
+            lite_info = {"file": lite_path.name, "faces": int(len(lite["faces"])),
+                         "mb": round(lite_path.stat().st_size / 1e6, 1)}
 
     ground_z = (meta.get("coverage") or {}).get("ground_plane_z_m")
     z_local = (float(ground_z) - float(offset[2])) if ground_z is not None else float(np.percentile(vertices[:, 2], 5))
@@ -326,6 +409,7 @@ def build_viewer(export_dir: Path, out_dir: Path, vcfg: Any, *, run_summary: dic
         "stats": scene_stats(meta, run_summary),
         "mesh": {"vertices": int(len(vertices)), "faces": int(len(faces)),
                  "texture_px": list(tex_size) if tex_size else None},
+        "lite": lite_info,
         "notes": notes,
     }
     (out_dir / "scene.json").write_text(json.dumps(scene, indent=1, default=str), encoding="utf-8")
@@ -340,11 +424,12 @@ def build_viewer(export_dir: Path, out_dir: Path, vcfg: Any, *, run_summary: dic
 
     for note in notes:
         log_downgrade(log, "viewer layer", "the viewer without it", note)
-    metrics = {"scene_mb": round(glb.stat().st_size / 1e6, 1), "faces": int(len(faces)),
+    metrics = {"scene_mb": round(glb.stat().st_size / 1e6, 1), "faces": int(len(faces)), "lite": lite_info,
                "vertices": int(len(vertices)), "layers": scene["layers"], "gaps_drawn": len(gaps),
                "confidence_known_pct": round(100.0 * float((confidence >= 0).mean()), 1),
                "zone_pct_vertices": {str(z): round(100.0 * float((zone == z).mean()), 1) for z in (1, 2, 3)},
                "notes": notes}
     log_event(log, logging.INFO, "viewer written", folder=str(out_dir), **{k: metrics[k] for k in ("scene_mb", "faces")})
     return {"artifacts": {"viewer": out_dir, "index": out_dir / "index.html", "scene": glb,
+                          **({"scene_lite": lite_path} if lite_info else {}),
                           "scene_json": out_dir / "scene.json"}, "metrics": metrics}

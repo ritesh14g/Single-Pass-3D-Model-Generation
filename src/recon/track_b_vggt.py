@@ -189,8 +189,12 @@ def vggt_predictor(bcfg: Any, device: str) -> Predictor:
 
 
 def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path | None = None,
-                predictor: Predictor | None = None) -> dict[str, Any]:
-    """Fuse anchored VGGT depth over the undistorted COLMAP workspace into ``fused_path``."""
+                predictor: Predictor | None = None, mask_dir: Path | None = None) -> dict[str, Any]:
+    """Fuse anchored VGGT depth over the undistorted COLMAP workspace into ``fused_path``.
+
+    ``mask_dir`` holds Stage 2's dynamic-object masks in the undistorted geometry
+    (``<image>.png``, 0 = moving object): those pixels give no depth and zero confidence (S4-9).
+    """
     import pycolmap
 
     bcfg = cfg.get_path("recon.track_b")
@@ -230,6 +234,7 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
     rejected: dict[str, int] = {}
     spreads, anchor_counts = [], []
     vggt_s = 0.0
+    masked_px = 0
     for start, stop, owned_pos in windows_for(n, int(bcfg.window_frames)):
         started = time.perf_counter()
         window = order[start:stop]
@@ -264,6 +269,11 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
                 continue
             scaled = (scale * depth[k]).astype(np.float32)
             keep = conf[k] >= np.quantile(conf[k], float(bcfg.drop_low_conf))
+            moving = _moving_mask(mask_dir, images[i].name, (h, w))
+            if moving is not None:
+                keep &= ~moving
+                conf[k][moving] = 0
+                masked_px += int(moving.sum())
             frames[i] = {"depth": scaled, "keep": keep, "rgb": rgb[k], "sx": sx, "sy": sy}
             if depth_dir is not None and bool(bcfg.keep_confidence_maps):
                 np.savez_compressed(Path(depth_dir) / f"{images[i].name}.npz", depth=scaled.astype(np.float16),
@@ -286,7 +296,25 @@ def depth_cloud(undist_dir: Path, fused_path: Path, cfg: Any, *, depth_dir: Path
         "anchor_spread_median_pct": round(float(np.median(spreads)), 2) if spreads else None,
         "points_before_consistency": before, "views_per_point_median": float(np.median(views)),
         "vggt_seconds": round(vggt_s, 1),
+        **({"dynamic_masked_px": masked_px} if mask_dir is not None else {}),
     }
+
+
+def _moving_mask(mask_dir: Path | None, name: str, shape: tuple[int, int]) -> np.ndarray | None:
+    """True where Stage 2 masked a moving object, resized to the depth map (nearest)."""
+    if mask_dir is None:
+        return None
+    path = Path(mask_dir) / f"{name}.png"
+    if not path.is_file():
+        return None
+    import cv2
+
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        return None
+    mask = cv2.resize(mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+    moving = mask < 128
+    return moving if moving.any() else None
 
 
 def _fuse(frames, poses, intrinsics, bcfg):

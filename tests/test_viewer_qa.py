@@ -383,3 +383,54 @@ def test_local_accuracy_removes_each_tiles_offset(tmp_path):
     assert local["placement"]["horizontal_median_m"] == pytest.approx(4.0, abs=0.3)
     assert local["placement"]["vertical_median_m"] == pytest.approx(1.0, abs=0.1)
     assert local["points_after_tile_offset"]["zone1_measured"]["nmad_m"] < 0.1
+
+
+def test_doming_recovers_a_known_bowl_and_ignores_a_plane():
+    # S4-7: tile height offsets along a 600 m strip = tilt + bowl + noise; the fit separates them.
+    from src.qa.metrics import doming
+
+    rng = np.random.default_rng(4)
+    tiles = []
+    for i in range(12):
+        for j in range(2):
+            x0, y0 = 1000.0 + 50 * i, 2000.0 + 50 * j
+            s = x0 + 25 - 1300.0                                    # along-track, centred
+            up = 2.0 + 0.01 * s + 6.0 * (s / 275.0) ** 2 + rng.normal(0, 0.2)
+            tiles.append({"x0": x0, "x1": x0 + 50, "y0": y0, "y1": y0 + 50, "score": 0.8, "up_m": up})
+    dome = doming(tiles)
+    assert dome["sag_m"] == pytest.approx(6.0, abs=0.6) and dome["significant"]
+    assert dome["tilt_m_per_km"] == pytest.approx(10.0, abs=1.5)
+    flat = [dict(t, up_m=2.0 + 0.01 * (t["x0"] - 1275.0) + rng.normal(0, 0.2)) for t in tiles]
+    assert not doming(flat)["significant"]
+    assert doming(tiles[:3]) is None                                # too few tiles to fit
+
+
+def test_lite_lod_keeps_photo_colour_and_the_least_trusted_zone():
+    # S6-3: a phone copy decimated from a textured grid split at a UV seam, colours from the texture.
+    pytest.importorskip("fast_simplification")
+    from PIL import Image
+
+    from src.viewer.package import lite_mesh
+
+    n = 60
+    xs, ys = np.meshgrid(np.linspace(0, 100, n), np.linspace(0, 100, n))
+    vertices = np.c_[xs.ravel(), ys.ravel(), 0.01 * xs.ravel() ** 1.5]
+    idx = np.arange(n * n).reshape(n, n)
+    faces = np.r_[np.c_[idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[:-1, 1:].ravel()],
+                  np.c_[idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()]]
+    # split every vertex once (as an atlas seam does): faces of the second copy use the duplicates
+    vertices = np.r_[vertices, vertices]
+    faces = np.r_[faces[: len(faces) // 2], faces[len(faces) // 2:] + n * n]
+    uv = np.c_[vertices[:, 0] / 100.0, vertices[:, 1] / 100.0]
+    texture = np.zeros((64, 64, 3), np.uint8)
+    texture[:, :32] = (220, 30, 30)                                   # left half red
+    texture[:, 32:] = (30, 30, 220)                                   # right half blue
+    zone = np.ones(len(vertices), np.float32)
+    zone[(vertices[:, 0] > 45) & (vertices[:, 0] < 55) & (vertices[:, 1] > 45) & (vertices[:, 1] < 55)] = 3
+    confidence = np.full(len(vertices), 0.8, np.float32)
+    lite = lite_mesh(vertices, faces, uv, Image.fromarray(texture), confidence, zone, max_faces=800)
+    assert len(lite["faces"]) <= 850
+    left, right = lite["vertices"][:, 0] < 30, lite["vertices"][:, 0] > 70
+    assert lite["colours"][left, 0].mean() > 150 and lite["colours"][right, 2].mean() > 150
+    assert (lite["zone"] == 3).any()                                   # the inferred patch survives
+    assert np.allclose(lite["confidence"], 0.8, atol=1e-5)

@@ -167,10 +167,56 @@ class TestExposure:
         fit = fit_gain_bias(first, second, transform)
         assert fit.gain == pytest.approx(1 / 1.25, rel=0.12)
 
+    @staticmethod
+    def _misregistered_pair(seed: int):
+        """Same exposure, a pan the transform describes, plus 4 px of unmodelled offset and noise.
+
+        The jitter stands in for parallax an affine warp cannot explain: it decorrelates the pair,
+        which is what drove every real Esri link to ~0.79 under per-pixel least squares (S2-9).
+        """
+        import cv2
+
+        rng = np.random.default_rng(seed)
+        canvas = fixtures.make_canvas(1400, 500, seed=seed)
+        first = canvas[0:480, 0:640]
+        second = canvas[4:484, 164:804].copy()           # 4 px off what the transform says
+        second = np.clip(second + rng.normal(0, 6, second.shape), 0, 255).astype(np.uint8)
+        second = cv2.GaussianBlur(second, (3, 3), 0)
+        transform = normalize_transform(np.array([[1.0, 0.0, -160.0], [0.0, 1.0, 0.0]]), 640, 480)
+        return first, second, transform
+
+    def test_per_pixel_least_squares_is_diluted_and_block_symmetric_is_not(self):
+        first, second, transform = self._misregistered_pair(35)
+        ols = fit_gain_bias(first, second, transform)
+        fixed = fit_gain_bias(first, second, transform, block=4, symmetric=True)
+        assert ols.gain < 0.95                           # the S2-9 bias, reproduced
+        assert fixed.gain == pytest.approx(1.0, abs=0.04)
+
+    def test_symmetric_fit_is_its_own_inverse(self):
+        first, second, transform = self._misregistered_pair(36)
+        inverse = normalize_transform(np.array([[1.0, 0.0, 160.0], [0.0, 1.0, 0.0]]), 640, 480)
+        ab = fit_gain_bias(first, second, transform, block=4, symmetric=True)
+        ba = fit_gain_bias(second, first, inverse, block=4, symmetric=True)
+        assert ab.gain * ba.gain == pytest.approx(1.0, abs=0.03)
+
+    def test_a_long_chain_at_constant_exposure_stays_near_one(self, cfg):
+        # 40 links of the S2-9 kind. Before the fix the composed gain fell by ~0.8x per link.
+        chain = ExposureChain(cfg)
+        for key in range(40):
+            first, second, transform = self._misregistered_pair(100 + key)
+            if key == 0:
+                chain.push(0, first)
+            gain = chain.push(key + 1, second, transform).gain
+        summary = chain.summary()
+        assert summary["clamped_frames"] == 0
+        assert 0.85 < gain < 1.15
+        assert summary["bias_clamped_frames"] == 0
+
     def test_chain_composes_across_frames(self, scene, cfg):
         import cv2
 
-        chain = ExposureChain(cfg)
+        # The composition arithmetic alone: the decay toward the identity (S2-9) is off here.
+        chain = ExposureChain(cfg.merged({"condition": {"illumination": {"exposure_chain": {"leak": 0.0}}}}))
         chain.push(0, scene)
         step1 = cv2.convertScaleAbs(scene, alpha=1.2, beta=0.0)
         step2 = cv2.convertScaleAbs(scene, alpha=1.44, beta=0.0)
@@ -253,8 +299,34 @@ class TestShadows:
         shadowed, truth = self._shadowed(scene)
         detected, fraction = detect_shadows(shadowed, cfg)
         overlap = (detected & truth).sum() / max(truth.sum(), 1)
-        assert overlap > 0.5, f"only recovered {overlap:.0%} of the shadow"
+        precision = (detected & truth).sum() / max(detected.sum(), 1)
+        # S2-3 region gates: precision 0.32 -> 0.92 here. Recall on this random-colour canvas is
+        # capped by the pixel gates fragmenting the patch (0.33); on real texture it stays 0.99
+        # (test_region_gates_keep_a_real_scale_shadow).
+        assert precision > 0.8, f"precision {precision:.0%}"
+        assert overlap > 0.25, f"only recovered {overlap:.0%} of the shadow"
         assert fraction > 0
+
+    def test_region_gates_drop_scattered_shadowy_texels(self, scene, cfg):
+        off = cfg.merged({"condition": {"illumination": {"shadow": {
+            "min_region_fraction": 0.0, "region_dark_ratio": 1.0, "fill_fraction": 0.0}}}})
+        shadowed, truth = self._shadowed(scene)
+        gated, _ = detect_shadows(shadowed, cfg)
+        ungated, _ = detect_shadows(shadowed, off)
+        outside_gated, outside_ungated = gated[~truth].mean(), ungated[~truth].mean()
+        assert outside_gated < 0.3 * outside_ungated, (outside_gated, outside_ungated)
+
+    def test_region_gates_keep_a_real_scale_shadow(self, cfg):
+        # A large, smooth-textured ground in partial sky-lit shadow: the kind of scene a drone sees.
+        import cv2
+
+        rng = np.random.default_rng(7)
+        ground = cv2.GaussianBlur(rng.uniform(90, 170, (480, 640, 3)).astype(np.float32), (0, 0), 6)
+        ground[:, :, 2] += 25                                  # sunlit ground: warm
+        image = np.clip(ground, 0, 255).astype(np.uint8)
+        shadowed, truth = self._shadowed(image)
+        detected, _ = detect_shadows(shadowed, cfg)
+        assert (detected & truth).sum() / truth.sum() > 0.9
 
     def test_dark_paint_is_not_a_shadow(self, scene, cfg):
         # The point of the three-condition test: brightness alone cannot tell a

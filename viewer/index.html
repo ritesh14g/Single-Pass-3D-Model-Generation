@@ -214,7 +214,7 @@ function setMode(next) {
   if (!mesh || !S.layers[next]) return;
   mode = next;
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
-  if (mode === 'texture') { mesh.material = texMaterial; }
+  if (mode === 'texture') { if (photoColour) mesh.geometry.setAttribute('color', photoColour); mesh.material = texMaterial; }
   else {
     if (!mesh.geometry.attributes.normal) mesh.geometry.computeVertexNormals();
     mesh.geometry.setAttribute('color', layerColours(mode));
@@ -408,11 +408,17 @@ renderer.domElement.addEventListener('dblclick', (e) => {
 });
 
 // ---- load ---------------------------------------------------------------------------------
+// Phones get the decimated, vertex-coloured copy when there is one (S6-3); ?lod=full|lite overrides.
+const lod = new URLSearchParams(location.search).get('lod');
+const small = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 700;
+const useLite = !!S.lite && (lod === 'lite' || (lod !== 'full' && small));
+let photoColour = null;
 const loader = new GLTFLoader();
-loader.load('scene.glb', (gltf) => {
+loader.load(useLite ? S.lite.file : 'scene.glb', (gltf) => {
   gltf.scene.traverse((o) => { if (o.isMesh && !mesh) mesh = o; });
   scene.add(gltf.scene);
   texMaterial = mesh.material;
+  photoColour = useLite ? mesh.geometry.attributes.color || null : null;
   layerMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   frame(); buildGaps();
   // ?mode=confidence|zones|texture&gaps=1 opens a given view (links for the deck and the Lab)

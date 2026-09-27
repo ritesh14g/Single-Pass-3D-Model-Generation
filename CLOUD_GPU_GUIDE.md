@@ -417,3 +417,64 @@ fusion allotment. To tune Stage 3 without re-running Stage 4, use the Stage 3 pa
 Before handing the box back: `bash scripts/box_collect.sh esri_s3` (now also collects each run's
 `fusion/`), download the tarball, then `bash scripts/box_wipe_credentials.sh --yes`, and rotate the token.
 
+
+---
+
+## 11. Kaggle, when the institute box is not available (driven from the laptop)
+
+The institute box went back on 2026-09-23. Kaggle's free GPU notebooks stand in for it, driven
+headless from the laptop, which stays the only place code is edited. `scripts/kaggle_ctl.py` uploads
+the working tree and the clips as private datasets, pushes one private notebook
+(`<user>/single-pass-gpu`) with a job, and downloads its outputs. `scripts/kaggle_job.py` is what runs
+on Kaggle: box_restore.sh steps 3–7 in Kaggle's layout, then the command, then `box_collect.sh`.
+
+| | Institute box | Kaggle (free) |
+|---|---|---|
+| GPU | H100 MIG 2g.20gb | T4 16 GB (`NvidiaTeslaT4`, default); `NvidiaL4` 24 GB if the account's quota has it |
+| CPU / RAM | 3 cores / 56 GB | 4 cores / ~30 GB |
+| Session | persistent notebook | one job ≤ 12 h, runs with the browser closed; ~30 GPU h per week |
+| Disk | persistent home | scratch (lost after the job); `/kaggle/working` (20 GB) is kept as output |
+| bf16 | yes | no on T4: VGGT runs fp16 (`track_b_vggt.py` picks by compute capability) |
+
+**Timings from Kaggle are T4 numbers**: record them as such and never mix them into the §9
+speed figures measured on the box.
+
+### 11.1 One-time setup (person with the accounts)
+
+1. kaggle.com → Settings → **phone verification** (unlocks GPU and Internet).
+2. Settings → API → **Create New Token** → save `kaggle.json` to `C:\Users\<you>\.kaggle\kaggle.json`.
+3. Hugging Face: the account must be approved for `facebook/VGGT-Omega`; create a **read** token.
+4. Laptop: the Kaggle CLI 2.x (the 1.7 CLI, the last for Python 3.10, cannot pick the GPU):
+   `.venv\Scripts\python -m pip install uv` then `.venv\Scripts\uv tool install kaggle --python 3.12`
+   (installs `~\.local\bin\kaggle.exe`, which `kaggle_ctl.py` finds by itself).
+5. `.venv\Scripts\python scripts\kaggle_ctl.py whoami` → prints your Kaggle user.
+6. `.venv\Scripts\python scripts\kaggle_ctl.py data` → uploads Esri + DJI_0047 (+ telemetry) once
+   (`single-pass-data`, ~1.2 GB; DJI_0047 is read from `..\Drone Video Dataset\QGISFMV_Samples\DJI\DJI_0047`).
+7. `.venv\Scripts\python scripts\kaggle_ctl.py run check` → setup + test suite + `inspect` (~20 min).
+8. Open `https://www.kaggle.com/code/<user>/single-pass-gpu` → **Edit** → Add-ons → **Secrets** →
+   add `HF_TOKEN` (the read token) → switch it **on for this notebook**. Done once: every later job
+   is a new version of the same notebook. Without it Track B logs a VGGT-1B fallback.
+
+### 11.2 Every job
+
+```powershell
+.venv\Scripts\python scripts\kaggle_ctl.py run stage6            # uploads the code, then runs box_stage6.sh
+.venv\Scripts\python scripts\kaggle_ctl.py status                # running / complete / error
+.venv\Scripts\python scripts\kaggle_ctl.py logs                  # the job's console so far
+.venv\Scripts\python scripts\kaggle_ctl.py wait                  # blocks until it ends
+.venv\Scripts\python scripts\kaggle_ctl.py pull stage6           # -> data\box\kaggle\stage6\
+```
+
+Presets: `check`, `stage6` (Esri + DJI_0047 fresh, then the degradation bench, ~4 h on a T4),
+`stage6-nobench`. Any command: `run <name> --cmd "BENCH=0 SEVERITY=light bash scripts/box_stage6.sh"
+--collect esri_s6`. `--accelerator NvidiaL4` asks for the 24 GB card; `--no-code` reuses the last upload.
+The job writes `job.log`, `job_result.json` (each step ok/failed with seconds), `machine.txt`,
+`tests.log`, `cmd.log`, `logs/` (every `*_run.log`, bench tables) and the `box_handover_*.tar.gz`
+from `box_collect.sh`, which unpacks into `data/box/` exactly like a box handover.
+
+### 11.3 Claude Code and Kaggle
+
+Claude Code runs on the laptop and drives Kaggle through `kaggle_ctl.py`; it is not installed on
+Kaggle. A Kaggle job is a batch run with no terminal to type into, an interactive Kaggle session dies
+with its browser tab, and putting a Claude login on a shared notebook image is a credential leak for
+no gain: the code, the tests and the decisions are on the laptop, and Kaggle only has to execute.

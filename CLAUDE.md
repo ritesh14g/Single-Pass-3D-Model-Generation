@@ -18,7 +18,9 @@
    `.venv\Scripts\python -m streamlit run ui/app.py`.
 8. GPU work (Track A/B, NVDEC, speed measurements) happens on the institute's cloud
    notebook: a **20 GB H100 MIG slice, 3 CPU cores, 56 GB RAM** — follow `CLOUD_GPU_GUIDE.md`
-   for setup, data transfer, remote UI and what to record.
+   for setup, data transfer, remote UI and what to record. Without the box, GPU jobs run on
+   Kaggle, driven from the laptop with `scripts/kaggle_ctl.py` (`CLOUD_GPU_GUIDE.md` §11); record
+   those timings as T4/L4 numbers, never as box numbers.
 9. **GPU first, CPU fallback, never a crash.** Get the device from
    `src/core/device.py::resolve_device`; never hard-code `"cuda"`. Any GPU path must log a
    downgrade and continue on CPU on failure. Size memory for 20 GB and threads for 3 cores

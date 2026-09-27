@@ -394,6 +394,52 @@ def test_hybrid_depth_is_anchored_fused_and_meshed(tiny_frames):
             assert mesh["target_faces"] == expected
 
 
+def test_dynamic_masks_reach_dense_depth(tiny_frames):
+    # S4-9: Stage 2's masks gated SfM features only; moving objects still left depth in the cloud.
+    pytest.importorskip("pycolmap")
+    import cv2
+
+    from src.recon import track_a_colmap
+    from src.recon.track_a_colmap import run_track_a
+
+    root, images = tiny_frames
+    masks = root / "masks_s49"
+    masks.mkdir(exist_ok=True)
+    for image in sorted(images.glob("*.jpg")):
+        h, w = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE).shape
+        exclude = np.zeros((h, w), np.uint8)
+        exclude[h // 6 - 12: h // 6 + 12, w // 6 - 12: w // 6 + 12] = 255  # a 24 px "vehicle"
+        cv2.imwrite(str(masks / f"{image.stem}_exclude.png"), exclude)
+    cfg = load_config(overrides=["device.prefer=cpu", "recon.track_a.dense.max_image_size=320"])
+    out = root / "hybrid_masked"
+    real_dense = track_a_colmap._dense
+
+    def dense_with_plane(*args, **kwargs):
+        kwargs["depth_predictor"] = lambda paths: _plane_predictor(out / "dense")(paths)
+        return real_dense(*args, **kwargs)
+
+    track_a_colmap._dense = dense_with_plane
+    try:
+        outcome = run_track_a(images, out, cfg, masks_dir=masks)
+    finally:
+        track_a_colmap._dense = real_dense
+    dense = outcome["metrics"]["dense"]
+    assert dense["engine"] == "vggt_hybrid", outcome["metrics"]["downgrades"]
+    undistorted = sorted((out / "dense" / "masks").glob("*.png"))
+    assert undistorted, "no undistorted masks"
+    for mask_path in undistorted:
+        image = cv2.imread(str(out / "dense" / "images" / mask_path.name[:-4]), cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        assert mask.shape == image.shape                                # same geometry as the image
+        h, w = mask.shape
+        assert mask[h // 6, w // 6] == 0 and mask[h // 2, w // 2] == 255
+    assert dense["dynamic_masked_px"] > 0
+    saved = np.load(next((out / "track_b_depth").glob("*.npz")))
+    conf = saved["conf"].astype(float)
+    ch, cw = conf.shape
+    assert conf[ch // 6, cw // 6] == 0 and conf[ch // 2, cw // 2] > 0   # Stage 3 sees no depth there
+
+
 def test_hybrid_falls_back_to_track_a_dense(tiny_frames):
     pytest.importorskip("pycolmap")
     from src.recon.track_a_colmap import run_track_a

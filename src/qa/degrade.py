@@ -10,8 +10,10 @@ re-encoding a degraded copy of the video means:
 
 Kinds (§8.5 list):
     motion_blur      directional kernel, length scaled to frame width, direction varies slowly
-    compression      JPEG round trip at low quality (a stand-in for H.264 at a low bitrate:
-                     both are 8x8-ish block transforms; no ffmpeg binary is assumed)
+    compression      H.264 round trip of the frame through libx264 at a fixed QP (PyAV's bundled
+                     FFmpeg: 4x4 integer transform, deblocking, 4:2:0 chroma), intra-coded so every
+                     frame degrades the same whichever frames a pass decodes (S6-5). JPEG round
+                     trip at low quality when libx264 is missing (qa.degrade.compression_codec)
     low_light        gain + gamma + shot/read noise
     shadow           hard-edged dark polygons drifting slowly across the frame (cloud shadows)
     gps_noise        Gaussian position noise + occasional gross outliers on the parsed telemetry
@@ -64,6 +66,37 @@ def motion_blur(image: np.ndarray, index: int, length_px: float, seed: int) -> n
 def compression(image: np.ndarray, index: int, quality: float, seed: int) -> np.ndarray:
     ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
     return cv2.imdecode(buf, cv2.IMREAD_COLOR) if ok else image
+
+
+def h264_available() -> bool:
+    try:
+        import av
+
+        return "libx264" in av.codecs_available
+    except ImportError:
+        return False
+
+
+def compression_h264(image: np.ndarray, index: int, qp: float, seed: int) -> np.ndarray:
+    """One frame through libx264 and back at quantiser ``qp`` (0 lossless ... 51 worst)."""
+    from fractions import Fraction
+
+    import av
+
+    h, w = image.shape[:2]
+    h2, w2 = h - h % 2, w - w % 2                                    # 4:2:0 needs even sizes
+    enc = av.CodecContext.create("libx264", "w")
+    enc.width, enc.height, enc.pix_fmt, enc.time_base = w2, h2, "yuv420p", Fraction(1, 25)
+    enc.options = {"qp": str(int(qp)), "preset": "ultrafast", "threads": "1"}
+    frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(image[:h2, :w2]), format="bgr24").reformat(format="yuv420p")
+    packets = list(enc.encode(frame)) + list(enc.encode(None))
+    dec = av.CodecContext.create("h264", "r")
+    decoded = [f for p in packets for f in dec.decode(p)] + list(dec.decode(None))
+    if not decoded:
+        return image
+    out = image.copy()
+    out[:h2, :w2] = decoded[-1].to_ndarray(format="bgr24")
+    return out
 
 
 def low_light(image: np.ndarray, index: int, gain: float, seed: int) -> np.ndarray:
@@ -125,8 +158,14 @@ def frame_degrader(cfg: Any) -> Callable[[np.ndarray, int], np.ndarray] | None:
     kind = str(inject.get("kind", "none"))
     if kind not in FRAME_KINDS:
         return None
-    value, seed = level(cfg, kind, str(inject.get("severity", "moderate"))), int(inject.get("seed", 0))
-    func = _FRAME_FUNCS[kind]
+    severity, seed = str(inject.get("severity", "moderate")), int(inject.get("seed", 0))
+    value, func = level(cfg, kind, severity), _FRAME_FUNCS[kind]
+    if kind == "compression" and str(cfg.get_path("qa.degrade.compression_codec", "jpeg")) == "h264":
+        if h264_available():
+            value, func = cfg.get_path(f"qa.degrade.h264_qp.{severity}"), compression_h264
+        else:
+            log_event(log, logging.WARNING, "libx264 not available in PyAV: compression falls back to JPEG",
+                      event="downgrade", kind=kind)
     log_event(log, logging.WARNING, f"QA INJECTION: every decoded frame is degraded ({kind} {value})",
               event="qa_inject", kind=kind, value=value)
     return lambda image, index: func(image, index, float(value), seed)

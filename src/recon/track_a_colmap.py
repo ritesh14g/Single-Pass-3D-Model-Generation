@@ -412,6 +412,42 @@ def _colmap_masks(images_dir: Path, masks_dir: Path | None, out_dir: Path, names
     return target
 
 
+def _undistorted_masks(pycolmap, model: Path, out_dir: Path, undist: Path, options, threads: int) -> Path | None:
+    """Stage 2's masks in the undistorted images' geometry, for dense fusion (S4-9).
+
+    ``masks_colmap/<image>.png`` (written for SfM) goes through the same undistortion as the
+    images, so each mask lines up pixel for pixel with ``dense/images/<image>``. Returns
+    ``dense/masks`` holding ``<image>.png`` (COLMAP's convention: 0 = ignore), or None.
+    """
+    import cv2
+
+    source = out_dir / "masks_colmap"
+    if not source.is_dir() or not any(source.iterdir()):
+        return None
+    staged, warped, target = out_dir / "masks_staged", out_dir / "masks_undistorted", undist / "masks"
+    for d in (staged, warped, target):
+        if d.exists():
+            shutil.rmtree(d)
+    staged.mkdir()
+    for mask in source.glob("*.png"):
+        name = mask.name[: -len(".png")]           # "<image name>.png" -> "<image name>"
+        # Named exactly like the image (a .jpg name gets a JPEG: the threshold below absorbs it).
+        cv2.imwrite(str(staged / name), cv2.imread(str(mask), cv2.IMREAD_GRAYSCALE))
+    pycolmap.undistort_images(warped, model, staged, undistort_options=options, num_threads=threads)
+    target.mkdir()
+    count = 0
+    for image in (warped / "images").iterdir():
+        mask = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            continue
+        # Undistortion leaves 0 outside the source frame; those pixels have no image either.
+        cv2.imwrite(str(target / f"{image.name}.png"), np.where(mask > 127, 255, 0).astype(np.uint8))
+        count += 1
+    shutil.rmtree(staged, ignore_errors=True)
+    shutil.rmtree(warped, ignore_errors=True)
+    return target if count else None
+
+
 def _best_model_id(sparse_dir: Path, rec) -> int:
     import pycolmap
 
@@ -478,6 +514,10 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
         pycolmap.undistort_images(undist, dense_model, images_dir, num_patch_match_src_images=int(dcfg.src_images),
                                   undistort_options=undistort, num_threads=threads)
     fused = undist / "fused.ply"
+    mask_dir = None
+    if bool(tcfg.use_dynamic_masks) and bool(dcfg.get("use_dynamic_masks", True)):
+        with run.timed("undistort_masks"):
+            mask_dir = _undistorted_masks(pycolmap, dense_model, out_dir, undist, undistort, threads)
 
     if mode != "A":
         from src.recon import track_b_vggt
@@ -485,7 +525,7 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
         try:
             with run.timed("dense_vggt"):
                 hybrid = track_b_vggt.depth_cloud(undist, fused, cfg, depth_dir=out_dir / "track_b_depth",
-                                                  predictor=depth_predictor)
+                                                  predictor=depth_predictor, mask_dir=mask_dir)
             if hybrid.get("model_fallback"):
                 run.downgrade("VGGT-Omega", "VGGT-1B", hybrid["model_fallback"])
             return fused, {"mode": mode, "size": int(dcfg.max_image_size), **hybrid}, mvs_dir
@@ -515,6 +555,9 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
             fusion = pycolmap.StereoFusionOptions()
             fusion.num_threads = threads
             fusion.min_num_pixels = int(dcfg.fusion_min_num_pixels)
+            if mask_dir is not None:
+                fusion.mask_path = str(mask_dir)      # S4-9: no depth from moving objects
+                info["dynamic_masks"] = "fusion"
             with run.timed("dense_fusion"):
                 pycolmap.stereo_fusion(fused, undist, options=fusion, output_type="PLY",
                                        input_type="geometric" if dcfg.geom_consistency else "photometric")
@@ -527,6 +570,8 @@ def _dense(pycolmap, cfg, tcfg, rec, sparse_model, images_dir, out_dir, threads,
             run.downgrade("dense on CUDA", "OpenMVS DensifyPointCloud on CPU", f"{type(exc).__name__}: {exc}")
 
     # CPU dense. The images are already undistorted to ``size``, so OpenMVS must not halve them again.
+    if mask_dir is not None:
+        info["dynamic_masks"] = "not applied (OpenMVS CPU path)"
     try:
         with run.timed("openmvs_import"):
             openmvs.run_tool(bin_dir, "InterfaceCOLMAP", mvs_dir, "-i", str(undist), "-o", str(mvs_dir / "scene.mvs"),

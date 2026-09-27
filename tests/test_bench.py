@@ -49,6 +49,22 @@ def test_every_frame_degradation_is_deterministic_and_does_what_it_says(image):
     assert blockiness_score(jpeg) > blockiness_score(gray)
 
 
+@pytest.mark.skipif(not degrade.h264_available(), reason="PyAV without libx264")
+def test_compression_is_a_real_h264_round_trip_and_the_hook_uses_it(image):
+    # S6-5: the configured codec is H.264 through libx264; the QP levels degrade in order and the
+    # round trip is deterministic, so ingest and conditioning see the same frame.
+    cfg = load_config()
+    assert cfg.get_path("qa.degrade.compression_codec") == "h264"
+    psnr = [cv2.PSNR(image, degrade.compression_h264(image, 0, cfg.get_path(f"qa.degrade.h264_qp.{s}"), 0))
+            for s in ("light", "moderate", "severe")]
+    assert psnr[0] > psnr[1] > psnr[2] > 15, psnr
+    odd = image[:359, :639]                                           # 4:2:0 needs even sizes
+    out = degrade.compression_h264(odd, 0, 34, 0)
+    assert out.shape == odd.shape and np.array_equal(out, degrade.compression_h264(odd, 0, 34, 0))
+    hook = degrade.frame_degrader(cfg.merged({"qa": {"inject": {"kind": "compression", "severity": "severe"}}}))
+    assert np.array_equal(hook(image, 5), degrade.compression_h264(image, 5, cfg.get_path("qa.degrade.h264_qp.severe"), 0))
+
+
 def test_severities_are_ordered(image):
     cfg = load_config()
     blur = [_sharpness(degrade.motion_blur(image, 0, degrade.level(cfg, "motion_blur", s), 0))

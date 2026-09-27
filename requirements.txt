@@ -38,6 +38,7 @@ av>=12        # PyAV: container/codec probing and keyframe sampling (Stage 0), I
 #   GPU box (Linux):  pycolmap-cuda12==4.2.0   (CUDA SIFT, matching, BA, PatchMatch stereo)
 # OpenMVS 2.4.0 binaries (texturing; CPU dense fallback) go in tools/openmvs/, not pip.
 plyfile>=1.0   # Track A reads dense PLYs (OpenMVS clouds carry per-point view lists)
+fast_simplification>=0.1   # Stage 6 viewer: decimated phone copy of the model (S6-3)
 
 # Stage 5 FBX (§8.3): portable Blender 4.2 LTS unpacked into tools/ (not pip):
 #   https://download.blender.org/release/Blender4.2/  (blender-4.2.3-linux-x64.tar.xz / -windows-x64.zip)
