@@ -627,3 +627,17 @@ def test_synced_geo_is_the_track_at_shifted_times(tmp_path):
     rows = [ln.split() for ln in path.read_text().splitlines()[1:]]
     lla = track.lonlatalt(np.array([0.0, 1.0, 2.0]) - 0.5)
     assert np.allclose([[float(r[1]), float(r[2])] for r in rows], lla[:, :2], atol=1e-9)
+
+
+def test_a_broken_model_cannot_score_well(cfg):
+    # DJI_0047 on the box (2026-09-28): the first-pass SfM folded, cameras 248 m RMS from GPS, and
+    # Stage 4 still scored 87.5 because one failing check averaged out among passing ones.
+    report = {"frames_in": 136, "registered": 136, "registered_fraction": 1.0, "models": 1,
+              "reproj_px": 1.2, "track_length": 4.0, "focal_source": "telemetry_hfov_nominal",
+              "cam_vs_gps_rms_m": 248.07, "gps_matched_frames": 136}
+    broken = evaluate_track_a(TrackAOutputs(report=report), cfg)
+    gate = next(k for k in broken.kpis if k.key == "geometry_gate")
+    assert gate.status == FAIL and broken.score <= cfg.get_path("qa.stage4.gate_score_cap")
+    good = evaluate_track_a(TrackAOutputs(report={**report, "cam_vs_gps_rms_m": 3.47}), cfg)
+    assert next(k for k in good.kpis if k.key == "geometry_gate").status == PASS
+    assert good.score > broken.score

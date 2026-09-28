@@ -945,6 +945,10 @@ qa:
     # Camera-centre RMS against GPS after a similarity fit. PS §1.4: spatial accuracy <= 1 m.
     cam_vs_gps_rms_pass_m: 1.0
     cam_vs_gps_rms_warn_m: 5.0
+    # Gate: beyond this the model is broken, not just inaccurate (good runs 1.35-3.5 m; DJI_0047
+    # folded on 2026-09-28 at 248 m and still scored 87.5); a failed gate caps the stage score.
+    cam_vs_gps_rms_gate_m: 25.0
+    gate_score_cap: 40.0
     # Height above ground vs telemetry (KLV frame-centre elevation): the metric-scale check.
     height_error_pass_pct: 5.0
     height_error_warn_pct: 15.0

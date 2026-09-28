@@ -424,11 +424,14 @@ These remain, in priority order; each links its open issue:
 | ~~S4-11~~ | 4 | **Closed 2026-09-27: fresh Esri run (laptop) 0.25% black texels.** ~~Every textured mesh was mostly black.~~ OpenMVS 2.4 TextureMesh seam leveling painted the faces' own texels black: black share of the used atlas 48% (box Esri export), 31% (laptop DJI_0047), 61% (recon probe); 99% of Esri face centres sampled black. The scorecard only checked `textured: true` | **Fixed 2026-09-26 (laptop-verified, box re-run pending):** DJI_0047 re-textured: defaults 31.3% black, local-only off 20.5%, global-only off 43.5%, **both off 0.02%**. `recon.track_a.texture.seam_leveling: false`, explicit `--empty-color`; `meshing.texture_quality` measures the atlas after every run → Stage 4 KPI `texture_black_pct` (pass ≤ 2%, warn ≤ 10%). **All exported OBJ/GLB/FBX so far carry black textures: re-run Track A before using any model image in the deck** |
 | S3-8 | 3 | **Stage 3 classification scales with cameras x voxels**: DJI_0047 (136 cameras, 6.1 M dense points) classify 115 s of a 136 s stage (Esri, 46 cameras / 2 M points: 27 s); over the 120 s allotment, so the Zone 2 fill stopped after 1 of 3 frames ("time budget") although a frame costs 1.6 s | **Fixed 2026-09-23 (laptop benchmark, box confirmation on the next run):** DJI-shaped scene (136 nadir 4K cameras, 4.8 M points, 27 M view pairs): classify **52.9 → 20.8 s**, zones / views / angles identical, photometric within 0.016. `voxel_size` 18.2 → 2.1 s (1-D keys instead of `np.unique(axis=0)`), visibility 16.1 → ~4 s (frustum-footprint culling on a coarse xy index), angles 7.1 → 2.2 s (per-voxel minimum instead of a 27 M-pair lexsort), photometric 8.1 → 3.1 s (reduced JPEG decode on a thread pool, pairs grouped by camera once, one `bincount`). The fill always gets `budget_min_frames` (3). Per-step times now in `fusion_report.json` (`timings_s.classify_steps`) and the wall-time KPI |
 | T-1 | test | Stage 5 end-to-end fixture nondeterministic on the box: 2/430 failed with float32 overflow in the glTF writer; one `-k end_to_end` run hung > 10 min (Blender/OpenMVS on an absurd mesh?). Passed 14/14 alone | **Fixed 2026-09-23:** cause — the fixture pans a *flat* canvas (pure translation over a plane: focal unobservable) through an mp4v encode/decode that differs between the Windows and Linux OpenCV builds, and Track A self-calibrated the focal, so SfM sometimes degenerated. Now: frames cropped straight from the canvas, a 60° FOV hint held fixed, COLMAP seeded from `run.seed` (Track A, every run). Sparse model stable (focal 277.1 px, path 11.537 ± 0.001 over 3 builds); OpenMVS dense/mesh still vary with thread scheduling (mesh present 2 of 3), which the tests accept. Export refuses mesh formats for non-finite vertices or vertices > `export.mesh_max_extent_factor` (10) × the cloud's extent outside it (point formats still written); Blender timeout → `export.fbx.timeout_s`. `-k end_to_end` 3/3 green |
-| S6-1 | 6 | The degradation bench has not run on real footage | `bash scripts/box_stage6.sh` (13 Esri runs at moderate, ~70 min); then `src.cli qa … --bench` |
+| ~~S6-1~~ | 6 | ~~The degradation bench has not run on real footage~~ **Closed 2026-09-28 (box, Esri, moderate): see the session entry; opened S6-6, S6-7** | `bash scripts/box_stage6.sh` (13 Esri runs at moderate, ~70 min); then `src.cli qa … --bench` |
 | S6-2 | 6 | **No multi-strip clip for the single-pass simulation.** `bench single-pass --list-strips`: Esri = 2 legs of one bent line (24°, 320°), DJI_0047 = one 893 m line | Find a multi-strip survey (other QGISFMV DJI logs, public ODM datasets); state it as a limitation until then |
 | ~~S6-3~~ | 6 | ~~Viewer ships the full-resolution mesh~~ | **Closed 2026-09-27:** above `qa.viewer.lite_max_faces` (250k) the viewer also writes `scene_lite.glb`: welded by position (the atlas splits every seam), quadric decimation (fast_simplification, now in requirements), photo colour per vertex from the texture, mean confidence, the least-trusted zone kept. Phones (coarse pointer or < 700 px) and `?lod=lite` load it; `?lod=full` forces the textured model. Esri laptop mesh forced to 50k faces: 1.2 MB vs 3.6 MB, 0.5 s. Not yet opened on a real phone |
-| S6-4 | 6 | Accuracy vs lidar measured on the laptop Esri run only (CPU, 52 cameras, no Zone 2 fill) | After the box re-run: `python -m src.cli qa data/box/runs/esri_s6 --reference data/reference/esri_usgs3dep_2018_utm17n_egm96.laz`; deck numbers come from there |
+| ~~S6-4~~ | 6 | ~~Accuracy vs lidar on the laptop run only~~ **Closed 2026-09-28: box VGGT-Ω run, Zone 1 2.87 / Zone 2 3.36 / fill 3.43 m RMS within tiles** | After the box re-run: `python -m src.cli qa data/box/runs/esri_s6 --reference data/reference/esri_usgs3dep_2018_utm17n_egm96.laz`; deck numbers come from there |
 | ~~S6-5~~ | 6 | ~~`compression` degradation is a JPEG proxy~~ | **Closed 2026-09-27:** real H.264 through libx264 in PyAV's bundled FFmpeg (no ffmpeg binary needed), intra-coded per frame so the injection stays deterministic whichever frames a pass decodes; QP 30/34/44 matched to the JPEG levels' PSNR on an Esri frame (35.7/33.9/~28.6 vs 37.3/33.8/28.8 dB); ~35 ms per 1080p frame. `qa.degrade.compression_codec: h264`, `h264_qp`; JPEG fallback logged. Inter-frame (P-frame) artefacts are not modelled |
+| S6-6 | 2 | Low-light conditioning broke SfM in the bench (cameras 101 m from clean vs 3.2 m without) | Inspect the conditioned low-light frames (gamma + NLM denoise) vs raw; likely the denoise erases texture SIFT needs |
+| S6-7 | 2 | GPS filter under injected noise made the surface worse (52.6 m vs 3.8 m without) | The RTS/outlier filter may shift the whole track; compare filtered vs raw positions against the clean track |
+| S4-12 | 4 | **DJI_0047 regression on 2026-09-28**: first pass folded, GPS-prior pass found no initial pair (coverage 8.1%) | `scripts/box_dji_diag.sh`; see the 2026-09-28 session |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -2742,3 +2745,43 @@ public), `scripts/box_wipe_credentials.sh` (Claude Code login `~/.claude`, `~/.c
 `CLOUD_GPU_GUIDE.md` §12 (box from git + Claude Code), `scripts/kaggle_ctl.py` / `kaggle_job.py` (evening fixes).
 **Next:** box: clone, clips, restore, Claude Code; `bash scripts/box_stage6.sh` (Esri ~6 min, DJI_0047 ~40 min,
 bench ~70 min on the 2g.20gb slice); collect; laptop: S6-4 lidar QA on the VGGT-Ω run.
+
+### 2026-09-28 — ritesh14g (with Claude) — box Stage 6 results (VGGT-Ω); DJI_0047 regression; geometry gate
+**Box:** H100 80GB MIG 2g.20gb (19.6 GB), 3 cores, torch 2.11+cu128, NumPy >= 2.3 (one fix: `singlepass.py`
+2-D cross written out, 406e17f). Code = 406e17f, no local edits. Box Claude Code ran the suite and the job.
+Handover unpacked to `data/box/h0928/` (1.9 GB). No VGGT-Omega -> VGGT-1B fallback in either run.
+
+**Esri (esri_s6): 425.6 s end to end** (preflight 12, ingest 52, condition 46, Track A 243 [SfM 61, VGGT-Ω 27,
+OpenMVS mesh 85, texture 47], fusion 42, export 30; 1.7 min of video -> ~42 min projected for 10 min at this
+frame density). 49/50 registered, VGGT-Ω 49/49 anchored (spread 0.76%), cameras vs GPS 3.47 m, texture 0.24%
+black, 1.08 M faces, exposure 0.915-1.122 / 0% clamped. Stage 3: coverage 66.2 -> **69.3%** with the fill,
+38/38 fill frames anchored, held-out Zone 2 error 0.50% of depth. Scores: ingest 83.3, condition 86.4,
+occlusion 86.4, recon 97.1 (97.2 with the gate), geo/export 90.6 on the box.
+**vs USGS 3DEP lidar (laptop, S6-4 closed):** placement 5.1 m median (p90 7.7; was 7.8 / 10.9 m); within
+100 m tiles **Zone 1 RMS 2.87 / NMAD 2.40 m, Zone 2 measured 3.36 / 3.06 m, Zone 2 VGGT-Ω fill 3.43 / 3.16 m**
+(the fill is as good as measured Zone 2), ground points Zone 1 2.60 m; absolute Zone 1 RMS 5.02 m. Doming:
+ends 5.9 m low over 671 m (sigma 1.2), tilt 28 m/km. (Re-scoring on the laptop shows geo/export 37.5: the
+evaluator looks for files at the box's paths; the box's own 90.6 stands.)
+
+**DJI_0047 (dji47_s6): regression, 1,580 s, coverage 8.1% (87.8% on 2026-09-23).** Focal 2,220 px held
+fixed (as designed; COLMAP's 4,608 px lines are its extraction default). First-pass SfM **folded**: camera
+path chord/length 0.33 vs GPS 1.00 (straight 907 m), 248 m RMS from GPS, sparse_map 553 s. The GPS-prior pass
+then found **no initial pair** ("No good initial image pair found" on every relaxation) -> folded model kept.
+Ruled out: prior altitudes (S5-1: level 36.8-37.5 m, steps <= 0.28 m, same shape as before), the time
+offset (estimate at the search edge, not applied). Open: S2-9's changed frames vs mapper non-repeatability ->
+`scripts/box_dji_diag.sh` (A: pre-S2-9 exposure; B: same code again). **DJI numbers from this run are not
+usable for the deck.** Also: 98/136 frames anchored for VGGT, Zone 3 91.9% of visible ground.
+**Bench (S6-1 closed, moderate, Esri, conditioning on / off):** motion blur cameras 2.21 / 11.45 m, registered
+49 / 45; compression cameras 2.04 / **102.57 m** (off: SfM broke); low light **101.37** / 3.18 m (on: SfM broke);
+GPS noise surface 52.55 / 3.84 m (the GPS filter made it worse); shadow and dynamic objects ~equal. Surface RMS
+vs clean is 4-8 m in every case: a clean-vs-clean repeat is needed for the noise floor. Conditioning helps blur
+and compression, **hurts low light and GPS noise**: open issues S6-6 (low-light conditioning breaks SfM) and
+S6-7 (GPS filter under noise).
+**QA gap fixed:** DJI's Stage 4 scored 87.5 with cameras 248 m off GPS (one failing check among ten).
+`Kpi.cap` (a failed gate caps the stage score) + Stage 4 `geometry_gate` (`qa.stage4.cam_vs_gps_rms_gate_m`
+25 m, `gate_score_cap` 40): DJI 87.5 -> 40.0, Esri 97.2. Test `test_a_broken_model_cannot_score_well`.
+**Speed (for the 15-min target):** Esri 7.1 min for 1.7 min of video on the 3-core slice. See the plan in
+chat: keyframe-based selection first (lossless), then hardware (full H100 + 32 cores) and pipelining.
+**Created:** `scripts/box_dji_diag.sh`. **Modified:** `src/qa/stage1_eval.py` (Kpi.cap, capped score),
+`src/qa/stage4_eval.py` (geometry gate), `configs/default.yaml`, `tests/test_recon.py`, `src/qa/singlepass.py`.
+**Next:** box: `bash scripts/box_dji_diag.sh`; laptop: keyframe-based selection; deck from the Esri numbers.

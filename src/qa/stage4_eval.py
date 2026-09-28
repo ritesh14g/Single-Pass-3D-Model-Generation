@@ -30,6 +30,7 @@ DEFAULTS = {
     "registered_fraction_pass": 0.90, "registered_fraction_warn": 0.70, "models_warn": 2,
     "reproj_px_pass": 1.5, "reproj_px_warn": 2.5, "track_length_pass": 3.0, "track_length_warn": 2.0,
     "cam_vs_gps_rms_pass_m": 1.0, "cam_vs_gps_rms_warn_m": 5.0,
+    "cam_vs_gps_rms_gate_m": 25.0, "gate_score_cap": 40.0,
     "height_error_pass_pct": 5.0, "height_error_warn_pct": 15.0,
     "faces_per_vertex_pass": 1.8, "faces_per_vertex_warn": 1.4,
     "anchor_spread_pass_pct": 2.0, "anchor_spread_warn_pct": 5.0,
@@ -125,6 +126,13 @@ def _metric_kpis(ev: StageEvaluation, r: dict, cfg: Any) -> None:
                            _lower_better(rms, _band(cfg, "cam_vs_gps_rms_pass_m"), _band(cfg, "cam_vs_gps_rms_warn_m")),
                            f"similarity fit over {r.get('gps_matched_frames')} frames; includes GPS noise and "
                            "telemetry timing error, not only reconstruction error", unit="m"))
+        gate = _band(cfg, "cam_vs_gps_rms_gate_m")
+        ev.kpis.append(Kpi("geometry_gate", g, "Camera path consistent with GPS (gate)", rms, f"<= {gate:g} m",
+                           PASS if rms <= gate else FAIL,
+                           "" if rms <= gate else
+                           f"cameras {rms:.0f} m RMS from GPS: the SfM model is broken (folded or misregistered); "
+                           f"stage score capped at {_band(cfg, 'gate_score_cap'):g}",
+                           unit="m", cap=_band(cfg, "gate_score_cap")))
     else:
         ev.kpis.append(Kpi("cam_vs_gps_rms_m", g, "Camera centres vs GPS (RMS)", None, "<= 1 m", INFO,
                            "no GPS for the registered frames: the model is scale-free"))

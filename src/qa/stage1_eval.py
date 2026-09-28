@@ -56,6 +56,9 @@ class Kpi:
     status: str
     detail: str = ""
     unit: str = ""
+    # A failed gate caps the stage score: one broken result (cameras 248 m off GPS on DJI_0047,
+    # 2026-09-28) must not average out to 87.5 among ten passing checks.
+    cap: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -73,7 +76,9 @@ class StageEvaluation:
         if not scored:
             return None
         points = sum(1.0 if k.status == PASS else 0.5 if k.status == WARN else 0.0 for k in scored)
-        return round(100.0 * points / len(scored), 1)
+        score = 100.0 * points / len(scored)
+        caps = [k.cap for k in scored if k.status == FAIL and k.cap is not None]
+        return round(min([score, *caps]), 1)
 
     def counts(self) -> dict[str, int]:
         return {s: sum(1 for k in self.kpis if k.status == s) for s in (PASS, WARN, FAIL, INFO)}
