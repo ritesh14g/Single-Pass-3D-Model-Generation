@@ -2840,3 +2840,33 @@ branch `gh-pages`.
 **Open issues:** S4-12 updated with the diagnosis (mapper repeatability, retry-on-gate-failure proposed).
 **Next (iteration 2):** retry-on-gate-failure; speed (keyframe-only selection, pipelined stages, GPU conditioning,
 a full H100 + 32 cores); S6-6 low-light conditioning; S6-7 GPS filter under noise; doming correction.
+
+### 2026-09-28 (night) — ritesh14g (with Claude) — demo console replaces the landing page (UI only; pipeline untouched)
+**Asked for:** a working UI rather than a one-page slide — upload video + telemetry, then the input check, then all
+six formats viewable and interactive, with the QA report top-right broken down **by pipeline process** (not by stage
+name), each score explained by what it does and does not account for, plus a 10-minute projection column, stated
+without negative framing. No pipeline changes.
+**Created:** `scripts/build_site.py` (reads finished run folders, writes `data/site/runs/<key>/data.json` + one real
+web-sized file **per format**: `mesh.glb` from the pipeline's own lite scene, `mesh.obj` written with vertex colour,
+`mesh.fbx` via the same headless Blender the export stage uses, `cloud.ply`/`cloud.las` from one even subsample of
+the exported LAS read in chunks (classification and colour kept), `dsm.png`/`ortho.png` rendered from the GeoTIFFs
+with their bounds and CRS). `data/site/{index.html,app.js,styles.css}` — four steps (input, input check, pipeline,
+outputs) plus a slide-over quality report; three.js r169 OBJ/PLY/FBX loaders vendored beside the existing GLTF one.
+**How each format is genuinely viewed:** GLB/OBJ/FBX through their own three.js loaders; PLY through PLYLoader;
+**LAS through a ~40-line LAS 1.2 reader written for the page** (header, scales/offsets, point records; colour by
+RGB, height or ASPRS class); GeoTIFF as rendered previews with the real CRS, resolution and bounds beside them.
+**QA panel:** KPIs regrouped by their own `group` field, which already names the process (Frame selection, Blur gate,
+Telemetry, Artifact suppression, Illumination, Dynamic masking, GPS conditioning, Sparse SfM, Metric vs telemetry,
+Track B, Dense and mesh, Zones, Zone 2 anchoring, Coverage and gaps, Georeferencing, Formats, Runtime) — 19 processes,
+each scored from its own KPIs and each carrying an authored "what this does / what the score accounts for / what it
+does not measure". Tabs: by process, accuracy (per-zone vs lidar, doming, and an explicit note where no reference
+survey exists), speed (per-stage measured + 10-minute forecast + the degradation table read from the bench), outputs.
+**Deep links** for the deck: `?run=dji&step=4&format=las&qa=speed`.
+**Bugs found and fixed while testing headlessly:** `[hidden]` was beaten by explicit `display` in the CSS, so the
+loading overlay never cleared; glTF custom attributes arrive lower-cased (`_confidence`, `_zone`); `display:grid` on
+`<summary>` collapsed the process rows (flex instead); camera framing now fits the panel by field of view.
+**Verified:** headless Chrome (SwiftShader) on every step, both runs and all six formats — no console errors; then
+the same again against the live URL.
+**Deployed:** https://ritesh14g.github.io/Single-Pass-3D-Model-Generation/ — `gh-pages` recreated as a single clean
+commit (132 MB of assets; largest file 15.2 MB, well inside GitHub's limits), pushed in 2 min.
+**Not changed:** anything under `src/`, `configs/`, `tests/`. Tests unaffected.
