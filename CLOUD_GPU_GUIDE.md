@@ -465,6 +465,11 @@ speed figures measured on the box.
 .venv\Scripts\python scripts\kaggle_ctl.py pull stage6           # -> data\box\kaggle\stage6\
 ```
 
+**Slow uplink?** Skip step 6: pass `--clips-gdrive <file id>` to `run`, and the job downloads a
+`box_pack.py` bundle from Google Drive (shared "Anyone with the link") and extracts only `data/raw/*`.
+The team bundle is `box_upload_20260923_1249.zip` (1.2 GB, both clips + DJI telemetry) on the team
+Drive; a home uplink of ~150 kB/s needed ~2 h for the same clips.
+
 Presets: `check`, `stage6` (Esri + DJI_0047 fresh, then the degradation bench, ~4 h on a T4),
 `stage6-nobench`. Any command: `run <name> --cmd "BENCH=0 SEVERITY=light bash scripts/box_stage6.sh"
 --collect esri_s6`. `--accelerator NvidiaL4` asks for the 24 GB card; `--no-code` reuses the last upload.
@@ -478,3 +483,38 @@ Claude Code runs on the laptop and drives Kaggle through `kaggle_ctl.py`; it is 
 Kaggle. A Kaggle job is a batch run with no terminal to type into, an interactive Kaggle session dies
 with its browser tab, and putting a Claude login on a shared notebook image is a credential leak for
 no gain: the code, the tests and the decisions are on the laptop, and Kaggle only has to execute.
+
+---
+
+## 12. Box back, empty: git checkout + Claude Code on the box (2026-09-28)
+
+The repo is public, so the box takes its code from git (and pulls anything pushed from the laptop);
+the clips come from the team Drive bundle (`box_upload_20260923_1249.zip`, shared "Anyone with the
+link"). Everything in the Jupyter **terminal** (not notebook cells). About 25–30 min before the run.
+
+```bash
+# 1. code (then: git -C ~/single-pass pull, whenever the laptop pushes)
+cd ~ && git clone https://github.com/ritesh14g/Single-Pass-3D-Model-Generation.git single-pass
+cd ~/single-pass && git checkout stage4-recon-probe
+# 2. clips from Drive (~1.2 GB, a minute or two): only data/raw/ is extracted
+bash scripts/box_clips_gdrive.sh 1nLA99rY1DJoSQlw-HZIQT_olUKiPe3SH
+# 3. environment, tools, VGGT-Omega weights, tests (box_restore.sh steps 3-7)
+export HF_TOKEN=hf_...        # read token of the approved account; this shell only, never a file
+nohup bash scripts/box_restore.sh - ~/single-pass --skip-unpack > ~/box_setup.log 2>&1 &
+tail -f ~/box_setup.log       # Ctrl+C stops watching only; wait for "== restored"
+# 4. Claude Code (user-space install, no sudo): ~/.local/bin/claude
+curl -fsSL https://claude.ai/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+cd ~/single-pass && claude    # first start: sign in (it prints a URL; open it, paste the code back)
+```
+
+Claude Code on the box reads `CLAUDE.md` and `DEVLOG.md` like any agent here; tell it which job to run
+(`bash scripts/box_stage6.sh` in the background with nohup, HF_TOKEN exported in the same shell) and to
+report the numbers from `scripts/box_collect.sh`. The laptop session stays the one that edits and
+commits; the box session runs, watches and diagnoses, and anything it changes is committed from the box
+only when asked.
+
+**Before handing the box back:** `bash scripts/box_collect.sh esri_s6 dji47_s6`, download the tarball,
+then `bash scripts/box_wipe_credentials.sh --yes`: it now also removes Claude Code's login
+(`~/.claude`, `~/.claude.json`) along with the Hugging Face token. Then sign out that Claude device and
+rotate the HF token.

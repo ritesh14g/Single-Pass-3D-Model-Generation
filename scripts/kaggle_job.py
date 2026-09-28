@@ -6,7 +6,8 @@ as ``single-pass-data``, then pushes this file with a ``JOB = {...}`` line prepe
 
   1 records the machine (GPU, CPU, memory, disk)
   2 unpacks the code onto scratch disk (only /kaggle/working is kept, max 20 GB) and links the clips
-  3 builds .venv (--system-site-packages: reuses Kaggle's CUDA torch) as box_restore.sh step 4 does
+  3 installs the requirements into the job's own interpreter (Kaggle's, with CUDA torch): no .venv,
+    Kaggle's python3 cannot build one with pip and the container is thrown away after the job
   4 fetches Blender 4.2.3, OpenMVS 2.4.0 (Ubuntu), VGGT and VGGT-Omega code
   5 pre-fetches the VGGT-Omega checkpoint with the HF_TOKEN Kaggle secret (attached to this
     notebook once, in the Kaggle editor: Add-ons -> Secrets); without it Track B logs VGGT-1B
@@ -97,7 +98,33 @@ def scratch() -> Path:
 
 
 PROJ = scratch()
-PY = PROJ / ".venv/bin/python"
+PY = Path(sys.executable)
+
+
+def _clips_from_drive(file_id: str) -> dict:
+    """The clips from a box_pack.py bundle on Google Drive ("Anyone with the link"): at datacenter
+    speed instead of a slow home upload. Only ``single-pass/data/raw/*`` members are extracted."""
+    bundle = Path("/tmp/clips_bundle.zip")
+    if not bundle.exists():
+        sh(f"{PY} -m pip install -q gdown")
+        rc = sh(f"{PY} -c \"import gdown; gdown.download(id='{file_id}', output='{bundle}', quiet=False)\"")
+        if rc != 0 or not bundle.exists() or not zipfile.is_zipfile(bundle):
+            log("   !! Drive download failed (is the file shared 'Anyone with the link'?)")
+            bundle.unlink(missing_ok=True)
+            return {}
+    got = {}
+    with zipfile.ZipFile(bundle) as zf:
+        for info in zf.infolist():
+            if info.is_dir() or not info.filename.startswith("single-pass/data/raw/"):
+                continue
+            dest = PROJ / info.filename[len("single-pass/"):]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+            got[dest.name] = f"drive:{file_id}"
+    bundle.unlink(missing_ok=True)
+    log(f"   clips from Drive: {sorted(got)}")
+    return got
 
 
 @step("machine")
@@ -127,7 +154,12 @@ def _code():
     log(f"   code {code.get('branch')} @ {str(code.get('head'))[:8]} (+{len(code.get('uncommitted', []))} uncommitted),"
         f" packed {code.get('created')}")
     linked = {}
+    drive_id = JOB.get("clips_gdrive")
+    if drive_id:
+        linked.update(_clips_from_drive(str(drive_id)))
     for name, rel in CLIPS.items():
+        if name in linked:
+            continue
         hits = sorted(INPUT.rglob(name))
         if hits:
             dest = PROJ / rel
@@ -143,10 +175,7 @@ def _code():
 
 @step("python")
 def _python():
-    if not PY.exists():
-        sh(f"python3 -m venv {PROJ}/.venv --system-site-packages")
     pip = f"{PY} -m pip install -q"
-    sh(f"{pip} --upgrade pip", cwd=PROJ)
     sh(f"{pip} -r requirements.txt", cwd=PROJ)
     ok = sh(f"{PY} -c \"import pycolmap, sys; sys.exit(0 if pycolmap.has_cuda else 1)\"", cwd=PROJ) == 0
     if not ok:
@@ -156,6 +185,59 @@ def _python():
     sh(f"{PY} -c \"import torch, pycolmap; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(),"
        f" torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-', 'pycolmap cuda', pycolmap.has_cuda)\"",
        cwd=PROJ, tee=OUT / "machine.txt")
+    missing = [m for m in ("torch", "pycolmap", "click", "pytest", "cv2", "laspy", "rasterio", "trimesh")
+               if sh(f"{PY} -c \"import {m}\"", cwd=PROJ) != 0]
+    if missing:
+        raise RuntimeError(f"not importable after setup: {missing}")
+    return str(PY)
+
+
+def _openmvs_runtime(bin_dir: Path) -> str:
+    """OpenMVS 2.4.0's Ubuntu build needs glibc 2.38 / GLIBCXX_3.4.32 (Ubuntu 24.04); Kaggle's image
+    is older, so every OpenMVS step exited 1 there. When a binary fails that way, Ubuntu 24.04's libc6,
+    libstdc++6 and libgcc-s1 are unpacked beside it and each binary is replaced by a wrapper that runs
+    the real one through the newer loader (the binaries link only glibc and libstdc++ dynamically)."""
+    import re
+    import urllib.request
+
+    probe = bin_dir / "InterfaceCOLMAP"
+    if not probe.exists():
+        return "missing"
+    out = subprocess.run([str(probe), "--help"], capture_output=True, text=True).stderr
+    if "GLIBC" not in out and "GLIBCXX" not in out:
+        return "native"
+    root = bin_dir.parent / "noble-runtime"
+    root.mkdir(exist_ok=True)
+    mirror = "http://archive.ubuntu.com/ubuntu/pool/main/g"
+    wanted = [("glibc", r"libc6_2\.39-0ubuntu8(?:\.\d+)*_amd64\.deb"),
+              ("gcc-14", r"libstdc\+\+6_14\.2\.0-4ubuntu2~24\.04(?:\.\d+)*_amd64\.deb"),
+              ("gcc-14", r"libgcc-s1_14\.2\.0-4ubuntu2~24\.04(?:\.\d+)*_amd64\.deb")]
+    for folder, pattern in wanted:
+        listing = urllib.request.urlopen(f"{mirror}/{folder}/", timeout=60).read().decode("utf-8", "replace")
+        names = sorted(set(re.findall(pattern, listing.replace("%2B", "+").replace("%7E", "~"))))
+        if not names:
+            raise RuntimeError(f"no {pattern} in {mirror}/{folder}/")
+        deb = names[-1]
+        url = f"{mirror}/{folder}/{deb.replace('+', '%2B').replace('~', '%7E')}"
+        if sh(f"curl -fsSL '{url}' -o /tmp/{deb} && dpkg-deb -x /tmp/{deb} {root} && rm /tmp/{deb}") != 0:
+            raise RuntimeError(f"could not unpack {deb}")
+    loader = next(iter(sorted(root.rglob("ld-linux-x86-64.so.2"))), None)
+    if loader is None:
+        raise RuntimeError("no ld-linux-x86-64.so.2 in the unpacked runtime")
+    libs = ":".join(sorted({str(p.parent) for p in root.rglob("libc.so.6")} | {str(p.parent) for p in root.rglob("libstdc++.so.6")}))
+    real = bin_dir.parent / "real"
+    real.mkdir(exist_ok=True)
+    for exe in sorted(bin_dir.iterdir()):
+        if not exe.is_file() or exe.suffix in (".so", ".txt", ".md"):
+            continue
+        target = real / exe.name
+        shutil.move(str(exe), target)
+        exe.write_text(f'#!/bin/sh\nexec "{loader}" --library-path "{libs}" "{target}" "$@"\n')
+        exe.chmod(0o755)
+    check = subprocess.run([str(probe), "--help"], capture_output=True, text=True)
+    status = "wrapped (Ubuntu 24.04 runtime)" if "GLIBC" not in check.stderr else "wrapped but still failing"
+    log(f"   OpenMVS: {status}; loader {loader}")
+    return status
 
 
 @step("tools")
@@ -167,29 +249,57 @@ def _tools():
        f" && cd /tmp/openmvs && python3 -m zipfile -e o.zip . && "
        f"cp \"$(dirname \"$(find /tmp/openmvs -type f -name TextureMesh | head -1)\")\"/* {tools}/openmvs/bin/ && "
        f"chmod +x {tools}/openmvs/bin/*")
+    openmvs = _openmvs_runtime(tools / "openmvs" / "bin")
     for rel, url in REPOS.items():
         if not (PROJ / rel / ".git").exists():
             sh(f"git clone -q --depth 1 {url} {PROJ / rel}")
-    return sorted(p.name for p in tools.iterdir())
+    return {"tools": sorted(p.name for p in tools.iterdir()), "openmvs": openmvs}
+
+
+def _hf_token() -> tuple[str | None, str]:
+    """The Hugging Face token and where it came from; the token itself is never logged.
+
+    Kaggle Secrets reach runs started in the editor, not versions pushed through the API (the
+    attached HF_TOKEN gave ConnectionError on 2026-09-27), so the private dataset that
+    ``kaggle_ctl.py hf-token`` publishes (``hf_token.txt``) is tried second."""
+    try:
+        from kaggle_secrets import UserSecretsClient  # type: ignore
+        token = UserSecretsClient().get_secret("HF_TOKEN")
+        if token:
+            return token.strip(), "Kaggle secret HF_TOKEN"
+    except Exception as exc:  # noqa: BLE001
+        log(f"   Kaggle secret HF_TOKEN not available to this run ({type(exc).__name__})")
+    for path in sorted(INPUT.rglob("hf_token.txt")):
+        token = path.read_text(encoding="utf-8").strip()
+        if token:
+            return token, f"private dataset file {path.parent.name}/hf_token.txt"
+    return None, "none"
 
 
 @step("weights")
 def _weights():
-    try:
-        from kaggle_secrets import UserSecretsClient  # type: ignore
-        os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
-    except Exception as exc:  # noqa: BLE001
-        log(f"   no HF_TOKEN secret on this notebook ({type(exc).__name__}): Track B will fall back to VGGT-1B."
-            " Kaggle editor -> Add-ons -> Secrets -> HF_TOKEN -> attach, then re-run")
+    token, source = _hf_token()
+    if token is None:
+        log("   !! NO HF TOKEN: Track B would fall back to VGGT-1B. Laptop: kaggle_ctl.py hf-token")
         return "no token"
-    rc = sh(f"{PY} -c \"from huggingface_hub import hf_hub_download as d; "
-            f"print('checkpoint', d('facebook/VGGT-Omega', 'vggt_omega_1b_512.pt'))\"", cwd=PROJ)
-    return "ok" if rc == 0 else "download failed (is this account approved for facebook/VGGT-Omega?)"
+    os.environ["HF_TOKEN"] = token
+    log(f"   HF token detected from {source} ({len(token)} characters, not printed)")
+    probe = (f"{PY} -c \"import os; from huggingface_hub import hf_hub_download as d; "
+             f"p = d('facebook/VGGT-Omega', 'vggt_omega_1b_512.pt'); "
+             f"print('VGGT_OMEGA_CHECKPOINT', p, round(os.path.getsize(p) / 1e9, 2), 'GB')\"")
+    rc = sh(probe, cwd=PROJ, tee=OUT / "weights.log")
+    text = (OUT / "weights.log").read_text(encoding="utf-8", errors="replace") if (OUT / "weights.log").exists() else ""
+    if rc != 0 or "VGGT_OMEGA_CHECKPOINT" not in text:
+        log("   !! VGGT-Omega checkpoint download FAILED with this token (account approved for facebook/VGGT-Omega?)")
+        return "download failed"
+    line = next(ln for ln in text.splitlines() if ln.startswith("VGGT_OMEGA_CHECKPOINT"))
+    log(f"   ==> VGGT-OMEGA READY: {line.split(' ', 1)[1]} -> Track B runs VGGT-Omega")
+    return "ok"
 
 
 def env() -> dict:
     e = dict(os.environ)
-    e.update({"PY": str(PY), "PATH": f"{PROJ}/.venv/bin:{e.get('PATH', '')}", "PYTHONUNBUFFERED": "1"})
+    e.update({"PY": str(PY), "PATH": f"{PY.parent}:{e.get('PATH', '')}", "PYTHONUNBUFFERED": "1"})
     e.update({k: str(v) for k, v in (JOB.get("env") or {}).items()})
     return e
 
@@ -200,7 +310,11 @@ if JOB.get("tests"):
         rc = sh(f"{PY} -m pytest tests -q -p no:cacheprovider", cwd=PROJ, env=env(), tee=OUT / "tests.log")
         return {"exit": rc}
 
-if JOB.get("cmd"):
+weights_ok = (RESULT["steps"].get("weights") or {}).get("value") == "ok"
+if JOB.get("require_hf") and not weights_ok:
+    log("   !! require_hf: the VGGT-Omega checkpoint is not available, so the command is skipped "
+        "(a long run would silently use VGGT-1B)")
+elif JOB.get("cmd"):
     @step("cmd")
     def _cmd():
         rc = sh(JOB["cmd"], cwd=PROJ, env=env(), tee=OUT / "cmd.log")

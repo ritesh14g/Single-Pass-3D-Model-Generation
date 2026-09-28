@@ -421,7 +421,7 @@ These remain, in priority order; each links its open issue:
 | S3-6 | 3 | Photometric consistency is computed per voxel (median 0.867 on DJI_0047) but does not enter the zone decision | Decide on real data whether low consistency should demote Zone 1 → 2 |
 | S3-7 | 3 | **Degenerate anchor fits extrapolated over whole frames.** Esri box frame 216: band 2,139 px, region 183k px, fitted s = 267 / t = −148 on Track B's saved depth whose true scale is the georef's 0.996; inliers 58.5%, held-out 0.8% (the ring only tests near the band) — so it passed and gave 37,908 of 121,068 fill points | **Fixed and verified on the box 2026-09-23:** frame 216 refused ("scale disagrees with the georeferencing"); Esri 33/35 anchored, 102,908 fill points (was 121,068), coverage 65.4 → **68.2%** (69.1% included the bad frame), held-out error unchanged at 0.48%, Stage 3 still 86.4. Guards: cached depth must fit within `cache_scale_tolerance` (1.5×) of the georef scale; filled pixels leaving the band's depth span by > `max_extrapolation_rel` (15%) × band depth are dropped (`extrapolation_dropped_px` per frame). Frame 032 (band 378 px of 185k, 0 inliers) was already refused correctly |
 | S4-10 | 4 | **DJI_0047 full-resolution Track A failed on the box** (256 m vs GPS). Diagnosed (`box_recon_diag.py`): **two causes.** (1) **A second pipeline process in the same run folder** (the job was launched twice, `[2]+ Done`): at 08:36 UTC it entered Track A, wiped `sparse/` and deleted `database.db` while the first run was mapping; at 08:48 the first run's GPS-prior pass found 0 images (`priors: 0`) → no model. (2) **The first pass itself folded**: BA drove the nominal Phantom 3 focal −29.6% (1,563 vs 2,220 px); SfM camera path chord/length 0.23 vs GPS 1.00 (straight 903 m), cameras 23.7 m *below* the ground | **Closed 2026-09-23, verified on the box:** DJI_0047 re-run → focal 2,219.6 px (= prior), GPS priors 136, GPS-prior refinement kept, **camera centres vs GPS 1.35 m** (was 256), SfM path 906 vs GPS 903 m and straight (collinearity 0.0067 vs 0.0059), residual 0.6–2.0 m along the flight; Stage 4 **93.3** (was 76.7), anchor spread 1.77% (was 42%), dense 6.1 M points over 266,450 m². Fixes: `src/core/runlock.py` (run_pipeline holds `.run.lock`; the CLI refuses a second process; box scripts check before `rm -rf`); `recon.track_a.nominal_focal: fixed` (camera-table focal held fixed; `refine` restores BA refinement). Re-run: `scripts/box_dji_rerun.sh` |
-| S4-11 | 4 | **Every textured mesh was mostly black.** OpenMVS 2.4 TextureMesh seam leveling painted the faces' own texels black: black share of the used atlas 48% (box Esri export), 31% (laptop DJI_0047), 61% (recon probe); 99% of Esri face centres sampled black. The scorecard only checked `textured: true` | **Fixed 2026-09-26 (laptop-verified, box re-run pending):** DJI_0047 re-textured: defaults 31.3% black, local-only off 20.5%, global-only off 43.5%, **both off 0.02%**. `recon.track_a.texture.seam_leveling: false`, explicit `--empty-color`; `meshing.texture_quality` measures the atlas after every run → Stage 4 KPI `texture_black_pct` (pass ≤ 2%, warn ≤ 10%). **All exported OBJ/GLB/FBX so far carry black textures: re-run Track A before using any model image in the deck** |
+| ~~S4-11~~ | 4 | **Closed 2026-09-27: fresh Esri run (laptop) 0.25% black texels.** ~~Every textured mesh was mostly black.~~ OpenMVS 2.4 TextureMesh seam leveling painted the faces' own texels black: black share of the used atlas 48% (box Esri export), 31% (laptop DJI_0047), 61% (recon probe); 99% of Esri face centres sampled black. The scorecard only checked `textured: true` | **Fixed 2026-09-26 (laptop-verified, box re-run pending):** DJI_0047 re-textured: defaults 31.3% black, local-only off 20.5%, global-only off 43.5%, **both off 0.02%**. `recon.track_a.texture.seam_leveling: false`, explicit `--empty-color`; `meshing.texture_quality` measures the atlas after every run → Stage 4 KPI `texture_black_pct` (pass ≤ 2%, warn ≤ 10%). **All exported OBJ/GLB/FBX so far carry black textures: re-run Track A before using any model image in the deck** |
 | S3-8 | 3 | **Stage 3 classification scales with cameras x voxels**: DJI_0047 (136 cameras, 6.1 M dense points) classify 115 s of a 136 s stage (Esri, 46 cameras / 2 M points: 27 s); over the 120 s allotment, so the Zone 2 fill stopped after 1 of 3 frames ("time budget") although a frame costs 1.6 s | **Fixed 2026-09-23 (laptop benchmark, box confirmation on the next run):** DJI-shaped scene (136 nadir 4K cameras, 4.8 M points, 27 M view pairs): classify **52.9 → 20.8 s**, zones / views / angles identical, photometric within 0.016. `voxel_size` 18.2 → 2.1 s (1-D keys instead of `np.unique(axis=0)`), visibility 16.1 → ~4 s (frustum-footprint culling on a coarse xy index), angles 7.1 → 2.2 s (per-voxel minimum instead of a 27 M-pair lexsort), photometric 8.1 → 3.1 s (reduced JPEG decode on a thread pool, pairs grouped by camera once, one `bincount`). The fill always gets `budget_min_frames` (3). Per-step times now in `fusion_report.json` (`timings_s.classify_steps`) and the wall-time KPI |
 | T-1 | test | Stage 5 end-to-end fixture nondeterministic on the box: 2/430 failed with float32 overflow in the glTF writer; one `-k end_to_end` run hung > 10 min (Blender/OpenMVS on an absurd mesh?). Passed 14/14 alone | **Fixed 2026-09-23:** cause — the fixture pans a *flat* canvas (pure translation over a plane: focal unobservable) through an mp4v encode/decode that differs between the Windows and Linux OpenCV builds, and Track A self-calibrated the focal, so SfM sometimes degenerated. Now: frames cropped straight from the canvas, a 60° FOV hint held fixed, COLMAP seeded from `run.seed` (Track A, every run). Sparse model stable (focal 277.1 px, path 11.537 ± 0.001 over 3 builds); OpenMVS dense/mesh still vary with thread scheduling (mesh present 2 of 3), which the tests accept. Export refuses mesh formats for non-finite vertices or vertices > `export.mesh_max_extent_factor` (10) × the cloud's extent outside it (point formats still written); Blender timeout → `export.fbx.timeout_s`. `-k end_to_end` 3/3 green |
 | S6-1 | 6 | The degradation bench has not run on real footage | `bash scripts/box_stage6.sh` (13 Esri runs at moderate, ~70 min); then `src.cli qa … --bench` |
@@ -2700,3 +2700,45 @@ region test; candidate-density prefilter; shadow gates at 4K.
 the tiny SfM fixture's known run-to-run variance (T-1).
 **Next:** place the Kaggle token -> `kaggle_ctl.py data`, `run check`, attach HF_TOKEN, `run stage6` (T4 numbers);
 pull, `src.cli qa ... --reference` (S6-4, now with doming), deck screenshots; compare S2-9's effect on Track A.
+
+### 2026-09-27 (evening) — ritesh14g (with Claude) — Kaggle bring-up; fixes verified on a fresh Esri run (laptop CPU)
+
+**Kaggle, what it took (all in `scripts/kaggle_job.py` / `kaggle_ctl.py`, CLOUD_GPU_GUIDE.md §11):**
+- Machine: 2x Tesla T4 15 GB, 4 cores, 31 GB, Python 3.12, torch 2.10+cu128, pycolmap-cuda12 `has_cuda` True.
+- Clips: the home uplink ran ~150 kB/s (1.2 GB ≈ 2 h), so the job pulls the 2026-09-23 box bundle from the team
+  Drive (`--clips-gdrive`, shared "Anyone with the link"): 22 s.
+- No venv: Kaggle's `python3 -m venv` has no ensurepip and a `--system-site-packages` venv trips Kaggle's
+  sitecustomize (`No module named torch/wrapt`); the job installs into Kaggle's own interpreter and fails the
+  setup step unless torch, pycolmap, click, pytest, cv2, laspy, rasterio, trimesh import.
+- **OpenMVS 2.4.0 Ubuntu build needs glibc 2.38 / GLIBCXX_3.4.32**; Kaggle's image is older, so every OpenMVS
+  step exited 1 (dense/mesh/texture fall back; 5 e2e tests failed there). Fixed by unpacking Ubuntu 24.04's
+  libc6 / libstdc++6 / libgcc-s1 beside the binaries and wrapping each binary to run through that loader;
+  verified: OpenMVS starts, the 9 affected tests pass on Kaggle.
+- **Kaggle Secrets do not reach versions pushed through the API** (HF_TOKEN attached in the editor, still
+  `ConnectionError`). The token now travels as the private dataset `single-pass-hf` (`kaggle_ctl.py hf-token`,
+  read from ~/.kaggle/hf_token.txt, never printed). `--require-hf` skips the command unless the VGGT-Omega
+  checkpoint downloads, and the job logs `HF token detected …` / `==> VGGT-OMEGA READY …` (the guard stopped
+  one stage6 launch that would have run 4 h on VGGT-1B).
+- Kaggle suite: 494 passed / 5 failed before the OpenMVS fix (the 5 = OpenMVS glibc, plus the tiny-SfM variance
+  test `test_track_a_runs_end_to_end_on_cpu`, 12/16 registered).
+- From 19:00 the free T4 queue held the token check for > 40 min; Kaggle exposes no queue position or ETA.
+
+**Fresh Esri run on the laptop CPU with today's code** (`data/interim/esri_laptop_0927`, no VGGT: OpenMVS dense
+at 640 px, no Zone 2 fill; ~19 min: ingest 57 s, condition 59 s, Track A 792 s, fusion 47 s, export 89 s, QA 54 s):
+S2-9 verified in the pipeline (gain 0.915-1.122, 0% clamped, 0 bias clamps; every box run: 90% at 0.4);
+**S4-11 verified: 0.25% black texels** (was 31-61%); scorecards ingest 83.3, condition 86.4, occlusion 80.0,
+recon 86.7, geo/export 90.6; coverage 64.6%; 44/50 frames registered; mesh 966,575 faces.
+vs USGS 3DEP lidar: placement 7.8 m median (KLV-limited); within 100 m tiles **Zone 1 RMS 3.11 m / NMAD 2.43 m,
+Zone 2 RMS 5.34 m / NMAD 3.42 m** (zones rank accuracy correctly again); absolute Zone 1 RMS 6.33 m.
+**Doming (S4-7) still present:** ends 4.7 m low over 508 m (sigma 1.0), tilt 46 m/km.
+**Open:** S6-4 (VGGT-Ω run vs lidar) and S6-1 (bench) wait for a Kaggle T4.
+
+### 2026-09-28 — ritesh14g (with Claude) — the institute box is back (empty): git-based setup + Claude Code on the box
+**Why:** Kaggle's free T4 queue held every job from 19:00 to 20:52 on 2026-09-27 and the last push was
+cancelled without running (S6-1 and S6-4 still open). The box needs no queue and ran box_stage6 in ~2 h.
+**Created:** `scripts/box_clips_gdrive.sh` (clips from the team Drive bundle, only `data/raw/` extracted, zip
+deleted). **Modified:** `scripts/box_restore.sh` (`--skip-unpack`: steps 3-7 on a git checkout; the repo is
+public), `scripts/box_wipe_credentials.sh` (Claude Code login `~/.claude`, `~/.claude.json`, CLAUDE_* env),
+`CLOUD_GPU_GUIDE.md` §12 (box from git + Claude Code), `scripts/kaggle_ctl.py` / `kaggle_job.py` (evening fixes).
+**Next:** box: clone, clips, restore, Claude Code; `bash scripts/box_stage6.sh` (Esri ~6 min, DJI_0047 ~40 min,
+bench ~70 min on the 2g.20gb slice); collect; laptop: S6-4 lidar QA on the VGGT-Ω run.

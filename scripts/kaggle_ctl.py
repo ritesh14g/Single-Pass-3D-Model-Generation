@@ -4,6 +4,7 @@
     python scripts/kaggle_ctl.py data                   # upload the clips once (single-pass-data, ~1.2 GB)
     python scripts/kaggle_ctl.py code                   # upload the working tree (single-pass-code), wait until ready
     python scripts/kaggle_ctl.py run check              # a preset job (see PRESETS), or:
+    python scripts/kaggle_ctl.py run check --clips-gdrive <id>   # clips from a Drive bundle (slow uplink)
     python scripts/kaggle_ctl.py run myjob --cmd "bash scripts/box_stage6.sh" --collect esri_s6 dji47_s6
     python scripts/kaggle_ctl.py status | logs | wait   # the latest run of the job notebook
     python scripts/kaggle_ctl.py pull myjob             # outputs -> data/box/kaggle/myjob/
@@ -30,15 +31,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STAGE = ROOT / "data" / "kaggle"
 KERNEL = "single-pass-gpu"
-DATA_DS, CODE_DS = "single-pass-data", "single-pass-code"
+DATA_DS, CODE_DS, HF_DS = "single-pass-data", "single-pass-code", "single-pass-hf"
 DJI_DIR = ROOT.parent / "Drone Video Dataset" / "QGISFMV_Samples" / "DJI" / "DJI_0047"
 CLIPS = [ROOT / "data/raw/Esri_multiplexer_1.mp4", DJI_DIR / "DJI_0047.mp4", DJI_DIR / "telemetry.csv"]
 
 PRESETS = {
+    # setup + the VGGT-Omega token and checkpoint only (~3 min): prove Track B's model before a long run
+    "hfcheck": {"cmd": "echo token-check-only", "require_hf": True, "collect": []},
     # setup + test suite + a quick look at a clip: proves the machine before a long run (~20 min)
     "check": {"cmd": "$PY -m src.cli inspect data/raw/Esri_multiplexer_1.mp4", "tests": True, "collect": []},
     # the Stage 6 box run: Esri + DJI_0047 fresh, then the degradation bench (~4 h on a T4)
     "stage6": {"cmd": "bash scripts/box_stage6.sh", "collect": ["esri_s6", "dji47_s6"]},
+    # the §8.5 degradation bench alone on Esri (moderate), after stage6-nobench (~2 h on a T4)
+    "bench": {"cmd": "$PY -m src.cli bench degrade data/raw/Esri_multiplexer_1.mp4 --out data/interim/bench_esri "
+                     "--severity moderate > bench_esri.log 2>&1; cat data/interim/bench_esri/degradation.md",
+              "require_hf": True, "collect": []},
     "stage6-nobench": {"cmd": "BENCH=0 bash scripts/box_stage6.sh", "collect": ["esri_s6", "dji47_s6"]},
 }
 
@@ -144,6 +151,29 @@ def cmd_code(_: argparse.Namespace) -> None:
     publish(folder, CODE_DS, f"{info['head'][:8]} {info['created']}")
 
 
+def cmd_hf_token(_: argparse.Namespace) -> None:
+    """Publish the Hugging Face token as a private dataset (``single-pass-hf``/hf_token.txt).
+
+    Kaggle Secrets are not given to versions pushed through the API, so this is how the job gets
+    the VGGT-Omega token. Read from the HF_TOKEN environment variable or ~/.kaggle/hf_token.txt;
+    never printed; the staged copy is deleted once uploaded."""
+    token = os.environ.get("HF_TOKEN", "").strip()
+    source = Path.home() / ".kaggle" / "hf_token.txt"
+    if not token and source.is_file():
+        token = source.read_text(encoding="utf-8").strip()
+    if not token.startswith("hf_"):
+        sys.exit(f"no Hugging Face token: put it (one line, starts with hf_) in {source} or set HF_TOKEN")
+    folder = STAGE / "hf"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    (folder / "hf_token.txt").write_text(token, encoding="utf-8")
+    try:
+        publish(folder, HF_DS, "token")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    print(f"token published privately as {username()}/{HF_DS} ({len(token)} characters, not printed)")
+
+
 def cmd_run(a: argparse.Namespace) -> None:
     job = dict(PRESETS.get(a.name, {}))
     if a.cmd:
@@ -152,6 +182,10 @@ def cmd_run(a: argparse.Namespace) -> None:
         job["collect"] = a.collect
     if a.tests:
         job["tests"] = True
+    if a.clips_gdrive:
+        job["clips_gdrive"] = a.clips_gdrive
+    if a.require_hf:
+        job["require_hf"] = True
     if not job.get("cmd") and not job.get("tests"):
         sys.exit(f"unknown preset {a.name!r} and no --cmd (presets: {', '.join(PRESETS)})")
     job.update({"name": a.name, "env": dict(e.split("=", 1) for e in a.env), "pushed": dt.datetime.now().isoformat(timespec="seconds")})
@@ -166,7 +200,9 @@ def cmd_run(a: argparse.Namespace) -> None:
     (folder / "kernel-metadata.json").write_text(json.dumps({
         "id": f"{user}/{KERNEL}", "title": KERNEL, "code_file": "job.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": True, "enable_internet": True,
-        "dataset_sources": [f"{user}/{DATA_DS}", f"{user}/{CODE_DS}"], "competition_sources": [],
+        "dataset_sources": ([f"{user}/{DATA_DS}"] if not a.clips_gdrive else []) + [f"{user}/{CODE_DS}"]
+        + ([f"{user}/{HF_DS}"] if dataset_exists(f"{user}/{HF_DS}") else []),
+        "competition_sources": [],
         "kernel_sources": [], "machine_shape": a.accelerator}, indent=2))
     kaggle("kernels", "push", "-p", str(folder), "--accelerator", a.accelerator)
     (STAGE / "last_job.json").write_text(json.dumps(job, indent=2))
@@ -207,6 +243,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd_name", required=True)
     sub.add_parser("whoami").set_defaults(fn=lambda a: print(username(), kaggle_exe()))
     sub.add_parser("data").set_defaults(fn=cmd_data)
+    sub.add_parser("hf-token").set_defaults(fn=cmd_hf_token)
     sub.add_parser("code").set_defaults(fn=cmd_code)
     r = sub.add_parser("run")
     r.add_argument("name")
@@ -216,6 +253,10 @@ def main() -> None:
     r.add_argument("--env", nargs="*", default=[], help="KEY=VALUE for the job's command")
     r.add_argument("--accelerator", default="NvidiaTeslaT4", help="NvidiaTeslaT4 | NvidiaL4 (if your quota has it)")
     r.add_argument("--no-code", action="store_true", help="reuse the last uploaded code")
+    r.add_argument("--require-hf", action="store_true",
+                   help="skip the command unless the VGGT-Omega checkpoint downloaded (HF_TOKEN secret)")
+    r.add_argument("--clips-gdrive", help="Drive file id of a box_pack.py bundle holding the clips (shared "
+                   "'Anyone with the link'): the job downloads it instead of using single-pass-data")
     r.set_defaults(fn=cmd_run)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("logs").set_defaults(fn=cmd_logs)

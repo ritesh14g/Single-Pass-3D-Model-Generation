@@ -60,9 +60,14 @@ for f in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc" "
     echo "      edit it by hand; this script will not rewrite your shell profile"
   fi
 done
+echo "== Claude Code"
+for f in "$HOME/.claude" "$HOME/.claude.json" "$HOME/.claude.json.backup" "$HOME/.config/claude"; do
+  [ -e "$f" ] && { hit "Claude Code login/settings: $f"; [ "$APPLY" = "--yes" ] && rm -rf "$f" && gone; }
+done
+[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && hit "CLAUDE_CODE_OAUTH_TOKEN is set in this shell (unset it)"
 [ -f "$HOME/.netrc" ] && { hit "~/.netrc (stores login details in plain text)"; \
   [ "$APPLY" = "--yes" ] && rm -f "$HOME/.netrc" && gone; }
-env | grep -iE '^(HF_|HUGGING|GITHUB_|GH_|AWS_|GOOGLE_|OPENAI_|ANTHROPIC_)[A-Z_]*=' | cut -d= -f1 \
+env | grep -iE '^(HF_|HUGGING|GITHUB_|GH_|AWS_|GOOGLE_|OPENAI_|ANTHROPIC_|CLAUDE_)[A-Z_]*=' | cut -d= -f1 \
   | while read -r name; do hit "environment variable set: $name"; done
 
 echo "== jupyter and shell history"

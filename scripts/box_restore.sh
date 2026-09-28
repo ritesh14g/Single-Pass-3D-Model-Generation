@@ -2,6 +2,7 @@
 # Restore the project on a GPU box from a box_pack.py upload (CLOUD_GPU_GUIDE.md §10).
 #
 #   bash box_restore.sh ~/box_upload_<stamp>.zip [~/single-pass] [--no-tests] [--unpack-only]
+#   bash scripts/box_restore.sh - ~/single-pass --skip-unpack      # a git checkout: steps 3-7 only
 #
 # --unpack-only refreshes the code (and clips) from a newer bundle and verifies it, nothing else.
 # Every step is safe to re-run: it skips what is already there, so after a culled session
@@ -20,9 +21,11 @@ DEST=${2:-$HOME/single-pass}
 case "$DEST" in --*) DEST=$HOME/single-pass ;; esac
 RUN_TESTS=1
 UNPACK_ONLY=0
+SKIP_UNPACK=0
 for a in "$@"; do
   [ "$a" = "--no-tests" ] && RUN_TESTS=0
   [ "$a" = "--unpack-only" ] && UNPACK_ONLY=1
+  [ "$a" = "--skip-unpack" ] && SKIP_UNPACK=1
 done
 PY3=${PY3:-python3}
 BLENDER_URL=https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz
@@ -31,6 +34,11 @@ OPENMVS_TAG=v2.4.0
 step() { printf '\n== %s\n' "$*"; }
 warn() { printf '   !! %s\n' "$*"; }
 
+if [ "$SKIP_UNPACK" = 1 ]; then
+  # A git checkout (the repo is public): no bundle to join, unpack or verify.
+  cd "$DEST" || { warn "$DEST not found"; exit 1; }
+  step "1-2/7 skipped: code from git ($(git rev-parse --short HEAD 2>/dev/null || echo '?'))"
+else
 # ---------------------------------------------------------------- 0 join (box_upload.py parts)
 if [ ! -f "$ZIP" ] && ls "$ZIP".part* >/dev/null 2>&1; then
   step "0/7 join $(ls "$ZIP".part* | wc -l) uploaded parts -> $ZIP"
@@ -108,6 +116,7 @@ for p in bad:
     print("   BAD", p)
 sys.exit(1 if bad else 0)
 PY
+fi   # SKIP_UNPACK
 if [ "$UNPACK_ONLY" = 1 ]; then
   echo "   --unpack-only: done (code refreshed in $DEST)"
   exit 0
