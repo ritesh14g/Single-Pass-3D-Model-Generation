@@ -84,7 +84,9 @@ def find_strips(telemetry: pd.DataFrame, scfg: Any) -> dict[str, Any]:
             if min(dh, 180 - dh) > turn:
                 continue
             centre, direction = out[i]["_line"]
-            lateral = abs(np.cross(direction, out[j]["_line"][0] - centre))
+            offset = out[j]["_line"][0] - centre
+            # 2-D cross product written out: NumPy >= 2.3 rejects np.cross on 2-vectors (box, 2026-09-28)
+            lateral = abs(float(direction[0] * offset[1] - direction[1] * offset[0]))
             if float(scfg.get("min_spacing_m", 20.0)) <= lateral <= float(scfg.get("max_spacing_m", 400.0)):
                 pairs.append((i, j, round(float(lateral), 1)))
     for s in out:
