@@ -35,3 +35,6 @@ data/lab/
 
 # third-party binaries (OpenMVS etc.), fetched per machine
 tools/
+# public prototype site (GitHub Pages, gh-pages branch) built from box runs
+data/site_build/
+data/site/

@@ -2785,3 +2785,20 @@ chat: keyframe-based selection first (lossless), then hardware (full H100 + 32 c
 **Created:** `scripts/box_dji_diag.sh`. **Modified:** `src/qa/stage1_eval.py` (Kpi.cap, capped score),
 `src/qa/stage4_eval.py` (geometry gate), `configs/default.yaml`, `tests/test_recon.py`, `src/qa/singlepass.py`.
 **Next:** box: `bash scripts/box_dji_diag.sh`; laptop: keyframe-based selection; deck from the Esri numbers.
+
+### 2026-09-28 — ritesh14g (with Claude) — prototype deployed for the national-round screening (iteration 1 closed)
+**Decision (ritesh14g):** no further improvement this iteration; fix DJI_0047, publish the prototype today and
+link it in the SIH deck. Speed work (keyframe selection, pipelining, bigger machine) moves to iteration 2.
+**Deployed:** https://ritesh14g.github.io/Single-Pass-3D-Model-Generation/ (GitHub Pages, branch `gh-pages`,
+built from `data/site/`, git-ignored on the code branches). Landing page: PS §1.4 targets vs measured (formats,
+viewer, mesh: met; coverage 69.3%: partial, gaps reported; accuracy and speed: not met, with the reasons),
+lidar accuracy per zone, the bench table, pipeline, limitations. `esri/viewer/`: the box Esri run with a
+600k-face vertex-coloured web model (14.1 MB; the full textured scene.glb is 114.7 MB, over GitHub's 100 MB
+file limit), verified rendering in headless Chrome (SwiftShader). `esri/report.html`: QA report regenerated on
+the laptop through a junction `data/interim/esri_s6 -> data/box/h0928/.../esri_s6` so the export evaluator finds
+the box's files (recon 97.2, geo/export 90.6; without it the re-score read 37.5).
+**Also:** mask test made robust to the tiny fixture's SfM variance (the undistorted masks are always checked;
+the depth half skips with the reason when anchoring fails); full suite 500 passed + that 1 (now skip-safe).
+`scripts/box_dji_diag.sh` finishes whichever DJI_0047 variant agrees with GPS (fusion, export, QA) and collects it.
+**Next:** box: `git pull && nohup bash scripts/box_dji_diag.sh > dji_diag.log 2>&1 &`; bring the handover back;
+add DJI_0047 to the site if a variant agrees with GPS; otherwise the site keeps stating the regression.
