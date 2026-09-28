@@ -73,7 +73,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | 1 | Ingest | §4 | 🟢 **BUILT** | `ui/stages/stage1_ingest.py` | `src/qa/stage1_eval.py` | Synthetic 89/100; real DJI clip 72/100 (was 44). KLV/STANAG 4609 telemetry added and validated on 8 real MISB clips 2026-09-18. §4.3 speed not met on CPU decode (S1-4); overlap unmeasurable on forward-oblique footage (S1-8) |
 | 2 | Conditioning | §5 | 🟢 **BUILT** | `ui/stages/stage2_condition.py` | `src/qa/stage2_eval.py` | Suite 267/267. S2-1, S2-2, S2-5, S2-6, S2-7, S2-8 closed. Scores **100/100** on `demo_flight.mp4` (7 pass / 5 info). Scorecard can now fail (9 scored KPIs). 2026-09-27: S2-9 (exposure chain) and S2-3 (shadows) closed; S2-4 remains open |
 | 3 | Occluded surfaces | §6 | 🟢 **BUILT** | `ui/stages/stage3_occlusion.py` | `src/qa/stage3_eval.py` | **Runs after geo, before export** (works in metres). Voxel zones from confirming views + triangulation angle + z-buffer visibility; Zone 3 gaps → `gaps.geojson`; Zone 2 filled from VGGT depth anchored to Zone 1 (RANSAC scale/shift, depth-relative residual gate, never inside a Zone 1 voxel); unsupported mesh faces flagged inferred. DJI_0047 (laptop, no VGGT weights): 13.5 s, coverage 28.4%, 26% of the dense cloud rejected as stereo failures, fill skipped (logged). Box, Esri (2026-09-23): Stage 3 **81.8**, 61.5 s, Zone 1 47.1% / 2 19.5% / 3 33.4%, coverage 66.6%, **held-out Zone 2 error 0.26% of depth** (first real VGGT-Ω fill), fill 2/35 frames (budget bug). **After the budget fix (box re-run): 86.4, 34/35 frames anchored, coverage 65.4 → 69.1%, held-out error 0.48% of depth, fill 28.9 s, Stage 5 90.0.** Frame 216's degenerate fit (s = 267) is now refused by a georef-scale check (verified on the box: 33/35 anchored, coverage **68.2%**, held-out 0.48%). DJI_0047 Stage 3 = 0% coverage because its Track A failed (S4-10) |
-| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Box DJI_0047 (4K, 136 frames, nominal Phantom 3 focal held fixed): **93.3/100, 1.35 m vs GPS**, Track A 1,831 s. Refinement BA: planned |
+| 4 | Reconstruction tracks | §7 | 🟢 **BUILT (Track A)** | `ui/stages/stage4_recon.py` | `src/qa/stage4_eval.py` | **Track A**: pycolmap SfM + dense (GPU), OpenMVS Delaunay mesh + texture, budget-projected dense resolution. Demo (laptop CPU): 43/43, textured, **95.5/100**. **Track B = §7.4 hybrid, VGGT-Ω by default** (depth 0.86% / 0.89 m vs COLMAP, 24 cm/px); fallback Ω → VGGT-1B → Track A dense. SfM pieces merged via GPS; hybrid mesh reduced. Box Esri Stages 1–4: **93.3/100**, 300 s. Box DJI_0047 (4K, 136 frames, nominal Phantom 3 focal held fixed): **93.3/100, 1.35 m vs GPS**, Track A 1,831 s. Refinement BA: planned **2026-09-28 (box, VGGT-Ω): Esri 49/50 registered, cameras 3.35 m vs GPS, recon 97.2; DJI_0047 136/136, GPS-prior refinement 270.2 → **2.05 m**, 6.15 M dense points, 2.03 M faces, recon 97.1.** Geometry gate added (cameras > 25 m from GPS caps the stage at 40) after a folded DJI run scored 87.5 — see S4-12. **2026-09-28 (box, VGGT-Omega): Esri 49/50 registered, cameras 3.35 m vs GPS, recon 97.2; DJI_0047 136/136, GPS-prior refinement 270.2 -> 2.05 m, 6.15 M dense points, 2.03 M faces, recon 97.1.** Geometry gate added (cameras > 25 m from GPS caps the stage at 40) after a folded DJI run scored 87.5: see S4-12. |
 | 5 | Georeferencing & export | §8.1–8.3 | 🟢 **BUILT** | `ui/stages/stage5_geo_export.py` | `src/qa/stage5_eval.py` | RANSAC GPS similarity (straight-path safe), UTM + EGM96 orthometric, all 6 formats verified on the box (Esri, FBX via headless Blender 4.2.3): Stage 5 **89.3**, coverage **72.6%**, 22 s. Since 2026-09-23 export carries Stage 3's layers (zone/source per point, `model_zones.glb`, `gaps.geojson`, `zone_map.tif`) and takes coverage from Stage 3. **2026-09-26: S5-1/2/3 closed** — altitude datum measured against terrain (DJI_0047: ellipsoidal to 0.6 m; its 'altitude' was above-takeoff), orthophoto rendered from the textured mesh at texel resolution (Esri 0.14 m), GCPs with check-point accuracy KPI, LAS classified (ground / above / low noise). Found S4-11: all textures so far ~30–60% black (fixed; box re-run needed) |
 | 6 | Viewer & QA | §8.4–8.5 | 🟢 **BUILT** | `ui/stages/stage6_viewer_qa.py` | `src/qa/stage6_eval.py` | Manifest stage `qa`, after export. **Viewer** (`qa/viewer/`, `python -m src.cli view <run>`): one scene.glb with texture + per-vertex confidence + zone, photo / confidence / zones toggle, Zone 3 gap outlines draped on the model, point-to-point measurement (map coordinates, zone/confidence warnings per end), stats panel, screenshot; verified in headless Chrome on the Esri laptop run (633 gaps; picked points lie on the mesh to 0.00 m). **QA report** (`qa/report.html`): every stage's scorecard, time vs budget, limitations first, accuracy per zone against a reference surface (`--reference` lidar/DSM), benchmarks. **Esri vs USGS 3DEP lidar (laptop run):** placement 10.9 m median (KLV-limited, varies along the flight), Zone 1 height RMS 2.9 m / Zone 2 4.1 m within 100 m tiles: zones rank accuracy correctly. Degradation bench + single-pass simulation built (`src.cli bench`), not yet run on real footage (box; no multi-strip clip) |
 
@@ -431,7 +431,7 @@ These remain, in priority order; each links its open issue:
 | ~~S6-5~~ | 6 | ~~`compression` degradation is a JPEG proxy~~ | **Closed 2026-09-27:** real H.264 through libx264 in PyAV's bundled FFmpeg (no ffmpeg binary needed), intra-coded per frame so the injection stays deterministic whichever frames a pass decodes; QP 30/34/44 matched to the JPEG levels' PSNR on an Esri frame (35.7/33.9/~28.6 vs 37.3/33.8/28.8 dB); ~35 ms per 1080p frame. `qa.degrade.compression_codec: h264`, `h264_qp`; JPEG fallback logged. Inter-frame (P-frame) artefacts are not modelled |
 | S6-6 | 2 | Low-light conditioning broke SfM in the bench (cameras 101 m from clean vs 3.2 m without) | Inspect the conditioned low-light frames (gamma + NLM denoise) vs raw; likely the denoise erases texture SIFT needs |
 | S6-7 | 2 | GPS filter under injected noise made the surface worse (52.6 m vs 3.8 m without) | The RTS/outlier filter may shift the whole track; compare filtered vs raw positions against the clean track |
-| S4-12 | 4 | **DJI_0047 regression on 2026-09-28**: first pass folded, GPS-prior pass found no initial pair (coverage 8.1%) | `scripts/box_dji_diag.sh`; see the 2026-09-28 session |
+| S4-12 | 4 | **The incremental mapper is not repeatable on a single straight strip.** DJI_0047: one run folded (cameras 248 m from GPS, path chord/length 0.33), while the pre-S2-9 exposure variant (2.06 m) and a plain re-run of the same code (2.05 m) both solved correctly. Once folded, the GPS-prior pass finds no initial pair | **Diagnosed 2026-09-28** (`scripts/box_dji_diag.sh`); S2-9 exonerated. Contained by the Stage 4 geometry gate (folded = 40, not 87.5). Fix: on gate failure re-run the mapper with a different seed/init pair and keep the model that agrees with GPS (~1 extra sparse_map, only when needed) |
 | SPEC-1 | — | Spec numbers occlusion engine Stage 3 (§6) but it consumes Stage 4 (§7) output | `execution_order` in `src/stages.py`; Stage 4 must be built before Stage 3 can run |
 | SPEC-2 | — | §2.1 diagram labels stages differently from section headings | Section headings used |
 
@@ -2802,3 +2802,41 @@ the depth half skips with the reason when anchoring fails); full suite 500 passe
 `scripts/box_dji_diag.sh` finishes whichever DJI_0047 variant agrees with GPS (fusion, export, QA) and collects it.
 **Next:** box: `git pull && nohup bash scripts/box_dji_diag.sh > dji_diag.log 2>&1 &`; bring the handover back;
 add DJI_0047 to the site if a variant agrees with GPS; otherwise the site keeps stating the regression.
+
+### 2026-09-28 (evening) — ritesh14g (with Claude) — S4-12 diagnosed, DJI_0047 recovered, both runs deployed. Iteration 1 closed.
+
+**S4-12: the mapper, not S2-9.** `scripts/box_dji_diag.sh` on the box (handover `data/box/h0928b/`):
+
+| run | cameras vs GPS | SfM path chord/length | GPS-prior pass | sparse_map |
+|---|---|---|---|---|
+| dji47_s6 (the regression) | 248.07 m | 0.33 | produced no model | 553 s |
+| dji47_expold (pre-S2-9 exposure) | 2.06 m | 1.00 | kept | 628 s |
+| dji47_rep (same code, re-run) | **2.05 m** | 1.00 | kept | 626 s |
+
+The pre-S2-9 exposure variant and a plain re-run of the *same* code both solve correctly, so **S2-9 is exonerated**:
+COLMAP's incremental mapper is **not repeatable** on this single straight strip — one run in three folded and, once
+folded, the GPS-prior pass could not find an initial pair from the same matches. The geometry gate added this
+morning is what makes that survivable (a folded model scores 40, not 87.5). **Fix for iteration 2:** when the gate
+fails, re-run the mapper with a different seed / init pair and keep the model that agrees with GPS; the cost is one
+extra sparse_map (~10 min on DJI), only on the runs that need it.
+
+**DJI_0047 recovered (dji47_rep, finished by the diagnostic script): 2,654 s (44.2 min) for 1.7 min of 4K.**
+136/136 registered, focal 2,220 px held fixed, GPS-prior refinement kept (270.2 -> **2.05 m**), reprojection 1.14 px,
+height above ground 58.4 m. VGGT-Ω anchored **136/136** frames (spread 1.80%), 6.15 M dense points, 53,740 px masked
+as moving objects (S4-9 working on real footage), mesh 2.03 M faces, texture 0.57% black. Stage 3: **coverage 88.0%**,
+Zone 1 77.1 / Zone 2 10.9 / Zone 3 12.0%, 182 gaps, fill held-out error 0.735% of depth. Georef 2.136 m
+(h 2.016 / v 0.707), collinearity 0.0058. Six formats + tiled LAS. **Scores: ingest 77.8, condition 100.0,
+occlusion 95.5, recon 97.1, geo/export 93.8.** Times: Track A 2,267 s of which sparse_map 626 + sparse_map_gps 783
++ texture 399 + mesh 262; fusion 103; export 69.
+**Laptop caveat:** re-scoring DJI here reads 65.6 for geo/export because trimesh/laspy hit `MemoryError` on the
+135-157 MB PLY/GLB/FBX/LAS; the box read them all. The box's report.json/html are the ones kept and published.
+
+**Deployed (both runs):** https://ritesh14g.github.io/Single-Pass-3D-Model-Generation/ — landing page now compares
+Esri and DJI side by side (time, frames, coverage, cameras vs GPS, stage scores) and explains why the lower flight
+costs 6x the time; viewers for both (Esri 600k faces 14.1 MB, DJI 250k faces 5.9 MB, both built by the pipeline's
+own S6-3 lite path); both QA reports; the limitation list now states the mapper-repeatability finding.
+Verified on the live URL: every page and both models return 200. Site source: `data/site/` (git-ignored),
+branch `gh-pages`.
+**Open issues:** S4-12 updated with the diagnosis (mapper repeatability, retry-on-gate-failure proposed).
+**Next (iteration 2):** retry-on-gate-failure; speed (keyframe-only selection, pipelined stages, GPU conditioning,
+a full H100 + 32 cores); S6-6 low-light conditioning; S6-7 GPS filter under noise; doming correction.
