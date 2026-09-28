@@ -70,3 +70,30 @@ echo "== $(date -u '+%H:%M:%S') results"
 summary data/interim/dji47_s6
 summary data/interim/dji47_expold
 summary data/interim/dji47_rep
+
+# Finish the variant whose cameras agree with GPS (the geometry gate: <= 25 m), best first, so the
+# prototype has a usable DJI_0047 model: Stage 3 fill, export, viewer + QA, then the handover.
+BEST=$($PY - <<'PY'
+import json
+from pathlib import Path
+best = None
+for name in ("dji47_expold", "dji47_rep"):
+    try:
+        m = json.loads(Path(f"data/interim/{name}/manifest.json").read_text())["stages"]["track_a"]["metrics"]
+        rms = float(m.get("cam_vs_gps_rms_m"))
+    except Exception:
+        continue
+    if rms <= 25 and (best is None or rms < best[1]):
+        best = (name, rms)
+print(best[0] if best else "")
+PY
+)
+if [ -z "$BEST" ]; then
+    echo "== neither variant agrees with GPS (all > 25 m): nothing finished; paste this log to the laptop session"
+    exit 1
+fi
+echo "== $(date -u '+%H:%M:%S') finishing $BEST: fusion, export, qa"
+$PY -m src.cli run "$VIDEO" --csv "$CSV" --resume data/interim/$BEST     --stage fusion --stage export --stage qa > ${BEST}_finish.log 2>&1 || echo "   finish failed: see ${BEST}_finish.log"
+grep -E "elapsed .* budget|scores:" ${BEST}_finish.log | tail -2
+bash scripts/box_collect.sh "$BEST"
+echo "== $(date -u '+%H:%M:%S') DONE: download the newest ~/box_handover_*.tar.gz ($BEST)"
