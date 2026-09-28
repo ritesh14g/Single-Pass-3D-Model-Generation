@@ -1,0 +1,2746 @@
+{
+ "key": "esri",
+ "run": "esri_s6",
+ "video": "Esri_multiplexer_1.mp4",
+ "device": "cuda",
+ "preset": "default",
+ "written": "2026-09-28T14:11:12",
+ "input_check": {
+  "verdict": "READY_WITH_WARNINGS",
+  "checks": [
+   {
+    "id": "F1",
+    "group": "Format",
+    "label": "Video container",
+    "status": "pass",
+    "value": "mpegts",
+    "detail": "mpegts (.mp4), mpeg2video 3840x2160 \u2014 extension does not match the content; read by content",
+    "fix": ""
+   },
+   {
+    "id": "F3",
+    "group": "Format",
+    "label": "Scan type",
+    "status": "warn",
+    "value": "1",
+    "detail": "interlaced video (1): combing on moving frames",
+    "fix": "Deinterlace: ffmpeg -i in -vf bwdif -c:v libx264 -crf 16 out.mp4"
+   },
+   {
+    "id": "F7",
+    "group": "Format",
+    "label": "Decoding",
+    "status": "pass",
+    "value": 95,
+    "detail": "95 frames decoded across the clip (keyframes, keyframes every 0.27 s) in 3.3 s; last at 100.3 of 101.0 s",
+    "fix": ""
+   },
+   {
+    "id": "V1",
+    "group": "Video",
+    "label": "Resolution",
+    "status": "pass",
+    "value": "3840x2160",
+    "detail": "3840x2160 (PS: 1080p / 4K)",
+    "fix": ""
+   },
+   {
+    "id": "V2",
+    "group": "Video",
+    "label": "Frame rate",
+    "status": "pass",
+    "value": 30.0,
+    "detail": "30.00 fps",
+    "fix": ""
+   },
+   {
+    "id": "V3",
+    "group": "Video",
+    "label": "Duration",
+    "status": "pass",
+    "value": 101.0,
+    "detail": "101.0 s",
+    "fix": ""
+   },
+   {
+    "id": "V4",
+    "group": "Video",
+    "label": "Compression",
+    "status": "pass",
+    "value": 0.151,
+    "detail": "37.6 Mbit/s = 0.151 bits per pixel per frame",
+    "fix": ""
+   },
+   {
+    "id": "V5",
+    "group": "Video",
+    "label": "Sharpness",
+    "status": "pass",
+    "value": 0.0,
+    "detail": "0% of sampled frames are blurred (Laplacian variance < 25 at 960 px)",
+    "fix": ""
+   },
+   {
+    "id": "V6",
+    "group": "Video",
+    "label": "Exposure",
+    "status": "pass",
+    "value": {
+     "dark": 0.0,
+     "overexposed": 0.0
+    },
+    "detail": "0% of frames too dark, 0% clipped highlights",
+    "fix": ""
+   },
+   {
+    "id": "V7",
+    "group": "Video",
+    "label": "Texture",
+    "status": "pass",
+    "value": 1500,
+    "detail": "median 1500 features per frame",
+    "fix": ""
+   },
+   {
+    "id": "V8",
+    "group": "Video",
+    "label": "Sky in view",
+    "status": "pass",
+    "value": 0.0,
+    "detail": "sky fills 0% of a typical frame",
+    "fix": ""
+   },
+   {
+    "id": "V9",
+    "group": "Video",
+    "label": "Burned-in overlay",
+    "status": "pass",
+    "value": 0.0,
+    "detail": "no static text or logo detected",
+    "fix": ""
+   },
+   {
+    "id": "V10",
+    "group": "Video",
+    "label": "Black borders",
+    "status": "pass",
+    "value": {
+     "top": 0.0,
+     "bottom": 0.0,
+     "left": 0.0,
+     "right": 0.0
+    },
+    "detail": "none",
+    "fix": ""
+   },
+   {
+    "id": "T1",
+    "group": "Telemetry",
+    "label": "GPS (mandatory)",
+    "status": "pass",
+    "value": "klv:Esri_multiplexer_1.mp4",
+    "detail": "103 fixes from klv:Esri_multiplexer_1.mp4. Sources found: klv (embedded)",
+    "fix": ""
+   },
+   {
+    "id": "T3",
+    "group": "Telemetry",
+    "label": "Sample rate",
+    "status": "warn",
+    "value": 1.0,
+    "detail": "1.0 fixes/s; timestamps have whole-second resolution (\u00b10.5 s timing on each fix)",
+    "fix": "Per-frame telemetry (SRT, KLV at frame rate) or a 5-10 Hz log is best."
+   },
+   {
+    "id": "T4",
+    "group": "Telemetry",
+    "label": "Covers the video",
+    "status": "pass",
+    "value": 1.0,
+    "detail": "GPS spans video time 0.0-101.0 s of 101.0 s (100%); alignment: KLV multiplexed with the video",
+    "fix": ""
+   },
+   {
+    "id": "T5",
+    "group": "Telemetry",
+    "label": "Gaps and jumps",
+    "status": "pass",
+    "value": {
+     "max_gap_s": 1.0,
+     "jumps": 0
+    },
+    "detail": "largest gap 1.0 s; fastest 17 m/s over 1 s windows, 0 impossible (> 70 m/s)",
+    "fix": ""
+   },
+   {
+    "id": "T6",
+    "group": "Telemetry",
+    "label": "Altitude",
+    "status": "pass",
+    "value": true,
+    "detail": "absolute altitude 116.6-117.2 m (span 0.6 m)",
+    "fix": ""
+   },
+   {
+    "id": "T7",
+    "group": "Telemetry",
+    "label": "Camera pitch",
+    "status": "pass",
+    "value": -90.0,
+    "detail": "camera -90\u00b0 from horizontal (sensor elevation plus airframe pitch): nadir (straight down)",
+    "fix": ""
+   },
+   {
+    "id": "T8",
+    "group": "Telemetry",
+    "label": "Placeholder values",
+    "status": "warn",
+    "value": [
+     "camera roll and pitch are exactly 0 for the whole flight",
+     "ground elevation (frame_center_alt) constant at 6.10513 m"
+    ],
+    "detail": "camera roll and pitch are exactly 0 for the whole flight; ground elevation (frame_center_alt) constant at 6.10513 m: usually simplified or synthesised metadata",
+    "fix": "Treat these fields as unknown; prefer the drone's original log."
+   },
+   {
+    "id": "T9",
+    "group": "Telemetry",
+    "label": "RTK / PPK",
+    "status": "info",
+    "value": false,
+    "detail": "no RTK/PPK: standard GPS (a few metres absolute)",
+    "fix": ""
+   },
+   {
+    "id": "S1",
+    "group": "Sync",
+    "label": "Telemetry-video sync",
+    "status": "warn",
+    "value": {
+     "lag_s": -1.3,
+     "r": 0.916
+    },
+    "detail": "telemetry is 1.3 s ahead of the video (motion vs GPS r=0.92 at -1.3 s, 0.87 at 0)",
+    "fix": "Corrected automatically (preflight.apply_time_offset); Stage 4 refines it further."
+   },
+   {
+    "id": "A1",
+    "group": "Authenticity",
+    "label": "Rigid 3-D scene",
+    "status": "pass",
+    "value": 0.978,
+    "detail": "98% of feature matches between consecutive samples fit one rigid scene seen from two positions (median over 94 pairs; 0% of pairs below 35%)",
+    "fix": ""
+   },
+   {
+    "id": "A2",
+    "group": "Authenticity",
+    "label": "File provenance",
+    "status": "info",
+    "value": null,
+    "detail": "no camera make/model or encoder tags (normal for transport streams; stripped in edited copies)",
+    "fix": ""
+   },
+   {
+    "id": "A5",
+    "group": "Authenticity",
+    "label": "Motion agrees with GPS",
+    "status": "pass",
+    "value": 0.916,
+    "detail": "image motion and GPS speed correlate at r=0.92 (see Sync)",
+    "fix": ""
+   },
+   {
+    "id": "P1",
+    "group": "Feasibility",
+    "label": "Camera movement (parallax)",
+    "status": "pass",
+    "value": 779.2,
+    "detail": "the drone travelled 855 m (straight-line extent 779 m) during the clip at ~111 m above takeoff",
+    "fix": ""
+   },
+   {
+    "id": "P2",
+    "group": "Feasibility",
+    "label": "Ground sample distance",
+    "status": "pass",
+    "value": 0.049,
+    "detail": "~4.9 cm per pixel at nadir (111 m, 81\u00b0 FOV, 3840 px); oblique views are coarser at the far edge",
+    "fix": ""
+   },
+   {
+    "id": "P3",
+    "group": "Feasibility",
+    "label": "Camera intrinsics",
+    "status": "pass",
+    "value": "from telemetry",
+    "detail": "field of view: horizontal FOV 81.0\u00b0 (telemetry (KLV))",
+    "fix": ""
+   },
+   {
+    "id": "P4",
+    "group": "Feasibility",
+    "label": "Processing budget",
+    "status": "info",
+    "value": 101.0,
+    "detail": "1.7 min of video against a 15-minute budget (PS: 10 min of video in 15 min)",
+    "fix": ""
+   }
+  ],
+  "sync": {
+   "method": "video motion vs GPS ground speed",
+   "r_at_zero": 0.872,
+   "points": 93,
+   "gps_speed_cv": 0.26,
+   "video_motion_cv": 0.279,
+   "contradiction_share": 0.0,
+   "lag_s": -1.3,
+   "r_best": 0.916,
+   "peak_margin": 0.476,
+   "apply_offset_s": -1.3
+  },
+  "camera": {
+   "model": null,
+   "hfov_deg": 81.00068665598535,
+   "source": "telemetry (KLV)"
+  },
+  "telemetry": {
+   "source": "klv:Esri_multiplexer_1.mp4",
+   "rows": 103,
+   "duration_s": 102.0,
+   "has_gps": true,
+   "has_baro": false,
+   "has_attitude": true,
+   "has_focal": false,
+   "has_rtk": false,
+   "scale_free": false,
+   "notes": [
+    "ignored 18 unmapped ST 0601 tags: 26, 27, 28, 29, 30, 31, 32, 33, 82, 83, 84, 85"
+   ],
+   "altitude": {
+    "datum": null,
+    "method": "assumed",
+    "home": null,
+    "where": {
+     "lon": -81.8584319,
+     "lat": 27.270837,
+     "from": "first GPS fix"
+    },
+    "terrain_m": 3.0,
+    "terrain_source": "terrain tiles z12 (s3.amazonaws.com)",
+    "ground_alt_m": null,
+    "detail": "the log has no takeoff altitude to compare with the terrain"
+   },
+   "bounds": {
+    "lat_min": 27.27083701513281,
+    "lat_max": 27.27751500312123,
+    "lon_min": -81.86034694400632,
+    "lon_max": -81.85721990738865
+   },
+   "alt_gps_range": [
+    116.63538567177841,
+    117.24269474326695
+   ]
+  },
+  "probe": {
+   "path": "data/raw/Esri_multiplexer_1.mp4",
+   "size_bytes": 475109276,
+   "format_name": "mpegts",
+   "duration_s": 100.975,
+   "bit_rate": 37641735,
+   "tags": {},
+   "video": {
+    "codec": "mpeg2video",
+    "width": 3840,
+    "height": 2160,
+    "fps": 30.0,
+    "fps_guessed": 30.0,
+    "frames": 0,
+    "pix_fmt": "yuv420p",
+    "bit_depth": 8,
+    "profile": "Main",
+    "rotation_deg": 0.0,
+    "field_order": "1",
+    "color_transfer": "2",
+    "spherical": false,
+    "bit_rate": null,
+    "tags": {}
+   },
+   "data_streams": [
+    {
+     "index": 1,
+     "codec": null,
+     "tag": null,
+     "handler": "",
+     "kind": "klv"
+    }
+   ],
+   "subtitle_streams": [],
+   "audio_streams": 0,
+   "probe_backend": "pyav",
+   "error": null,
+   "embedded_telemetry": [
+    "klv"
+   ]
+  },
+  "timing_s": {
+   "probe": 0.08,
+   "decode": 3.26,
+   "vision": 6.22,
+   "telemetry": 2.37,
+   "sync": 0.13,
+   "total": 12.06
+  },
+  "note": "These checks test physical consistency (rigid 3-D scene, motion matching GPS, metadata agreeing with telemetry). They can expose fabricated or mismatched inputs, but no software can certify that footage is genuine.",
+  "recommended": {
+   "time_offset_s": -1.3
+  }
+ },
+ "processes": [
+  {
+   "process": "Frame selection",
+   "stage_key": "ingest",
+   "stage": "Ingest",
+   "kpis": [
+    {
+     "key": "overlap_median",
+     "group": "Frame selection",
+     "label": "Median consecutive overlap",
+     "value": 0.828,
+     "target": "0.70\u20130.80 (\u00a74.3)",
+     "status": "warn",
+     "detail": "Overlap between each kept frame and the previous one, measured by verified optical flow.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "overlap_low_pairs",
+     "group": "Frame selection",
+     "label": "Pairs below 50% overlap",
+     "value": 0,
+     "target": "0",
+     "status": "pass",
+     "detail": "Each such pair is a likely break in the SfM match graph.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "frames_selected",
+     "group": "Frame selection",
+     "label": "Frames selected",
+     "value": 50,
+     "target": "\u2265 20",
+     "status": "pass",
+     "detail": "from 3029 video frames",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "projected_4k_10min_s",
+     "group": "Frame selection",
+     "label": "Projected selection time, 10-min 4K clip",
+     "value": 279.2,
+     "target": "< 60 s (\u00a74.3)",
+     "status": "fail",
+     "detail": "analysis 44 s (149 ms per kept frame x 297 frames) + decode 235 s (39.55 s here, scaled to 10 min of 4K; software decode \u2014 hardware decode or keyframe seeking changes this). Estimate: verify on real 4K footage.",
+     "unit": "s",
+     "cap": null
+    },
+    {
+     "key": "analysis_ms_per_kept_frame",
+     "group": "Frame selection",
+     "label": "Analysis cost per kept frame",
+     "value": 148.9,
+     "target": "info",
+     "status": "info",
+     "detail": "Flow + photometric verification + blur metrics, excluding decode.",
+     "unit": "ms",
+     "cap": null
+    },
+    {
+     "key": "decode_fraction",
+     "group": "Frame selection",
+     "label": "Frames decoded / frames in video",
+     "value": 0.075,
+     "target": "< 0.60",
+     "status": "pass",
+     "detail": "The predictive stride should decode a small fraction of the video.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 70.0,
+   "counts": {
+    "pass": 3,
+    "warn": 1,
+    "fail": 1,
+    "info": 1
+   },
+   "what": "Picks the frames to reconstruct from, targeting a set overlap between neighbours so every surface is seen from several angles without processing thousands of near-identical frames.",
+   "covers": "Measured overlap between consecutive kept frames, how many frames were kept, and the selection time against its budget.",
+   "lacks": "It cannot know whether the flight itself covered the whole site: a strip the drone never flew over is reported later, as a gap."
+  },
+  {
+   "process": "Blur gate",
+   "stage_key": "ingest",
+   "stage": "Ingest",
+   "kpis": [
+    {
+     "key": "blur_reject_fraction",
+     "group": "Blur gate",
+     "label": "Rejected / evaluated",
+     "value": 0.0,
+     "target": "\u2264 0.35 (coverage cap)",
+     "status": "pass",
+     "detail": "0 of 165 evaluated frames rejected (0 for directional blur).",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "coverage_warnings",
+     "group": "Blur gate",
+     "label": "Coverage warnings (reject runs)",
+     "value": 0,
+     "target": "0",
+     "status": "pass",
+     "detail": "Runs of consecutive rejected frames \u2014 flight segments with reduced coverage.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 2,
+    "warn": 0,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Rejects frames whose motion blur would push wrong geometry into the reconstruction, and marks mildly soft frames for sharpening instead.",
+   "covers": "The share of frames rejected, and whether the sharpness threshold adapted to the clip rather than being fixed.",
+   "lacks": "Blur is judged on the whole frame, so a sharp frame with one blurred moving object is kept; the moving object is handled by dynamic masking instead."
+  },
+  {
+   "process": "Telemetry",
+   "stage_key": "ingest",
+   "stage": "Ingest",
+   "kpis": [
+    {
+     "key": "telemetry_source",
+     "group": "Telemetry",
+     "label": "Source and sensors found",
+     "value": "klv:Esri_multiplexer_1.mp4: GPS, attitude",
+     "target": "GPS required for metric scale",
+     "status": "info",
+     "detail": "ignored 18 unmapped ST 0601 tags: 26, 27, 28, 29, 30, 31, 32, 33, 82, 83, 84, 85; shifted by +1.30 s: offset measured by the input check",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "gps_frame_coverage",
+     "group": "Telemetry",
+     "label": "Selected frames with a GPS fix",
+     "value": 0.96,
+     "target": "\u2265 0.95",
+     "status": "pass",
+     "detail": "Zero means a scale-free, non-georeferenced model (\u00a74.2 path 4).",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "telemetry_duration_ratio",
+     "group": "Telemetry",
+     "label": "Telemetry span / video duration",
+     "value": 1.01,
+     "target": "0.95\u20131.05",
+     "status": "pass",
+     "detail": "A mismatch suggests the sidecar belongs to a different clip or is time-offset.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 2,
+    "warn": 0,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Reads the position log that came with the video, in whatever format it arrived, and puts it on the same clock as the frames.",
+   "covers": "Which optional inputs were present (GPS, barometric altitude, attitude, focal length, RTK) and how many fixes were aligned to frames.",
+   "lacks": "It records what the telemetry claims; the accuracy of the GPS itself is measured later, when the reconstructed camera path is compared against it."
+  },
+  {
+   "process": "Artifact suppression",
+   "stage_key": "condition",
+   "stage": "Conditioning",
+   "kpis": [
+    {
+     "key": "artifact_correct_fraction",
+     "group": "Artifact suppression",
+     "label": "Frames requiring correction",
+     "value": 0.5,
+     "target": "< 0.30",
+     "status": "fail",
+     "detail": "25 of 50 frames had visible blocking.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "keypoints_vetoed",
+     "group": "Artifact suppression",
+     "label": "Keypoints vetoed on block grid",
+     "value": 0,
+     "target": "info",
+     "status": "info",
+     "detail": "SIFT/FAST keypoints discarded on compression block boundary.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "blockiness_reduction",
+     "group": "Artifact suppression",
+     "label": "Blockiness reduction on corrected frames",
+     "value": 0.289,
+     "target": "> 0.10 (S2-1 fix target)",
+     "status": "pass",
+     "detail": "Mean score before: 1.877, after: 1.335.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 50.0,
+   "counts": {
+    "pass": 1,
+    "warn": 0,
+    "fail": 1,
+    "info": 1
+   },
+   "what": "Finds and softens compression blocking, the square edges a heavily compressed video leaves, which would otherwise be matched as if they were real corners.",
+   "covers": "How many frames showed blocking, and the measured reduction on the frames that were corrected, before and after.",
+   "lacks": "It measures the blocking signal, not the downstream benefit; that is measured separately by the degradation benchmark."
+  },
+  {
+   "process": "Illumination",
+   "stage_key": "condition",
+   "stage": "Conditioning",
+   "kpis": [
+    {
+     "key": "low_light_fraction",
+     "group": "Illumination",
+     "label": "Low-light frames",
+     "value": 0.0,
+     "target": "< 0.2",
+     "status": "pass",
+     "detail": "0 of 50 frames triggered low-light path (\u00a75.4 accuracy note).",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "shadow_fraction_mean",
+     "group": "Illumination",
+     "label": "Mean shadow coverage per frame",
+     "value": 0.199,
+     "target": "< 0.3",
+     "status": "pass",
+     "detail": "Peak per-frame shadow coverage: 28.7%. High coverage means either a genuinely shadowed scene or an over-firing detector; separating the two needs ground truth (S2-3).",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "saturated_fraction",
+     "group": "Illumination",
+     "label": "Blown-out pixels in conditioned frames",
+     "value": 0.0033,
+     "target": "< 0.02",
+     "status": "pass",
+     "detail": "Peak per-frame saturation: 1.5%.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "exposure_clamped_fraction",
+     "group": "Illumination",
+     "label": "Frames with exposure clamped",
+     "value": 0.0,
+     "target": "< 0.1",
+     "status": "pass",
+     "detail": "0 of 50 frames hit a gain bound; their exposure was not fully normalised. Unbounded, the chain would have reached gain 0.883 \u2014 far from 1.0 means per-link error is compounding, not that the scene changed.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "exposure_gain_span",
+     "group": "Illumination",
+     "label": "Exposure gain span across sequence",
+     "value": 0.207,
+     "target": "info",
+     "status": "info",
+     "detail": "Span the chain asked for before clamping: 0.207. Large values mean auto-exposure drift, a compounding chain, or both.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "exposure_rejected_links",
+     "group": "Illumination",
+     "label": "Exposure chain links rejected",
+     "value": 0,
+     "target": "< 10%",
+     "status": "pass",
+     "detail": "A rejected link means irrecoverable lighting change between adjacent frames.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 5,
+    "warn": 0,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Keeps brightness consistent across the flight, lifts shadow detail and marks shadowed pixels so they carry less weight when surfaces are matched.",
+   "covers": "The exposure correction actually applied, whether any frame was driven to its limit, the share of the frame in shadow and the share of blown-out pixels in the written frames.",
+   "lacks": "Shadow detection has no per-pixel ground truth on real footage, so its precision is measured on synthetic scenes rather than on this clip."
+  },
+  {
+   "process": "Dynamic masking",
+   "stage_key": "condition",
+   "stage": "Conditioning",
+   "kpis": [
+    {
+     "key": "dynamic_frames_with_movers",
+     "group": "Dynamic masking",
+     "label": "Frames containing dynamic objects",
+     "value": 0.0,
+     "target": "info",
+     "status": "info",
+     "detail": "0/50 frames had movers. Methods: semantic.",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": null,
+   "counts": {
+    "pass": 0,
+    "warn": 0,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Masks out things that move, such as vehicles, so they neither anchor the camera solution nor leave smeared geometry in the model.",
+   "covers": "The masked share of each frame and how many frames contained movers.",
+   "lacks": "Without a semantic model installed it falls back to geometric consistency, which catches movement but cannot name the object."
+  },
+  {
+   "process": "GPS conditioning",
+   "stage_key": "condition",
+   "stage": "Conditioning",
+   "kpis": [
+    {
+     "key": "gps_outlier_fraction",
+     "group": "GPS conditioning",
+     "label": "GPS fixes rejected as outliers",
+     "value": 0.019,
+     "target": "< 10%",
+     "status": "pass",
+     "detail": "Envelope: 1, median: 1, from 103 fixes.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "gps_smoothed_fixes",
+     "group": "GPS conditioning",
+     "label": "Fixes after Kalman smoothing",
+     "value": 103,
+     "target": ">= 72 (70% of input)",
+     "status": "pass",
+     "detail": "Fixes with a finite smoothed position estimate.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "gps_altitude_source",
+     "group": "GPS conditioning",
+     "label": "Altitude source",
+     "value": "gps",
+     "target": "baro+gps_complementary",
+     "status": "warn",
+     "detail": "baro+gps_complementary is best; GPS-only is noisier but keeps an absolute datum; baro_relative_only leaves the vertical datum unknown, which breaks absolute georeferencing downstream.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "gps_rtk_detected",
+     "group": "GPS conditioning",
+     "label": "RTK/PPK detected",
+     "value": false,
+     "target": "info",
+     "status": "info",
+     "detail": "GPS weight: 1.0x with RTK.",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "gps_max_speed",
+     "group": "GPS conditioning",
+     "label": "Max observed speed (m/s)",
+     "value": 16.89,
+     "target": "< 25 m/s",
+     "status": "pass",
+     "detail": "Measured across all accepted GPS fixes before smoothing.",
+     "unit": "m/s",
+     "cap": null
+    }
+   ],
+   "score": 87.5,
+   "counts": {
+    "pass": 3,
+    "warn": 1,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Removes impossible jumps from the position log and smooths the rest, so the track handed to georeferencing is physically plausible.",
+   "covers": "Outliers removed, fixes smoothed, the altitude source chosen and the fastest speed observed.",
+   "lacks": "Smoothing cannot add information the receiver never had; residual GPS error still sets the absolute placement of the final model."
+  },
+  {
+   "process": "Sparse (SfM)",
+   "stage_key": "recon",
+   "stage": "Reconstruction",
+   "kpis": [
+    {
+     "key": "registered_fraction",
+     "group": "Sparse (SfM)",
+     "label": "Frames registered",
+     "value": 0.98,
+     "target": ">= 0.90",
+     "status": "pass",
+     "detail": "49 of 50 conditioned frames",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "models",
+     "group": "Sparse (SfM)",
+     "label": "Separate models",
+     "value": 1,
+     "target": "1",
+     "status": "pass",
+     "detail": "SfM split the flight into 2 pieces; 1 placed through GPS (+4 frames, piece GPS fit [1.53] m)",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "reproj_px",
+     "group": "Sparse (SfM)",
+     "label": "Mean reprojection error",
+     "value": 1.253,
+     "target": "<= 1.5 px",
+     "status": "pass",
+     "detail": "",
+     "unit": "px",
+     "cap": null
+    },
+    {
+     "key": "track_length",
+     "group": "Sparse (SfM)",
+     "label": "Mean track length",
+     "value": 3.39,
+     "target": ">= 3.0",
+     "status": "pass",
+     "detail": "views per sparse point: more views, better triangulated",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 4,
+    "warn": 0,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Works out where the camera was for every frame by matching the same features across frames, then refines all positions together against the GPS track.",
+   "covers": "The share of frames placed, how well the matched points reproject, how long each feature track survives, and whether the solution broke into pieces.",
+   "lacks": "A high score here means the solution is internally consistent; agreement with the real world is the separate GPS check below."
+  },
+  {
+   "process": "Metric (vs telemetry)",
+   "stage_key": "recon",
+   "stage": "Reconstruction",
+   "kpis": [
+    {
+     "key": "focal_source",
+     "group": "Metric (vs telemetry)",
+     "label": "Focal length source",
+     "value": "telemetry_hfov",
+     "target": "telemetry",
+     "status": "pass",
+     "detail": "2248.0 px",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "cam_vs_gps_rms_m",
+     "group": "Metric (vs telemetry)",
+     "label": "Camera centres vs GPS (RMS)",
+     "value": 3.47,
+     "target": "<= 1.0 m (PS spatial accuracy)",
+     "status": "warn",
+     "detail": "similarity fit over 49 frames; includes GPS noise and telemetry timing error, not only reconstruction error",
+     "unit": "m",
+     "cap": null
+    },
+    {
+     "key": "geometry_gate",
+     "group": "Metric (vs telemetry)",
+     "label": "Camera path consistent with GPS (gate)",
+     "value": 3.47,
+     "target": "<= 25 m",
+     "status": "pass",
+     "detail": "",
+     "unit": "m",
+     "cap": 40.0
+    },
+    {
+     "key": "gps_refinement",
+     "group": "Metric (vs telemetry)",
+     "label": "GPS-prior refinement",
+     "value": "GPS-prior refinement",
+     "target": "GPS-prior refinement",
+     "status": "pass",
+     "detail": "time offset +0.00 s; GPS RMS 6.03 -> 3.47 m; reprojection 1.24 -> 1.253 px",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "height_error_pct",
+     "group": "Metric (vs telemetry)",
+     "label": "Height above ground vs telemetry",
+     "value": -1.3,
+     "target": "within \u00b15%",
+     "status": "pass",
+     "detail": "109.4 m measured vs 110.8 m from telemetry",
+     "unit": "%",
+     "cap": null
+    }
+   ],
+   "score": 90.0,
+   "counts": {
+    "pass": 4,
+    "warn": 1,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Checks the reconstruction against the world: camera positions against the GPS track, and the computed flying height against what the telemetry reported.",
+   "covers": "Camera-centre agreement with GPS in metres, flying-height error as a percentage, the focal length source, and a gate that caps the score if the solution disagrees with GPS.",
+   "lacks": "GPS is the yardstick here, so this measures agreement with the telemetry, not absolute truth; independent ground truth is the lidar comparison in Accuracy."
+  },
+  {
+   "process": "Track B (VGGT depth)",
+   "stage_key": "recon",
+   "stage": "Reconstruction",
+   "kpis": [
+    {
+     "key": "track_b_used",
+     "group": "Track B (VGGT depth)",
+     "label": "Track B depth used",
+     "value": true,
+     "target": "yes",
+     "status": "pass",
+     "detail": "vggt_omega: 8.3 s for 49 frames",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "frames_anchored",
+     "group": "Track B (VGGT depth)",
+     "label": "Frames with anchored depth",
+     "value": 1.0,
+     "target": ">= 0.90",
+     "status": "pass",
+     "detail": "rejected: none",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "anchor_spread_pct",
+     "group": "Track B (VGGT depth)",
+     "label": "Anchor disagreement (median)",
+     "value": 0.76,
+     "target": "<= 2.0%",
+     "status": "pass",
+     "detail": "how far the Track A points in a frame disagree with its scaled VGGT depth; 1055 anchors per frame",
+     "unit": "%",
+     "cap": null
+    },
+    {
+     "key": "views_per_point",
+     "group": "Track B (VGGT depth)",
+     "label": "Views confirming each point",
+     "value": 4.0,
+     "target": ">= 2",
+     "status": "info",
+     "detail": "2,258,965 back-projected, 2,168,065 kept after the multi-view check",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 3,
+    "warn": 0,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Runs a learned depth model over the frames and pins its output to the measured geometry, adding detail in areas where stereo matching alone is thin.",
+   "covers": "How many frames the depth was successfully anchored on, how tightly it agreed with the measured points, and how many views confirm each fused point.",
+   "lacks": "Learned depth is only accepted where it agrees with measurement; where it disagrees it is refused, which protects accuracy but limits how much it can add."
+  },
+  {
+   "process": "Dense and mesh",
+   "stage_key": "recon",
+   "stage": "Reconstruction",
+   "kpis": [
+    {
+     "key": "dense_engine",
+     "group": "Dense and mesh",
+     "label": "Dense reconstruction",
+     "value": "vggt_hybrid",
+     "target": "any dense engine",
+     "status": "pass",
+     "detail": "VGGT depth (518 px) on Track A cameras, window 8, 49 frames",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "dense_points",
+     "group": "Dense and mesh",
+     "label": "Dense points",
+     "value": 2168065,
+     "target": "-",
+     "status": "info",
+     "detail": "44,246 per frame",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "footprint_m2",
+     "group": "Dense and mesh",
+     "label": "Ground covered",
+     "value": 141929,
+     "target": "-",
+     "status": "info",
+     "detail": "occupied 1 m cells after GPS alignment",
+     "unit": "m\u00b2",
+     "cap": null
+    },
+    {
+     "key": "mesher",
+     "group": "Dense and mesh",
+     "label": "Mesher",
+     "value": "openmvs_delaunay",
+     "target": "openmvs_delaunay",
+     "status": "pass",
+     "detail": "1,082,327 faces",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "faces_per_vertex",
+     "group": "Dense and mesh",
+     "label": "Faces per vertex",
+     "value": 2.0,
+     "target": ">= 1.8",
+     "status": "pass",
+     "detail": "~2 on a clean surface; ~1 means the mesh is fragments",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "textured",
+     "group": "Dense and mesh",
+     "label": "Textured mesh",
+     "value": true,
+     "target": "yes",
+     "status": "pass",
+     "detail": "",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "texture_black_pct",
+     "group": "Dense and mesh",
+     "label": "Black texture (share of the used atlas)",
+     "value": 0.24,
+     "target": "<= 2.0",
+     "status": "pass",
+     "detail": "faces whose texels came out black; OpenMVS seam leveling did this (S4-11)",
+     "unit": "%",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 5,
+    "warn": 0,
+    "fail": 0,
+    "info": 2
+   },
+   "what": "Turns the confirmed depth into a dense point cloud, then a continuous surface, then paints the photographs back onto it.",
+   "covers": "Point and face counts, mesh soundness, whether texturing succeeded, and the share of the texture that carries real image data.",
+   "lacks": "Face count describes detail, not correctness; correctness is measured against the reference surface in Accuracy."
+  },
+  {
+   "process": "Runtime",
+   "stage_key": "recon",
+   "stage": "Reconstruction",
+   "kpis": [
+    {
+     "key": "using_cuda",
+     "group": "Runtime",
+     "label": "GPU used",
+     "value": true,
+     "target": "yes",
+     "status": "pass",
+     "detail": "GPU first, CPU fallback",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "downgrades",
+     "group": "Runtime",
+     "label": "Downgrades",
+     "value": 0,
+     "target": "0",
+     "status": "info",
+     "detail": "",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "track_a_seconds",
+     "group": "Runtime",
+     "label": "Track A time",
+     "value": 234.6,
+     "target": "-",
+     "status": "info",
+     "detail": "4.7 s per frame; slowest: mesh_openmvs 85s, texture 47s, sparse_map_gps 27s",
+     "unit": "s",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 1,
+    "warn": 0,
+    "fail": 0,
+    "info": 2
+   },
+   "what": "Tracks how long each step took against the time budget it was given, so an overrun degrades detail deliberately rather than running unbounded.",
+   "covers": "Wall-clock time per step and the budget handed on to the next step.",
+   "lacks": "Times are specific to the machine that ran them; the projection column re-states them for a 10-minute clip on this same hardware."
+  },
+  {
+   "process": "Zones (\u00a76.1\u20136.2)",
+   "stage_key": "occlusion",
+   "stage": "Occlusion handling",
+   "kpis": [
+    {
+     "key": "zone_map",
+     "group": "Zones (\u00a76.1\u20136.2)",
+     "label": "Zone map persisted",
+     "value": 1998245,
+     "target": "> 0 voxels + ground map",
+     "status": "pass",
+     "detail": "voxel 0.296 m (GSD 0.1478); angles from confirming views; 49 cameras",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "zone1_pct",
+     "group": "Zones (\u00a76.1\u20136.2)",
+     "label": "Well observed (Zone 1) share of visible ground",
+     "value": 46.1,
+     "target": ">= 50%",
+     "status": "warn",
+     "detail": "Zone 2 23.2%, Zone 3 30.8% of 211,196 m\u00b2 in view",
+     "unit": "%",
+     "cap": null
+    },
+    {
+     "key": "observation",
+     "group": "Zones (\u00a76.1\u20136.2)",
+     "label": "Views / triangulation angle (median per voxel)",
+     "value": "4.0 / 27.14\u00b0",
+     "target": ">= 4 / 5.0\u00b0 for Zone 1",
+     "status": "info",
+     "detail": "could-see views (z-buffer) median 4.0; photometric consistency 0.652",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "rejected_pct",
+     "group": "Zones (\u00a76.1\u20136.2)",
+     "label": "Dense points rejected as not surface",
+     "value": 0.0,
+     "target": "<= 2%",
+     "status": "pass",
+     "detail": "0 points next to the flight path (stereo failures); removed from zones and from every export",
+     "unit": "%",
+     "cap": null
+    }
+   ],
+   "score": 83.3,
+   "counts": {
+    "pass": 2,
+    "warn": 1,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Labels every part of the scene by how well it was actually observed: how many cameras saw it and from how wide an angle.",
+   "covers": "The zone map itself, the share of the scene in each zone, and the view and angle statistics behind the labels.",
+   "lacks": "Zones describe observation quality, not the error in metres; the two are compared in Accuracy, where the zones are shown to rank error correctly."
+  },
+  {
+   "process": "Zone 2 anchoring (\u00a76.3)",
+   "stage_key": "occlusion",
+   "stage": "Occlusion handling",
+   "kpis": [
+    {
+     "key": "frames_anchored",
+     "group": "Zone 2 anchoring (\u00a76.3)",
+     "label": "Frames anchored to Zone 1",
+     "value": 1.0,
+     "target": ">= 0.70",
+     "status": "pass",
+     "detail": "38 of 38 from track_b_cache; refused: none",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "zone1_untouched",
+     "group": "Zone 2 anchoring (\u00a76.3)",
+     "label": "Monocular depth inside Zone 1 (critical rule)",
+     "value": 0,
+     "target": "0",
+     "status": "pass",
+     "detail": "169,659 filled points re-checked against the Zone 1 voxels; 0 blocked during fusion",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "fill_weight",
+     "group": "Zone 2 anchoring (\u00a76.3)",
+     "label": "Largest fill weight (Zone 1 = 1.0)",
+     "value": 0.45,
+     "target": "< 1.0",
+     "status": "pass",
+     "detail": "169,659 filled points; 121,361 voxels below the surface threshold",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "holdout_error_pct",
+     "group": "Zone 2 anchoring (\u00a76.3)",
+     "label": "Zone 2 error on held-out Zone 1 pixels",
+     "value": 0.5,
+     "target": "<= 2.0% of depth",
+     "status": "pass",
+     "detail": "median 0.538 m; anchor fit residual 0.691 m",
+     "unit": "%",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 4,
+    "warn": 0,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Fills thinly observed areas using learned depth that is scaled and shifted to match the well-observed surface next to it, and never allowed to overwrite measured geometry.",
+   "covers": "Frames accepted versus refused, the error on points deliberately held back from the fit, and a re-check that no measured voxel was overwritten.",
+   "lacks": "Filled surface is inferred, not measured; it is labelled as such in the model so a user can exclude it."
+  },
+  {
+   "process": "Coverage and gaps (\u00a76.4)",
+   "stage_key": "occlusion",
+   "stage": "Occlusion handling",
+   "kpis": [
+    {
+     "key": "coverage_pct",
+     "group": "Coverage and gaps (\u00a76.4)",
+     "label": "Coverage (Zone 1 + 2 of the ground in view)",
+     "value": 69.3,
+     "target": ">= 90%",
+     "status": "fail",
+     "detail": "measured only: 66.2%; the rest is flagged, not filled",
+     "unit": "%",
+     "cap": null
+    },
+    {
+     "key": "gaps_geojson",
+     "group": "Coverage and gaps (\u00a76.4)",
+     "label": "gaps.geojson (re-opened)",
+     "value": true,
+     "target": "valid, matches the report",
+     "status": "pass",
+     "detail": "242 features, 64,664 m\u00b2, EPSG:4326 (lon, lat); largest 36,164.0 m\u00b2, 218 interior",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "inferred_mesh_pct",
+     "group": "Coverage and gaps (\u00a76.4)",
+     "label": "Mesh area without measured support",
+     "value": 19.0,
+     "target": "<= 30% (flagged, shown as inferred)",
+     "status": "pass",
+     "detail": "29,175 of 1,082,327 faces further than 0.591 m from any measured voxel",
+     "unit": "%",
+     "cap": null
+    }
+   ],
+   "score": 66.7,
+   "counts": {
+    "pass": 2,
+    "warn": 0,
+    "fail": 1,
+    "info": 0
+   },
+   "what": "Reports what was reconstructed and, just as importantly, draws the outline of everything the cameras never saw instead of inventing it.",
+   "covers": "The reconstructed share of visible ground, the number and area of gaps, and whether the gap outlines were exported.",
+   "lacks": "A gap is honest reporting, not a fix; closing one needs either another pass over that ground or an assumption the system refuses to make."
+  },
+  {
+   "process": "Time (\u00a79)",
+   "stage_key": "occlusion",
+   "stage": "Occlusion handling",
+   "kpis": [
+    {
+     "key": "seconds",
+     "group": "Time (\u00a79)",
+     "label": "Stage 3 wall time",
+     "value": 42.1,
+     "target": "<= 120 s (fusion allotment)",
+     "status": "pass",
+     "detail": "load 1.5s, classify 17.1s, ground 0.2s, fill 16.3s, mesh 5.6s; classify = visibility 9.56s + views 4.53s + photometric 1.73s + angles 1.0s + voxelise 0.19s + voxel_size 0.06s",
+     "unit": "s",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 1,
+    "warn": 0,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Tracks how long occlusion handling took against its share of the overall time budget.",
+   "covers": "Wall-clock time for zone classification and filling.",
+   "lacks": "Times are specific to the machine that ran them."
+  },
+  {
+   "process": "Georeferencing",
+   "stage_key": "geo_export",
+   "stage": "Georeferencing and export",
+   "kpis": [
+    {
+     "key": "referenced",
+     "group": "Georeferencing",
+     "label": "Georeferenced",
+     "value": true,
+     "target": "yes",
+     "status": "pass",
+     "detail": "49 GPS frames",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "crs",
+     "group": "Georeferencing",
+     "label": "Coordinate reference system",
+     "value": "EPSG:32617+5773",
+     "target": "UTM zone of the flight",
+     "status": "pass",
+     "detail": "WKT in LAS, EPSG in GeoTIFF, offset in OBJ/glb/PLY sidecars",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "vertical_datum",
+     "group": "Georeferencing",
+     "label": "Heights",
+     "value": "EGM96 orthometric",
+     "target": "orthometric",
+     "status": "pass",
+     "detail": " GPS altitude datum orthometric (source or config).",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "cam_vs_gps_rms_m",
+     "group": "Georeferencing",
+     "label": "Camera centres vs GPS (RMS, all)",
+     "value": 3.346,
+     "target": "<= 1.0 m (PS spatial accuracy)",
+     "status": "warn",
+     "detail": "horizontal 2.943 m, vertical 1.591 m; inliers-only 3.346 m",
+     "unit": "m",
+     "cap": null
+    },
+    {
+     "key": "inlier_fraction",
+     "group": "Georeferencing",
+     "label": "GPS fixes kept by RANSAC",
+     "value": 1.0,
+     "target": ">= 0.90",
+     "status": "pass",
+     "detail": "49 of 49 within 10.0 m",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "ground_constraint",
+     "group": "Georeferencing",
+     "label": "Straight-path roll constraint",
+     "value": false,
+     "target": "-",
+     "status": "info",
+     "detail": "track collinearity 0.2859 (< 0.1 turns it on)",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 90.0,
+   "counts": {
+    "pass": 4,
+    "warn": 1,
+    "fail": 0,
+    "info": 1
+   },
+   "what": "Places the model on the map: fits the reconstruction to the GPS track, converts to a projected coordinate system and resolves what the altitudes were measured from.",
+   "covers": "Horizontal and vertical agreement with GPS, the coordinate reference system written, the altitude datum and, when ground control points are supplied, their independent check error.",
+   "lacks": "Without ground control points the placement can be no better than the drone's own GPS."
+  },
+  {
+   "process": "Formats (re-opened)",
+   "stage_key": "geo_export",
+   "stage": "Georeferencing and export",
+   "kpis": [
+    {
+     "key": "format_obj",
+     "group": "Formats (re-opened)",
+     "label": "OBJ",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "132.2 MB; textured",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_ply",
+     "group": "Formats (re-opened)",
+     "label": "PLY",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "51.4 MB; 2,337,724 points",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_las",
+     "group": "Formats (re-opened)",
+     "label": "LAS",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "95.8 MB; 2,337,724 points, CRS WGS 84 / UTM zone 17N + EGM96 height",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_geotiff_dsm",
+     "group": "Formats (re-opened)",
+     "label": "GEOTIFF DSM",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "2.0 MB; 958x1752, CRS EPSG:32617",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_geotiff_ortho",
+     "group": "Formats (re-opened)",
+     "label": "GEOTIFF ORTHO",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "20.6 MB; 3419x6251, CRS EPSG:32617",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_glb",
+     "group": "Formats (re-opened)",
+     "label": "GLB",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "84.8 MB; 1 mesh(es), offset [415100.0, 3017100.0, 0.0]",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "format_fbx",
+     "group": "Formats (re-opened)",
+     "label": "FBX",
+     "value": true,
+     "target": "written + readable",
+     "status": "pass",
+     "detail": "57.8 MB; 57.8 MB",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "confidence_layer",
+     "group": "Formats (re-opened)",
+     "label": "Confidence layer (glb)",
+     "value": true,
+     "target": "written",
+     "status": "pass",
+     "detail": "1 mesh(es), offset [415100.0, 3017100.0, 0.0]",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "zones_layer",
+     "group": "Formats (re-opened)",
+     "label": "Stage 3 layers (zones glb, LAS/PLY zone, gaps.geojson)",
+     "value": true,
+     "target": "written",
+     "status": "pass",
+     "detail": "1 mesh(es), offset [415100.0, 3017100.0, 0.0]; LAS layers ['source', 'zone']; gaps.geojson yes",
+     "unit": "",
+     "cap": null
+    },
+    {
+     "key": "las_classified",
+     "group": "Formats (re-opened)",
+     "label": "LAS classified (ground / above / noise)",
+     "value": true,
+     "target": "ground class present",
+     "status": "pass",
+     "detail": "ground 21.3%, above ground 77.8%, low noise 0.9% (ASPRS 2 / 1 / 7)",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 100.0,
+   "counts": {
+    "pass": 10,
+    "warn": 0,
+    "fail": 0,
+    "info": 0
+   },
+   "what": "Writes all six required formats and then re-opens each one to confirm it is readable and carries the coordinates and layers it should.",
+   "covers": "Every format verified by reading it back, the point cloud's classification, and the confidence and zone layers travelling with the model.",
+   "lacks": "Re-opening proves the file is valid and complete; how well third-party software displays it is outside what can be measured here."
+  },
+  {
+   "process": "Coverage",
+   "stage_key": "geo_export",
+   "stage": "Georeferencing and export",
+   "kpis": [
+    {
+     "key": "coverage_pct",
+     "group": "Coverage",
+     "label": "Visible ground reconstructed",
+     "value": 69.3,
+     "target": ">= 90%",
+     "status": "fail",
+     "detail": "146,202 of 211,196 m\u00b2 the cameras saw",
+     "unit": "%",
+     "cap": null
+    },
+    {
+     "key": "dsm",
+     "group": "Coverage",
+     "label": "DSM",
+     "value": "0.5 m",
+     "target": "-",
+     "status": "info",
+     "detail": "958x1752, 37% of cells valid (96,170 gap-filled)",
+     "unit": "",
+     "cap": null
+    }
+   ],
+   "score": 0.0,
+   "counts": {
+    "pass": 0,
+    "warn": 0,
+    "fail": 1,
+    "info": 1
+   },
+   "what": "Carries the coverage figure measured during occlusion handling into the exported products, so the delivered files state how much of the scene they actually describe.",
+   "covers": "The reconstructed percentage and the raster and vector products that record it.",
+   "lacks": "Coverage counts ground the cameras saw; ground outside the flight path is a flight-planning question, not a reconstruction one."
+  }
+ ],
+ "scorecards": {
+  "input_check": {
+   "title": "Input check",
+   "score": null,
+   "counts": null
+  },
+  "ingest": {
+   "title": "Ingest",
+   "score": 83.3,
+   "counts": {
+    "pass": 7,
+    "warn": 1,
+    "fail": 1,
+    "info": 2
+   }
+  },
+  "condition": {
+   "title": "Conditioning",
+   "score": 86.4,
+   "counts": {
+    "pass": 9,
+    "warn": 1,
+    "fail": 1,
+    "info": 4
+   }
+  },
+  "occlusion": {
+   "title": "Occluded surface reconstruction",
+   "score": 86.4,
+   "counts": {
+    "pass": 9,
+    "warn": 1,
+    "fail": 1,
+    "info": 1
+   }
+  },
+  "recon": {
+   "title": "Reconstruction tracks",
+   "score": 97.2,
+   "counts": {
+    "pass": 17,
+    "warn": 1,
+    "fail": 0,
+    "info": 5
+   }
+  },
+  "geo_export": {
+   "title": "Georeferencing & export",
+   "score": 90.6,
+   "counts": {
+    "pass": 14,
+    "warn": 1,
+    "fail": 1,
+    "info": 2
+   }
+  }
+ },
+ "time": {
+  "stage_seconds": {
+   "preflight": 12.1,
+   "ingest": 52.2,
+   "condition": 45.9,
+   "track_a": 242.7,
+   "geo": 0.3,
+   "fusion": 42.1,
+   "export": 30.3
+  },
+  "total_s": 425.6,
+  "video_s": 100.97,
+  "budget_s": 900,
+  "stage_budgets_s": {
+   "preflight": 60,
+   "ingest": 60,
+   "condition": 120,
+   "track_b": 120,
+   "refine_ba": 180,
+   "track_a_mvs": 240,
+   "fusion": 120,
+   "geo": 15,
+   "export": 60
+  }
+ },
+ "projection": {
+  "video_s": 100.97,
+  "total_s": 425.6,
+  "budget_s": 900.0,
+  "target_video_s": 600.0,
+  "factor": 5.942359116569278,
+  "projected_total_s": 2529.068040011885,
+  "stages": [
+   {
+    "stage": "preflight",
+    "seconds": 12.1,
+    "projected_s": 71.90254531048826
+   },
+   {
+    "stage": "ingest",
+    "seconds": 52.2,
+    "projected_s": 310.19114588491635
+   },
+   {
+    "stage": "condition",
+    "seconds": 45.9,
+    "projected_s": 272.7542834505299
+   },
+   {
+    "stage": "track_a",
+    "seconds": 242.7,
+    "projected_s": 1442.2105575913638
+   },
+   {
+    "stage": "geo",
+    "seconds": 0.3,
+    "projected_s": 1.7827077349707834
+   },
+   {
+    "stage": "fusion",
+    "seconds": 42.1,
+    "projected_s": 250.17331880756663
+   },
+   {
+    "stage": "export",
+    "seconds": 30.3,
+    "projected_s": 180.05348123204914
+   }
+  ],
+  "basis": "Times scale with the number of frames kept, which scales with the length of the flight, so each measured time is multiplied by 10 minutes divided by this clip's length. Accuracy and coverage figures are properties of the flight and do not change with clip length."
+ },
+ "coverage": {
+  "coverage_pct": 69.3,
+  "visible_m2": 211196,
+  "covered_m2": 146202,
+  "outside_camera_view_m2": 1086,
+  "ground_plane_z_m": 9.71,
+  "cell_m": 1.0,
+  "source": "Stage 3 zone map (zone 1 + zone 2 of the ground the cameras saw)"
+ },
+ "zones": {
+  "coverage_pct": 69.3,
+  "measured_coverage_pct": 66.2,
+  "zone1_pct": 46.1,
+  "zone2_pct": 23.2,
+  "zone3_pct": 30.8,
+  "gaps": {
+   "count": 242,
+   "total_m2": 64664.0,
+   "largest_m2": 36164.0,
+   "interior": 218,
+   "min_area_m2": 4.0
+  },
+  "fill_points": 169659,
+  "rejected_points": 0,
+  "holdout_error_median_m": 0.538,
+  "mesh": {
+   "faces": 1082327,
+   "support_radius": 0.591,
+   "zone1_area_pct": 44.5,
+   "zone2_area_pct": 36.5,
+   "zone3_area_pct": 19.0,
+   "inferred_faces": 29175,
+   "mesh": "data/interim/esri_s6/track_a/textured.obj"
+  },
+  "note": "zone 1 = measured, >= zone1_min_views at a sufficient angle; zone 2 = thin or monocular (anchored, weight < zone 1); zone 3 = never observed, listed in gaps.geojson, never filled"
+ },
+ "georeferencing": {
+  "rms_all_m": 3.346,
+  "rms_inliers_m": 3.346,
+  "horizontal_rms_m": 2.943,
+  "vertical_rms_m": 1.591,
+  "inliers": 49,
+  "cameras": 49,
+  "crs": "EPSG:32617+5773",
+  "gcp": null
+ },
+ "accuracy": {
+  "reference": {
+   "file": "data\\reference\\esri_usgs3dep_2018_utm17n_egm96.laz",
+   "kind": "point cloud",
+   "crs": "WGS 84 / UTM zone 17N + EGM96 height",
+   "vertical": "reference heights converted WGS 84 / UTM zone 17N + EGM96 height -> WGS 84 / UTM zone 17N: +0.000 m here",
+   "points": 12030972,
+   "ground_points": 2909045
+  },
+  "horizontal_shift": {
+   "estimated": true,
+   "east_m": -0.001,
+   "north_m": -0.002,
+   "horizontal_m": 0.003,
+   "peak": 0.087,
+   "overlap_cells": 549859,
+   "note": "peak < 0.05: weak texture, shift unreliable"
+  },
+  "dsm_vs_reference": {
+   "n": 549859,
+   "mean_m": -2.079,
+   "median_m": -3.284,
+   "rms_m": 11.455,
+   "p95_abs_m": 24.348,
+   "nmad_m": 5.624
+  },
+  "points_vs_reference_dsm": {
+   "zone1_measured": {
+    "n": 1133764,
+    "mean_m": -2.771,
+    "median_m": -2.734,
+    "rms_m": 5.02,
+    "p95_abs_m": 9.686,
+    "nmad_m": 4.131
+   },
+   "zone2_measured": {
+    "n": 500442,
+    "mean_m": 1.469,
+    "median_m": -3.095,
+    "rms_m": 17.85,
+    "p95_abs_m": 46.337,
+    "nmad_m": 7.065
+   },
+   "zone2_fill": {
+    "n": 126478,
+    "mean_m": 1.48,
+    "median_m": -3.074,
+    "rms_m": 16.36,
+    "p95_abs_m": 44.0,
+    "nmad_m": 6.796
+   },
+   "all_points": {
+    "n": 1760684,
+    "mean_m": -1.261,
+    "median_m": -2.814,
+    "rms_m": 11.226,
+    "p95_abs_m": 24.972,
+    "nmad_m": 4.937
+   }
+  },
+  "ground_points": {
+   "against": "reference ground (class 2)",
+   "zone1_measured": {
+    "n": 115220,
+    "mean_m": 0.168,
+    "median_m": 0.275,
+    "rms_m": 2.762,
+    "p95_abs_m": 5.107,
+    "nmad_m": 3.09
+   },
+   "zone2_measured": {
+    "n": 55074,
+    "mean_m": 8.279,
+    "median_m": 0.794,
+    "rms_m": 21.636,
+    "p95_abs_m": 58.265,
+    "nmad_m": 3.59
+   },
+   "all_points": {
+    "n": 176926,
+    "mean_m": 2.805,
+    "median_m": 0.428,
+    "rms_m": 12.594,
+    "p95_abs_m": 34.574,
+    "nmad_m": 3.206
+   }
+  },
+  "local": {
+   "tile_m": 100.0,
+   "tiles": 14,
+   "placement": {
+    "horizontal_median_m": 5.078,
+    "horizontal_p90_m": 7.724,
+    "vertical_median_m": -4.17,
+    "vertical_spread_m": 5.841
+   },
+   "points_after_tile_offset": {
+    "zone1_measured": {
+     "n": 959779,
+     "mean_m": 0.299,
+     "median_m": 0.049,
+     "rms_m": 2.866,
+     "p95_abs_m": 5.967,
+     "nmad_m": 2.402
+    },
+    "zone2_measured": {
+     "n": 284677,
+     "mean_m": -0.049,
+     "median_m": -0.257,
+     "rms_m": 3.363,
+     "p95_abs_m": 6.877,
+     "nmad_m": 3.056
+    },
+    "zone2_fill": {
+     "n": 57557,
+     "mean_m": 0.51,
+     "median_m": 0.235,
+     "rms_m": 3.427,
+     "p95_abs_m": 7.328,
+     "nmad_m": 3.156
+    },
+    "all_points": {
+     "n": 1302013,
+     "mean_m": 0.232,
+     "median_m": 0.0,
+     "rms_m": 3.008,
+     "p95_abs_m": 6.219,
+     "nmad_m": 2.566
+    }
+   },
+   "tile_offsets": [
+    {
+     "x0": 414788.5,
+     "y1": 3017450.5,
+     "x1": 414888.5,
+     "y0": 3017350.5,
+     "east_m": 1.304,
+     "north_m": -7.829,
+     "score": 0.515,
+     "up_m": -7.202
+    },
+    {
+     "x0": 414888.5,
+     "y1": 3017450.5,
+     "x1": 414988.5,
+     "y0": 3017350.5,
+     "east_m": 1.07,
+     "north_m": -8.595,
+     "score": 0.591,
+     "up_m": -7.558
+    },
+    {
+     "x0": 414788.5,
+     "y1": 3017350.5,
+     "x1": 414888.5,
+     "y0": 3017250.5,
+     "east_m": 1.021,
+     "north_m": -7.157,
+     "score": 0.4,
+     "up_m": -2.926
+    },
+    {
+     "x0": 414888.5,
+     "y1": 3017350.5,
+     "x1": 414988.5,
+     "y0": 3017250.5,
+     "east_m": -0.145,
+     "north_m": -6.838,
+     "score": 0.535,
+     "up_m": -1.697
+    },
+    {
+     "x0": 414988.5,
+     "y1": 3017350.5,
+     "x1": 415088.5,
+     "y0": 3017250.5,
+     "east_m": -1.677,
+     "north_m": -5.687,
+     "score": 0.604,
+     "up_m": -5.337
+    },
+    {
+     "x0": 414888.5,
+     "y1": 3017250.5,
+     "x1": 414988.5,
+     "y0": 3017150.5,
+     "east_m": -0.552,
+     "north_m": -4.655,
+     "score": 0.456,
+     "up_m": -0.182
+    },
+    {
+     "x0": 414988.5,
+     "y1": 3017250.5,
+     "x1": 415088.5,
+     "y0": 3017150.5,
+     "east_m": -2.248,
+     "north_m": -4.378,
+     "score": 0.663,
+     "up_m": -0.862
+    },
+    {
+     "x0": 415088.5,
+     "y1": 3017250.5,
+     "x1": 415188.5,
+     "y0": 3017150.5,
+     "east_m": -3.249,
+     "north_m": -2.812,
+     "score": 0.559,
+     "up_m": -6.32
+    },
+    {
+     "x0": 414988.5,
+     "y1": 3017150.5,
+     "x1": 415088.5,
+     "y0": 3017050.5,
+     "east_m": -2.448,
+     "north_m": -2.185,
+     "score": 0.549,
+     "up_m": -1.643
+    },
+    {
+     "x0": 415088.5,
+     "y1": 3017150.5,
+     "x1": 415188.5,
+     "y0": 3017050.5,
+     "east_m": -3.85,
+     "north_m": -1.136,
+     "score": 0.662,
+     "up_m": -4.128
+    },
+    {
+     "x0": 415088.5,
+     "y1": 3017050.5,
+     "x1": 415188.5,
+     "y0": 3016950.5,
+     "east_m": -3.688,
+     "north_m": 0.604,
+     "score": 0.627,
+     "up_m": -4.605
+    },
+    {
+     "x0": 414988.5,
+     "y1": 3016950.5,
+     "x1": 415088.5,
+     "y0": 3016850.5,
+     "east_m": -2.44,
+     "north_m": 4.418,
+     "score": 0.489,
+     "up_m": -2.45
+    },
+    {
+     "x0": 415088.5,
+     "y1": 3016950.5,
+     "x1": 415188.5,
+     "y0": 3016850.5,
+     "east_m": -3.999,
+     "north_m": 3.18,
+     "score": 0.583,
+     "up_m": -4.454
+    },
+    {
+     "x0": 415088.5,
+     "y1": 3016850.5,
+     "x1": 415188.5,
+     "y0": 3016750.5,
+     "east_m": -4.095,
+     "north_m": 5.852,
+     "score": 0.544,
+     "up_m": -4.211
+    }
+   ],
+   "doming": {
+    "tiles": 14,
+    "span_m": 670.8,
+    "sag_m": -5.948,
+    "sag_sigma_m": 1.224,
+    "significant": true,
+    "tilt_m_per_km": 28.232,
+    "residual_rms_m": 1.104
+   },
+   "ground_after_tile_offset": {
+    "zone1_measured": {
+     "n": 200140,
+     "mean_m": 0.097,
+     "median_m": 0.047,
+     "rms_m": 2.595,
+     "p95_abs_m": 5.189,
+     "nmad_m": 2.26
+    },
+    "zone2_measured": {
+     "n": 61854,
+     "mean_m": -0.201,
+     "median_m": -0.179,
+     "rms_m": 3.36,
+     "p95_abs_m": 6.855,
+     "nmad_m": 3.257
+    },
+    "all_points": {
+     "n": 268685,
+     "mean_m": 0.035,
+     "median_m": 0.013,
+     "rms_m": 2.807,
+     "p95_abs_m": 5.705,
+     "nmad_m": 2.478
+    }
+   }
+  },
+  "note": "vertical errors = our point height minus the reference surface under it; zone 3 is never measured (no points), so it has no accuracy figure by construction. 'local' removes each 100 m tile's own 3D offset: what remains is shape error at that scale"
+ },
+ "benchmarks": {
+  "degradation": {
+   "video": "data/raw/Esri_multiplexer_1.mp4",
+   "kinds": [
+    "motion_blur",
+    "compression",
+    "low_light",
+    "shadow",
+    "gps_noise",
+    "dynamic_objects"
+   ],
+   "severities": [
+    "moderate"
+   ],
+   "rows": [
+    {
+     "case": "clean",
+     "kind": "clean",
+     "severity": "-",
+     "conditioning": true,
+     "wall_s": 418.8,
+     "seconds": 416.9,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 50,
+     "cam_vs_gps_rms_m": 3.468,
+     "coverage_pct": 69.0
+    },
+    {
+     "case": "motion_blur_moderate_cond",
+     "kind": "motion_blur",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 623.0,
+     "seconds": 623.0,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 2.396,
+     "coverage_pct": 70.5,
+     "surface_rms_m": 5.408,
+     "surface_nmad_m": 2.925,
+     "zone1_rms_m": 2.807,
+     "shift_m": 0.003,
+     "camera_deviation": {
+      "common_frames": 9,
+      "rms_m": 2.211,
+      "median_m": 0.691,
+      "max_m": 3.995
+     }
+    },
+    {
+     "case": "motion_blur_moderate_raw",
+     "kind": "motion_blur",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 578.3,
+     "seconds": 578.3,
+     "failed": {},
+     "registered": 45,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 2.648,
+     "coverage_pct": 80.2,
+     "surface_rms_m": 4.33,
+     "surface_nmad_m": 3.06,
+     "zone1_rms_m": 3.349,
+     "shift_m": 0.002,
+     "camera_deviation": {
+      "common_frames": 5,
+      "rms_m": 11.451,
+      "median_m": 13.731,
+      "max_m": 14.203
+     }
+    },
+    {
+     "case": "compression_moderate_cond",
+     "kind": "compression",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 478.9,
+     "seconds": 478.8,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 3.711,
+     "coverage_pct": 81.6,
+     "surface_rms_m": 7.789,
+     "surface_nmad_m": 2.695,
+     "zone1_rms_m": 7.383,
+     "shift_m": 0.003,
+     "camera_deviation": {
+      "common_frames": 4,
+      "rms_m": 2.043,
+      "median_m": 2.053,
+      "max_m": 2.13
+     }
+    },
+    {
+     "case": "compression_moderate_raw",
+     "kind": "compression",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 378.7,
+     "seconds": 378.7,
+     "failed": {},
+     "registered": 45,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 3.252,
+     "coverage_pct": 80.6,
+     "surface_rms_m": 7.896,
+     "surface_nmad_m": 3.28,
+     "zone1_rms_m": 7.133,
+     "shift_m": 0.001,
+     "camera_deviation": {
+      "common_frames": 4,
+      "rms_m": 102.571,
+      "median_m": 102.852,
+      "max_m": 102.943
+     }
+    },
+    {
+     "case": "low_light_moderate_cond",
+     "kind": "low_light",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 1323.5,
+     "seconds": 1323.4,
+     "failed": {},
+     "registered": 46,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 2.85,
+     "coverage_pct": 79.9,
+     "surface_rms_m": 7.764,
+     "surface_nmad_m": 2.925,
+     "zone1_rms_m": 6.775,
+     "shift_m": 0.001,
+     "camera_deviation": {
+      "common_frames": 4,
+      "rms_m": 101.367,
+      "median_m": 101.64,
+      "max_m": 101.741
+     }
+    },
+    {
+     "case": "low_light_moderate_raw",
+     "kind": "low_light",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 1122.7,
+     "seconds": 1122.6,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 49,
+     "cam_vs_gps_rms_m": 2.587,
+     "coverage_pct": 79.6,
+     "surface_rms_m": 7.576,
+     "surface_nmad_m": 2.749,
+     "zone1_rms_m": 6.486,
+     "shift_m": 0.004,
+     "camera_deviation": {
+      "common_frames": 4,
+      "rms_m": 3.178,
+      "median_m": 3.041,
+      "max_m": 3.671
+     }
+    },
+    {
+     "case": "shadow_moderate_cond",
+     "kind": "shadow",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 608.4,
+     "seconds": 608.4,
+     "failed": {},
+     "registered": 65,
+     "frames_in": 65,
+     "cam_vs_gps_rms_m": 3.205,
+     "coverage_pct": 82.9,
+     "surface_rms_m": 8.373,
+     "surface_nmad_m": 3.492,
+     "zone1_rms_m": 7.801,
+     "shift_m": 0.001,
+     "camera_deviation": {
+      "common_frames": 5,
+      "rms_m": 6.011,
+      "median_m": 4.506,
+      "max_m": 9.774
+     }
+    },
+    {
+     "case": "shadow_moderate_raw",
+     "kind": "shadow",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 535.4,
+     "seconds": 535.4,
+     "failed": {},
+     "registered": 65,
+     "frames_in": 65,
+     "cam_vs_gps_rms_m": 2.627,
+     "coverage_pct": 81.9,
+     "surface_rms_m": 8.638,
+     "surface_nmad_m": 4.623,
+     "zone1_rms_m": 8.101,
+     "shift_m": 0.002,
+     "camera_deviation": {
+      "common_frames": 5,
+      "rms_m": 5.127,
+      "median_m": 4.338,
+      "max_m": 7.101
+     }
+    },
+    {
+     "case": "gps_noise_moderate_cond",
+     "kind": "gps_noise",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 401.1,
+     "seconds": 401.1,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 50,
+     "cam_vs_gps_rms_m": 4.574,
+     "coverage_pct": 65.9,
+     "surface_rms_m": 52.553,
+     "surface_nmad_m": 1.377,
+     "zone1_rms_m": 6.965,
+     "shift_m": 1.517,
+     "camera_deviation": {
+      "common_frames": 49,
+      "rms_m": 1.614,
+      "median_m": 1.266,
+      "max_m": 3.882
+     }
+    },
+    {
+     "case": "gps_noise_moderate_raw",
+     "kind": "gps_noise",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 388.4,
+     "seconds": 388.4,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 50,
+     "cam_vs_gps_rms_m": 5.251,
+     "coverage_pct": 72.2,
+     "surface_rms_m": 3.836,
+     "surface_nmad_m": 2.876,
+     "zone1_rms_m": 3.284,
+     "shift_m": 0.006,
+     "camera_deviation": {
+      "common_frames": 49,
+      "rms_m": 4.926,
+      "median_m": 5.004,
+      "max_m": 6.299
+     }
+    },
+    {
+     "case": "dynamic_objects_moderate_cond",
+     "kind": "dynamic_objects",
+     "severity": "moderate",
+     "conditioning": true,
+     "wall_s": 415.2,
+     "seconds": 415.1,
+     "failed": {},
+     "registered": 49,
+     "frames_in": 51,
+     "cam_vs_gps_rms_m": 3.2,
+     "coverage_pct": 81.0,
+     "surface_rms_m": 7.981,
+     "surface_nmad_m": 3.239,
+     "zone1_rms_m": 6.907,
+     "shift_m": 0.002,
+     "camera_deviation": {
+      "common_frames": 7,
+      "rms_m": 6.045,
+      "median_m": 3.6,
+      "max_m": 9.113
+     }
+    },
+    {
+     "case": "dynamic_objects_moderate_raw",
+     "kind": "dynamic_objects",
+     "severity": "moderate",
+     "conditioning": false,
+     "wall_s": 370.9,
+     "seconds": 370.9,
+     "failed": {},
+     "registered": 50,
+     "frames_in": 51,
+     "cam_vs_gps_rms_m": 2.923,
+     "coverage_pct": 81.5,
+     "surface_rms_m": 7.325,
+     "surface_nmad_m": 2.268,
+     "zone1_rms_m": 6.265,
+     "shift_m": 0.005,
+     "camera_deviation": {
+      "common_frames": 7,
+      "rms_m": 4.913,
+      "median_m": 3.232,
+      "max_m": 7.206
+     }
+    }
+   ],
+   "reference": "the clean reconstruction of the same clip (conditioning on)",
+   "table_html": "<div class='table-wrap'><table><tr><th>Degradation</th><th>Severity</th><th class='num'>Surface RMS vs clean (m)<br><span class='muted'>with / without</span></th><th class='num'>Zone 1 RMS (m)<br><span class='muted'>with / without</span></th><th class='num'>Registered<br><span class='muted'>with / without</span></th><th class='num'>Coverage %<br><span class='muted'>with / without</span></th><th class='num'>Cameras vs clean (m)<br><span class='muted'>with / without</span></th></tr><tr><td>motion_blur</td><td>moderate</td><td class='num'>5.41 / 4.33</td><td class='num'>2.81 / 3.35</td><td class='num'>49 / 45</td><td class='num'>70.5 / 80.2</td><td class='num'>2.21 / 11.45</td></tr><tr><td>compression</td><td>moderate</td><td class='num'>7.79 / 7.90</td><td class='num'>7.38 / 7.13</td><td class='num'>49 / 45</td><td class='num'>81.6 / 80.6</td><td class='num'>2.04 / 102.57</td></tr><tr><td>low_light</td><td>moderate</td><td class='num'>7.76 / 7.58</td><td class='num'>6.78 / 6.49</td><td class='num'>46 / 49</td><td class='num'>79.9 / 79.6</td><td class='num'>101.37 / 3.18</td></tr><tr><td>shadow</td><td>moderate</td><td class='num'>8.37 / 8.64</td><td class='num'>7.80 / 8.10</td><td class='num'>65 / 65</td><td class='num'>82.9 / 81.9</td><td class='num'>6.01 / 5.13</td></tr><tr><td>gps_noise</td><td>moderate</td><td class='num'>52.55 / 3.84</td><td class='num'>6.96 / 3.28</td><td class='num'>49 / 49</td><td class='num'>65.9 / 72.2</td><td class='num'>1.61 / 4.93</td></tr><tr><td>dynamic_objects</td><td>moderate</td><td class='num'>7.98 / 7.33</td><td class='num'>6.91 / 6.26</td><td class='num'>49 / 50</td><td class='num'>81.0 / 81.5</td><td class='num'>6.04 / 4.91</td></tr></table></div>",
+   "table_md": "| Degradation | Severity | Surface RMS vs clean (m) with / without | Zone 1 RMS (m) with / without | Registered with / without | Coverage % with / without | Cameras vs clean (m) with / without |\n|---|---|---|---|---|---|---|\n| motion_blur | moderate | 5.41 / 4.33 | 2.81 / 3.35 | 49 / 45 | 70.5 / 80.2 | 2.21 / 11.45 |\n| compression | moderate | 7.79 / 7.90 | 7.38 / 7.13 | 49 / 45 | 81.6 / 80.6 | 2.04 / 102.57 |\n| low_light | moderate | 7.76 / 7.58 | 6.78 / 6.49 | 46 / 49 | 79.9 / 79.6 | 101.37 / 3.18 |\n| shadow | moderate | 8.37 / 8.64 | 7.80 / 8.10 | 65 / 65 | 82.9 / 81.9 | 6.01 / 5.13 |\n| gps_noise | moderate | 52.55 / 3.84 | 6.96 / 3.28 | 49 / 49 | 65.9 / 72.2 | 1.61 / 4.93 |\n| dynamic_objects | moderate | 7.98 / 7.33 | 6.91 / 6.26 | 49 / 50 | 81.0 / 81.5 | 6.04 / 4.91 |\n\nClean baseline: registered 49, coverage 69.0%, cameras vs GPS 3.47 m, 417 s.\n",
+   "folder": "data\\box\\h0928\\box_handover_20260928_0802\\runs\\bench_esri"
+  }
+ },
+ "limitations": [
+  "Speed: 7.1 min for 1.7 min of video projects to 42 min for a 10-minute video against the \u00a79 target of 15 min (device cuda; S4-8).",
+  "Camera centres agree with GPS to 3.346 m RMS: absolute position is limited by the telemetry; relative distances within Zone 1 are more reliable.",
+  "30.8% of the ground the cameras saw was never observed (Zone 3): flagged in gaps.geojson and the viewer, never filled, excluded from accuracy.",
+  "The single-pass simulation needs a multi-strip survey; not run for this report."
+ ],
+ "formats": {
+  "produced": [
+   "fbx",
+   "geotiff",
+   "glb",
+   "las",
+   "obj",
+   "ply"
+  ],
+  "info": {
+   "obj": [
+    "OBJ",
+    "Wavefront mesh",
+    "The textured surface as plain text geometry: the most widely accepted mesh format, opened by every 3D package."
+   ],
+   "ply": [
+    "PLY",
+    "Polygon / point cloud",
+    "Every reconstructed point with its colour and its per-point confidence and zone layers."
+   ],
+   "las": [
+    "LAS",
+    "Lidar point cloud",
+    "The survey-industry point format, classified into ground, above ground and low noise, and tiled for large sites."
+   ],
+   "geotiff": [
+    "GeoTIFF",
+    "Georeferenced raster",
+    "A height model and a true-colour orthophoto, both carrying the coordinate system so they drop straight into any GIS."
+   ],
+   "glb": [
+    "GLB",
+    "glTF binary",
+    "The web and game-engine format: geometry and texture in one file, used by the viewer on this page."
+   ],
+   "fbx": [
+    "FBX",
+    "Autodesk exchange",
+    "The interchange format for Blender, 3ds Max, Maya and Unreal."
+   ]
+  },
+  "files": {
+   "cloud.las": 95849794,
+   "cloud.ply": 51430198,
+   "dsm.tif": 1965715,
+   "gaps.geojson": 288688,
+   "metadata.json": 6666,
+   "model.fbx": 57795164,
+   "model.glb": 84804896,
+   "model.obj": 132193166,
+   "model_confidence.glb": 64940912,
+   "model_zones.glb": 64941088,
+   "orthophoto.tif": 20583389,
+   "textured.mtl": 159,
+   "textured_material_00_map_Kd.jpg": 13794678,
+   "zone_map.tif": 27423
+  },
+  "tiles": 0,
+  "assets": {
+   "mesh": {
+    "glb": {
+     "file": "mesh.glb",
+     "bytes": 5881880
+    },
+    "obj": {
+     "file": "mesh.obj",
+     "bytes": 11551562
+    },
+    "fbx": {
+     "file": "mesh.fbx",
+     "bytes": 9536476
+    },
+    "faces": 249999,
+    "vertices": 125224,
+    "centre": [
+     -34.892,
+     11.274,
+     51.612
+    ]
+   },
+   "points": {
+    "ply": {
+     "file": "cloud.ply",
+     "bytes": 7013355
+    },
+    "las": {
+     "file": "cloud.las",
+     "bytes": 15896757
+    },
+    "points_web": 467545,
+    "points_full": 2337724,
+    "centre": [
+     415059.495,
+     3017064.236,
+     11.137
+    ],
+    "classes": {
+     "1": 363910,
+     "2": 99556,
+     "7": 4079
+    },
+    "zone_counts": {
+     "1": 301452,
+     "2": 166093
+    },
+    "confidence_mean": 0.776
+   },
+   "rasters": {
+    "dsm": {
+     "file": "dsm.png",
+     "bytes": 611172,
+     "px": [
+      874,
+      1600
+     ],
+     "source_px": null,
+     "crs": "EPSG:32617",
+     "res_m": [
+      0.5,
+      0.5
+     ],
+     "bounds": [
+      414768.5,
+      3016594.5,
+      415247.5,
+      3017470.5
+     ],
+     "source_file": "dsm.tif",
+     "source_bytes": 1965715,
+     "min_m": -45.51,
+     "max_m": 81.32,
+     "ramp_low_m": -14.45,
+     "ramp_high_m": 58.94
+    },
+    "ortho": {
+     "file": "ortho.png",
+     "bytes": 1548449,
+     "px": [
+      875,
+      1600
+     ],
+     "source_px": null,
+     "crs": "EPSG:32617",
+     "res_m": [
+      0.1401,
+      0.1401
+     ],
+     "bounds": [
+      414768.5,
+      3016594.4923302406,
+      415247.63457413326,
+      3017470.5
+     ],
+     "source_file": "orthophoto.tif",
+     "source_bytes": 20583389
+    }
+   }
+  }
+ },
+ "metadata": {
+  "crs": "EPSG:32617+5773",
+  "coordinate_frames": {
+   "map": "EPSG:32617+5773",
+   "local": "map minus offset [415100.0, 3017100.0, 0.0]",
+   "offset": [
+    415100.0,
+    3017100.0,
+    0.0
+   ]
+  },
+  "confidence": "views confirming each point / 5, clipped to 1",
+  "coverage": {
+   "coverage_pct": 69.3,
+   "visible_m2": 211196,
+   "covered_m2": 146202,
+   "outside_camera_view_m2": 1086,
+   "ground_plane_z_m": 9.71,
+   "cell_m": 1.0,
+   "source": "Stage 3 zone map (zone 1 + zone 2 of the ground the cameras saw)"
+  },
+  "files": [
+   {
+    "format": "ply",
+    "path": "data/interim/esri_s6/export/cloud.ply",
+    "bytes": 51430198,
+    "points": 2337724,
+    "frame": "local",
+    "layers": [
+     "source",
+     "zone"
+    ]
+   },
+   {
+    "format": "las",
+    "path": "data/interim/esri_s6/export/cloud.las",
+    "bytes": 95849794,
+    "points": 2337724,
+    "frame": "map",
+    "crs": "EPSG:32617+5773",
+    "layers": [
+     "source",
+     "zone"
+    ],
+    "classification": {
+     "method": "progressive morphological filter",
+     "cell_m": 1.0,
+     "windows": 5,
+     "despiked_cells": 10008,
+     "counts": {
+      "ground": 497988,
+      "above_ground": 1819502,
+      "low_noise": 20234
+     },
+     "ground_pct": 21.3
+    }
+   },
+   {
+    "format": "geotiff_dsm",
+    "path": "data/interim/esri_s6/export/dsm.tif",
+    "bytes": 1965715,
+    "crs": "EPSG:32617+5773",
+    "resolution_m": 0.5,
+    "width": 958,
+    "height": 1752,
+    "valid_fraction": 0.368,
+    "filled_cells": 96170
+   },
+   {
+    "format": "geotiff_ortho",
+    "path": "data/interim/esri_s6/export/orthophoto.tif",
+    "bytes": 20583389,
+    "crs": "EPSG:32617+5773",
+    "resolution_m": 0.14,
+    "width": 3419,
+    "height": 6251,
+    "valid_fraction": 0.375,
+    "source": "textured mesh (rendered)",
+    "mesh_hit_fraction": 0.385
+   },
+   {
+    "format": "obj",
+    "path": "data/interim/esri_s6/export/model.obj",
+    "bytes": 132193166,
+    "faces": 1082327,
+    "frame": "local",
+    "textured": true
+   },
+   {
+    "format": "glb",
+    "path": "data/interim/esri_s6/export/model.glb",
+    "bytes": 84804896,
+    "faces": 1082327,
+    "frame": "local"
+   },
+   {
+    "format": "glb_confidence",
+    "path": "data/interim/esri_s6/export/model_confidence.glb",
+    "bytes": 64940912,
+    "frame": "local"
+   },
+   {
+    "format": "glb_zones",
+    "path": "data/interim/esri_s6/export/model_zones.glb",
+    "bytes": 64941088,
+    "frame": "local"
+   },
+   {
+    "format": "fbx",
+    "path": "data/interim/esri_s6/export/model.fbx",
+    "bytes": 57795164,
+    "frame": "local",
+    "converter": "/home/jovyan/single-pass/tools/blender-4.2.3-linux-x64/blender"
+   },
+   {
+    "format": "geojson_gaps",
+    "path": "data/interim/esri_s6/export/gaps.geojson",
+    "bytes": 288688,
+    "crs": "EPSG:4326"
+   },
+   {
+    "format": "geotiff_zones",
+    "path": "data/interim/esri_s6/export/zone_map.tif",
+    "bytes": 27423,
+    "crs": "EPSG:32617+5773"
+   }
+  ]
+ },
+ "manifest_stages": {
+  "preflight": {
+   "status": "done",
+   "duration_s": 12.075496196746826
+  },
+  "ingest": {
+   "status": "done",
+   "duration_s": 52.2074773311615
+  },
+  "condition": {
+   "status": "done",
+   "duration_s": 45.927973985672
+  },
+  "track_b": {
+   "status": "skipped",
+   "duration_s": null
+  },
+  "refine_ba": {
+   "status": "skipped",
+   "duration_s": null
+  },
+  "track_a": {
+   "status": "done",
+   "duration_s": 242.7413182258606
+  },
+  "geo": {
+   "status": "done",
+   "duration_s": 0.25911831855773926
+  },
+  "fusion": {
+   "status": "done",
+   "duration_s": 42.10341143608093
+  },
+  "export": {
+   "status": "done",
+   "duration_s": 30.348554849624634
+  },
+  "qa": {
+   "status": "done",
+   "duration_s": 17.596163034439087
+  }
+ },
+ "viewer": {
+  "scene_mb": 114.7,
+  "faces": 1082327,
+  "lite": {
+   "file": "scene_lite.glb",
+   "faces": 249999,
+   "mb": 5.9
+  },
+  "vertices": 3246981,
+  "layers": {
+   "texture": true,
+   "confidence": true,
+   "zones": true
+  },
+  "gaps_drawn": 242,
+  "confidence_known_pct": 99.7,
+  "zone_pct_vertices": {
+   "1": 60.8,
+   "2": 36.5,
+   "3": 2.7
+  },
+  "notes": []
+ }
+}

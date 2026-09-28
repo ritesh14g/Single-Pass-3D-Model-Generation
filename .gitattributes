@@ -1,0 +1,6 @@
+# large binaries are already compressed
+*.glb binary
+*.fbx binary
+*.las binary
+*.ply binary
+*.png binary

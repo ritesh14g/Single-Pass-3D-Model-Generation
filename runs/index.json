@@ -1,0 +1,22 @@
+{
+ "runs": [
+  {
+   "key": "esri",
+   "run": "esri_s6",
+   "video": "Esri_multiplexer_1.mp4",
+   "verdict": "READY_WITH_WARNINGS",
+   "coverage_pct": 69.3,
+   "total_s": 425.6,
+   "video_s": 100.97
+  },
+  {
+   "key": "dji",
+   "run": "dji47_rep",
+   "video": "DJI_0047.mp4",
+   "verdict": "READY_WITH_WARNINGS",
+   "coverage_pct": 88.0,
+   "total_s": 2654.2,
+   "video_s": 103.64
+  }
+ ]
+}
