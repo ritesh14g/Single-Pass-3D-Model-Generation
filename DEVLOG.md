@@ -3327,3 +3327,7 @@ run was allotted 540 s.
 **Verified live:** index and run JSON return 200; the output page loads in Chrome in light and dark, with the toggle and the 3-D canvas present. The full `stage7.mjs` suite has **not** been re-run against the live URL.
 **Fixed by this deploy:** the old `num()` bug (whole numbers printed with zeros stripped).
 **Not done:** keyboard / five-width sweep for v2; real-GPU frame rates.
+
+### 2026-09-29 — ritesh14g (with Claude) — run view waits for "View output"
+**Modified:** `site/app.js`. When the last stage finishes, the run view no longer navigates on its own: the heading becomes "Your model is ready", and the "Skip to the model" button becomes a primary, focused **View output →** button. Skip during the run is unchanged. A link to `?view=run` still opens the finished model (existing behaviour).
+**Verified:** S2 (twice) checks the page stays on the run view for 3 s after completion with every stage done and the focused primary button, and that pressing it opens the model; S3, S4, S5 pass. Deployed to `gh-pages`.

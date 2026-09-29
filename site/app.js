@@ -258,6 +258,7 @@ async function startReplay() {
   $('run-title').textContent = 'Working'; $('run-now').textContent = '';
   $('run-note').textContent = 'Replaying the measured stage times of a completed run.';
   $('run-skip').onclick = () => { cancelReplay(); go('output', { replace: true }); };
+  const skip = $('run-skip'); skip.textContent = 'Skip to the model →'; skip.className = 'btn ghost sm';
   for (let i = 0; i < STAGES.length; i++) {
     if (token.cancel) return;
     const s = STAGES[i], li = $('run-strip').children[i], fill = li.querySelector('i'), ms = still ? 120 : Math.max(500, (secs[i] / total) * 7500);
@@ -271,8 +272,11 @@ async function startReplay() {
     li.classList.replace('active', 'done'); li.querySelector('.rs-time').textContent = clock(secs[i]);
   }
   $('run-title').textContent = 'Your model is ready'; $('run-now').textContent = 'All stages complete.';
-  await nap(still ? 100 : 800);
-  if (!token.cancel) { state.replay = null; go('output', { replace: true }); }   // replace, so Back from the model returns to where you came from
+  // Finishing does not navigate: the same button becomes the primary action and the person decides when to move on.
+  if (token.cancel) return;
+  state.replay = null;
+  skip.textContent = 'View output →'; skip.className = 'btn primary'; skip.focus({ preventScroll: true });
+  $('run-note').textContent = 'The run is complete.';
 }
 
 // ── Metrics and Forecast (panels.js, added in the next stages) ────────────────
