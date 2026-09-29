@@ -2998,3 +2998,39 @@ problems in all three browsers.
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 3 — landing content: capabilities, targets vs measured, both flights compared.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 3: landing content
+**Goal:** below the hero, the case for the project, built from measured data only.
+**Created:**
+- `site/ui.js` — the shared helpers and components moved out of `app.js` (a pure move; `app.js` imports them), plus
+  `RUN_BLURB` / `RUN_LABEL` so the flight descriptions live in one place. Stage pages will import it too.
+- `site/landing.js` — the targets-against-measured table and the two-flight comparison, each read from the runs'
+  `data.json`; a run that fails to load renders `—` and never throws.
+**Modified:** `site/index.html` (problem in three lines, eight capability cards with keyword chips, placeholders for
+the two data sections, the PS-named applications), `site/styles.css`, `site/app.js` (landing data loaded alongside,
+never blocking first paint).
+**Content:** targets table = PS §1.4 (mesh/point cloud, time, accuracy, coverage, formats, viewer), each row with
+the required value, both flights' measured values, a Met / Partial / Not met tag and the reason. Statuses come from
+rules against the PS target: time Not met (forecast 42 min Esri, 4 h 16 min DJI vs 15), accuracy Not met (cameras vs
+GPS 3.35 / 2.14 m; Esri Zone 1 shape vs lidar 2.87 m RMS), coverage Partial (69.3% / 88.0%, 242 / 182 gaps),
+formats Met (6 of 6 re-opened), mesh/cloud and viewer Met. Flight cards: length, time, cameras placed, coverage,
+cameras vs GPS, five stage scores, "Open this flight" enters the wizard with that run. The "why the lower flight
+takes longer" line prints both runs' own reconstruction and total times, with no arithmetic.
+**Bug found and fixed (pre-existing, on the deployed site):** `num()` stripped trailing zeros from whole numbers,
+so `num(617000, 0)` returned `"617"`, `num(100)` returned `"1"` and `num(0, 0)` returned `""`. It made the GeoTIFF
+panel's coordinate readout print `east 415–415 m` instead of `east 414769–415248 m`, and would have blanked a 0 m
+height. Zeros are now trimmed only after a decimal point. Regression-tested against the file's real bounds.
+The live site still has this bug until Stage 7 deploys.
+**Verified** (`scratchpad/stage3.mjs`, 20 checks, all pass; Stage 2's 30 re-run and still pass): 3 problem lines, 8
+cards each with chips and their own accent, 6 target rows each with a tag, 2 flight cards with 5 stat tiles and 5
+scores, 8 applications; **18 figures traced** by computing the expected string independently and finding it both in
+`data.json` and on the page; no horizontal scroll at 360 px with the table stacking to cards; "Open this flight"
+opens the input check for DJI_0047; with `runs/dji/data.json` blocked the page raises no error banner, DJI cells
+read `—`, its card says the data did not load, the Esri card still renders, and the comparison sentence is
+omitted; zero console problems.
+**Also fixed:** flight-card stat values wrapped onto two lines (`1 min 41 / s`); now nowrap. Thumbnails are
+`loading="lazy"`, so a full-page screenshot shows them blank until scrolled: not a defect (checked: they load).
+**Not verified:** real-GPU frame rates. Not deployed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 4 — one page per pipeline stage with a segmented progress bar.

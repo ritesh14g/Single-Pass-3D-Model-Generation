@@ -69,6 +69,69 @@
         <div class="hero-figs" id="hero-figs" hidden></div>
       </div>
     </div>
+
+    <div class="land" id="land">
+      <section class="land-sec problem" aria-labelledby="l-problem">
+        <div class="eyebrow" id="l-problem">The problem</div>
+        <p>A single pass sees every surface from only a few angles.</p>
+        <p>Systems built on that either leave holes, or invent geometry without saying so.</p>
+        <p>This one <b>measures what was seen</b>, infers only where the inference is checked against measurement, and <b>outlines the rest as gaps</b>.</p>
+      </section>
+
+      <section class="land-sec" aria-labelledby="l-cap">
+        <div class="eyebrow" id="l-cap">What it does</div>
+        <h2>Eight capabilities, in the order the video meets them</h2>
+        <div class="capgrid">
+          <article class="capcard" data-accent="check"><div class="n">00 · INPUT CHECK</div><h3>Refuses bad input in seconds</h3>
+            <p>Reads the container, the position log and the video↔GPS agreement before any compute is spent, and says how to fix what it finds.</p>
+            <div class="chips"><span class="chip">container probe by content</span><span class="chip">12+ telemetry formats</span><span class="chip">GPS↔video sync</span></div></article>
+          <article class="capcard" data-accent="ingest"><div class="n">01 · INGEST</div><h3>Keeps the frames that matter</h3>
+            <p>Selects frames to hit a target overlap instead of sampling at a fixed interval, and gates out frames too blurred to reconstruct from.</p>
+            <div class="chips"><span class="chip">overlap-targeted selection</span><span class="chip">forward-backward LK</span><span class="chip">NCC verification</span></div></article>
+          <article class="capcard" data-accent="condition"><div class="n">02 · CONDITIONING</div><h3>Cleans each frame and the GPS track</h3>
+            <p>Suppresses compression blocking, evens out exposure, masks moving objects, and filters position outliers before anything is matched.</p>
+            <div class="chips"><span class="chip">blockiness suppression</span><span class="chip">YOLOv8-seg masks</span><span class="chip">RTS-Kalman GPS</span></div></article>
+          <article class="capcard" data-accent="recon"><div class="n">03 · RECONSTRUCTION</div><h3>GPS-anchored SfM and dense surface</h3>
+            <p>Solves every camera with structure-from-motion, refines against the GPS track, then builds a dense cloud, a mesh and a texture.</p>
+            <div class="chips"><span class="chip">COLMAP SfM</span><span class="chip">GPS-prior BA</span><span class="chip">PatchMatch MVS</span><span class="chip">OpenMVS mesh</span></div></article>
+          <article class="capcard" data-accent="recon"><div class="n">03 · TRACK B</div><h3>Learned depth, only where it agrees</h3>
+            <p>A feed-forward depth network adds detail where stereo is thin, scaled to the measured surface and refused wherever it disagrees.</p>
+            <div class="chips"><span class="chip">VGGT-Ω depth</span><span class="chip">RANSAC scale / shift</span><span class="chip">multi-view gate</span></div></article>
+          <article class="capcard" data-accent="fusion"><div class="n">04 · OCCLUSION HANDLING</div><h3>Every surface labelled by how well it was seen</h3>
+            <p>Zone 1 is measured, Zone 2 is thin or anchored, Zone 3 was never observed and is outlined as a gap, never filled.</p>
+            <div class="chips"><span class="chip">voxel zones</span><span class="chip">z-buffer visibility</span><span class="chip">gap polygons → GeoJSON</span></div></article>
+          <article class="capcard" data-accent="geo"><div class="n">05 · GEOREFERENCING</div><h3>On the map from the drone's own GPS</h3>
+            <p>Fits the model to the flight track, converts to a projected coordinate system and resolves what the altitudes were measured from.</p>
+            <div class="chips"><span class="chip">RANSAC similarity fit</span><span class="chip">UTM</span><span class="chip">EGM96 heights</span></div></article>
+          <article class="capcard" data-accent="export"><div class="n">06 · OUTPUTS</div><h3>Six formats, each re-opened to verify</h3>
+            <p>Writes every required format, classifies the point cloud, and carries confidence and zone layers into the files.</p>
+            <div class="chips"><span class="chip">OBJ</span><span class="chip">PLY</span><span class="chip">LAS</span><span class="chip">GeoTIFF</span><span class="chip">GLB</span><span class="chip">FBX</span></div></article>
+        </div>
+      </section>
+
+      <section class="land-sec" aria-labelledby="l-tgt">
+        <div class="eyebrow" id="l-tgt">Targets against measured</div>
+        <h2>What the problem statement asks for, and what the runs did</h2>
+        <p class="lede">Each row states the target, the measured value for both prepared flights and, where it falls short, why.
+           Partial stays partial.</p>
+        <div id="land-targets"></div>
+      </section>
+
+      <section class="land-sec" aria-labelledby="l-fl">
+        <div class="eyebrow" id="l-fl">Two prepared flights</div>
+        <h2>Processed end to end, side by side</h2>
+        <div id="land-flights"></div>
+      </section>
+
+      <section class="land-sec" aria-labelledby="l-app">
+        <div class="eyebrow" id="l-app">Applications named in the problem statement</div>
+        <div class="applist">
+          <span>Border and strategic-area mapping</span><span>Disaster damage assessment</span><span>Urban planning and smart cities</span>
+          <span>Infrastructure inspection</span><span>Construction progress monitoring</span><span>Archaeological documentation</span>
+          <span>Digital twin generation</span><span>Reconnaissance and mission planning</span>
+        </div>
+      </section>
+    </div>
   </section>
 
   <!-- ─────────────────────────── 1. input ─────────────────────────── -->
