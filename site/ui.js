@@ -42,12 +42,16 @@ export function progressBar(steps, currentId, onPick) {
   steps.forEach((s, i) => {
     const li = el('li', i < at ? 'done' : (i === at ? 'current' : ''));
     li.dataset.accent = s.accent || s.id;
-    const b = el('button', '', `<span class="seg"></span><span class="lbl"><i>${i + 1}</i>${esc(s.title)}</span>`);
-    b.type = 'button';
+    const b = el('button', '', `<span class="seg"></span><span class="lbl"><i>${i + 1}</i><span class="t">${esc(s.title)}</span></span>`);
+    b.type = 'button'; b.setAttribute('aria-label', `Step ${i + 1} of ${steps.length}: ${s.title}`);
     if (i === at) b.setAttribute('aria-current', 'step');
     b.onclick = () => onPick(s.id);
     li.appendChild(b); ol.appendChild(li);
   });
   nav.appendChild(ol);
+  if (at >= 0) {                     // small screens: titles cannot fit under eight segments, so the current one is written out in full
+    nav.dataset.accent = steps[at].accent || steps[at].id;
+    nav.appendChild(el('div', 'progress-now', `Step ${at + 1} of ${steps.length} · <b>${esc(steps[at].title)}</b>`)).setAttribute('aria-hidden', 'true');
+  }
   return nav;
 }

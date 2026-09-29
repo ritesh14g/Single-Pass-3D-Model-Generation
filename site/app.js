@@ -14,6 +14,7 @@ import { $, el, esc, mb, num, clock, val, STATUS_WORD, scoreColour, chips, stat,
 import { buildTargets, buildFlights, loadAll } from './landing.js';
 import { buildStagePages } from './stages.js';
 
+const qaApi = {};                                      // wireQA fills in open / close so a ?qa= deep link opens the report the same way the button does
 const state = { runs: [], data: null, step: 'home', format: 'glb', qaTab: 'processes', own: {} };
 
 // ── boot ──────────────────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ async function init() {
   goto(resolveStep(q.get('step')));
   if (q.get('qa')) {
     if (QA_TABS.some(([k]) => k === q.get('qa'))) state.qaTab = q.get('qa');
-    buildQA(); $('qa').classList.add('on'); $('scrim').classList.add('on');
+    buildQA(); qaApi.open();
   }
 }
 
@@ -710,9 +711,30 @@ function showRaster() {
 
 // ── quality report ────────────────────────────────────────────────────────────
 function wireQA() {
-  const open = () => { $('qa').classList.add('on'); $('scrim').classList.add('on'); };
-  const close = () => { $('qa').classList.remove('on'); $('scrim').classList.remove('on'); };
+  // Keyboard: opening moves focus into the report, closing hands it back to the button that opened it; while closed the
+  // report is not focusable at all (styles.css hides it), so Tab never lands on something off-screen.
+  let opener = null;
+  const behind = () => document.querySelectorAll('header.top, #progress-host, main, footer.foot');
+  $('qa').inert = true;                                  // closed: not focusable, whatever the slide-out transition is doing
+  const open = () => { opener = document.activeElement; behind().forEach((n) => { n.inert = true; }); $('qa').inert = false; $('qa').classList.add('on'); $('scrim').classList.add('on');
+    const to = () => $('qa-close').focus({ preventScroll: true });
+    to(); if (document.activeElement !== $('qa-close')) requestAnimationFrame(to);   // synchronous normally; the frame callback is only a fallback
+  };
+  const close = () => {
+    const was = $('qa').classList.contains('on');
+    $('qa').classList.remove('on'); $('scrim').classList.remove('on'); $('qa').inert = true; behind().forEach((n) => { n.inert = false; });
+    if (was && opener && document.contains(opener)) opener.focus({ preventScroll: true });
+  };
   $('qa-open').onclick = () => { state.qaTab = QA_FOR_STEP[state.step] || state.qaTab; buildQA(); open(); };
+  // Tab wraps inside the open report instead of escaping to the document behind it.
+  $('qa').addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const f = [...$('qa').querySelectorAll('button, a[href], summary, [tabindex]:not([tabindex="-1"])')].filter((n) => n.offsetParent !== null);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  });
+  qaApi.open = open; qaApi.close = close;
   $('qa-close').onclick = close; $('scrim').onclick = close;
   addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 }

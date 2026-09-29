@@ -275,13 +275,13 @@
 
 <!-- ─────────────────────────── quality report ─────────────────────────── -->
 <div class="scrim" id="scrim"></div>
-<aside class="qa" id="qa" aria-label="Quality report">
+<aside class="qa" id="qa" role="dialog" aria-modal="true" aria-label="Quality report">
   <header>
     <div style="flex:1;min-width:0">
       <h3>Quality report</h3>
       <div class="sub" id="qa-sub"></div>
     </div>
-    <button class="btn ghost sm" id="qa-close">Close ✕</button>
+    <button class="btn ghost sm" id="qa-close" type="button">Close ✕</button>
   </header>
   <div class="tabs" id="qa-tabs"></div>
   <div class="body" id="qa-body"></div>

@@ -87,7 +87,7 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `CLAUDE.md` | — | Instructions for AI agents (points here) |
 | `CLOUD_GPU_GUIDE.md` | — | Rented GPU box: machine choice, setup, data transfer, remote Lab UI, what to record |
 | `context.md` | — | Brief for the team building the SIH national-round deck: PS, what is built with what, measured results, uniqueness, criteria fit, limitations, slide outline, judge Q&A |
-| `site/` | site | **Tracked source** of the public demo console: `index.html`, `app.js`, `styles.css`. `build_site.py` copies it into the git-ignored `data/site/`; edit here, never in `data/site/` |
+| `site/` | site | **Tracked source** of the public demo console; `build_site.py` copies the whole folder into the git-ignored `data/site/` (edit here, never in `data/site/`; every file in it is published). `index.html` (nine sections: landing + 8 wizard pages), `styles.css` (one dark theme, nine stage accents), `app.js` (routing, progress bar, pagers, viewers, quality report), `ui.js` (shared helpers and components), `hero.js` (procedural node-terrain hero), `landing.js` (targets-vs-measured and flight comparison), `stages.js` (content of the six pipeline pages) |
 | `SITE_UI_REDESIGN_PROMPT.md` | site | Staged brief for the public demo site's UI-only redesign: dark theme, landing hero, one page per pipeline stage, progress bar. Eight stages, one commit each |
 | `scripts/build_site.py` | site | Builds `data/site/` from finished run folders: `data.json` per run (input check, KPIs by process, times + 10-min projection, coverage, accuracy) and one web-sized file per export format. Reads only; never runs the pipeline |
 | `configs/default.yaml` | all | Every tunable (rule 3: no magic numbers in code) |
@@ -3174,3 +3174,49 @@ Moving the camera would change `frameObject`, which this stage does not touch.
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 7 — full verification pass, then deploy.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 7: verification pass
+**Goal:** verify the whole redesign end to end, fix what that finds, document it. Deploy is a separate decision (below).
+**Modified:** `site/app.js`, `site/ui.js`, `site/styles.css`, `site/index.html` — fixes only; `DEVLOG.md`.
+**Defects the pass found, and their fixes** (each was invisible to the earlier stage-level checks):
+- **Focus could not enter the Quality report.** `#qa-close` stayed computed `visibility: hidden` for a moment after the
+  panel opened, so `focus()` silently failed. Root cause: `.btn { transition: .15s }` is a shorthand for *all*
+  properties, which also animated the inherited `visibility`. `.btn` now lists its properties.
+- **The report was not a real modal.** While open the page behind is now `inert` and Tab wraps inside the report; opening
+  moves focus to Close, closing returns it to the button that opened it; a closed report is `inert` (not only
+  translated off-screen), so it cannot be tabbed into whatever the transition is doing. `?qa=` deep links use the same path.
+  `role="dialog" aria-modal="true"` added.
+- **A stat value spilled past its tile at 768 px** (`EPSG:32617+5773` at 26 px in a 170 px tile), giving the
+  Georeferencing page a horizontal scroll (scrollWidth 810 in a 768 px viewport) although no box was out of bounds. Values now wrap.
+- **Progress labels clipped** ("Occlusion hand…") at 360, 768 and 1024 px. Labels now wrap where there is room; at ≤ 1000 px
+  the segments show step numbers and the current step is written out in full beneath the bar. Every segment has an
+  `aria-label` ("Step 6 of 8: Occlusion handling"), so nothing depends on the visible text.
+- **Legend and HUD overlapped on a 360 px stage;** the HUD now sits under the mode bar on narrow screens.
+**Verified** (`scratchpad/stage7.mjs`, headless Chrome over the DevTools protocol; then every earlier suite re-run):
+- **Walk at 1440 px:** landing, 8 pages × both flights, 12 flight × format combinations with all 24 colour-mode views,
+  the Quality report's four tabs for both flights — **zero console errors or warnings**.
+- **16 deep links** (old `?step=1..4`, all 8 ids, unknown, none, `?run=&step=&format=`) land correctly;
+  `?run=dji&step=export&format=las&qa=speed` restores page, flight, format and report tab, with the report modal.
+- **Five widths (360 / 768 / 1024 / 1440 / 1920 px) × 9 pages:** no horizontal scroll, no clipped label (including text
+  spilling past its own box), nothing sticking out of the viewport, overlays clear of the canvas centre and of each other.
+- **Keyboard:** Tab reaches the wordmark, both flight buttons, Quality report, every progress segment, both dropzones,
+  both flight cards, all six format cards, the colour modes, Details and the download links; every focused control shows a
+  ≥ 2 px focus ring and has an accessible name; the report is a working modal (focus in, trap, Escape, focus back).
+- **Contrast:** 0 failures over the palette (accents ≥ 6.2:1 as text, ≥ 6.6:1 as fills).
+- **Regression:** Stage 2 (30 checks), 3 (20), 4 (59), 5 (34), 6 (45) and the no-flash test all pass on the final code.
+- **`pytest tests -q`: 501 passed** (the suite is unaffected: nothing under `src/`, `configs/`, `tests/` or `ui/` changed).
+- **Scope:** `git diff 5040e2b HEAD` touches only `site/` (7 files), `scripts/build_site.py` (its copy step: 9 added lines),
+  `DEVLOG.md` and `SITE_UI_REDESIGN_PROMPT.md`. `src/`, `configs/`, `tests/`, `ui/` are byte-identical.
+**Bugs fixed on the way, present on the live site until deploy:** `num()` printed whole numbers with the zeros stripped
+(`617000` as `617`; the GeoTIFF coordinate readout was wrong by 1000×, a 0 m height printed blank).
+**Not done:** deploy to `gh-pages`. It publishes to the URL linked in the SIH deck, so it waits for an explicit go-ahead.
+A full `build_site.py` run was also not done here: it deletes and regenerates `data/site/runs/<key>/`, and the source run
+folders (`data/interim/esri_s6`, `dji47_rep`) did not resolve on this machine. The redesign needs no rebuild of the run
+data: `site/` is copied over the existing `data/site/`.
+**Not verified:** real-GPU frame rates (all timings above are software rendering); browsers other than Chrome.
+**Dead ends:** none.
+**Open issues added/closed:** none. Candidate for the pipeline's own issue list: `src/qa/report.py:272` compares
+Reconstruction with `track_a_mvs` alone, so the pipeline's HTML report calls Esri's 243 s "over" a 240 s budget although the
+run was allotted 540 s.
+**Next:** deploy, once approved: run `build_site.py` on a machine that has the run folders (or copy `site/` over the current
+`data/site/`), publish `data/site/` to `gh-pages`, then re-run `stage7.mjs` against the live URL.
