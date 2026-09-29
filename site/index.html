@@ -258,12 +258,16 @@
           <div class="float tl glass segbar" id="mode-bar" hidden></div>
           <div class="float bl glass legend" id="legend" hidden></div>
           <div class="float br glass" id="hud" hidden></div>
-          <div class="rasterview" id="rasterview" hidden><img id="rasterimg" alt="Raster preview"></div>
+          <div class="rasterview" id="rasterview" hidden>
+            <figure class="rframe"><img id="rasterimg" alt="Raster preview"><figcaption id="rastercap"></figcaption></figure>
+            <div class="rinfo glass" id="rasterinfo"></div>
+          </div>
         </div>
         <p class="hint" style="margin-top:9px" id="viewhint"></p>
       </div>
       <aside class="side" id="fmtside"></aside>
     </div>
+    <div class="fmtbelow" id="fmtbelow"></div>
   </section>
 </main>
 

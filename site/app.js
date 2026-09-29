@@ -350,8 +350,11 @@ const FORMATS = ['glb', 'obj', 'fbx', 'ply', 'las', 'geotiff'];
 function buildFormatBar() {
   const bar = $('fmtbar'); bar.innerHTML = '';
   FORMATS.forEach((f) => {
-    const info = state.data.formats.info[f] || [f.toUpperCase()];
-    const b = el('button', f === state.format ? 'on' : '', `${info[0]}`);
+    const info = state.data.formats.info[f] || [f.toUpperCase(), '', ''];
+    const ok = state.data.formats.produced.includes(f);
+    const b = el('button', f === state.format ? 'on' : '',
+      `<span class="fn">${esc(info[0])}</span><span class="fk">${esc(info[1])}</span><span class="fv${ok ? '' : ' no'}">${ok ? '✓ written &amp; re-opened' : 'not written'}</span>`);
+    b.type = 'button'; b.dataset.format = f;
     b.onclick = () => showFormat(f);
     bar.appendChild(b);
   });
@@ -367,23 +370,15 @@ function showFormat(f) {
 }
 
 function buildFormatSide(f) {
-  const d = state.data, a = d.formats.assets, side = $('fmtside');
+  const d = state.data, a = d.formats.assets, side = $('fmtside'), below = $('fmtbelow');
   const info = d.formats.info[f] || [f.toUpperCase(), '', ''];
   const real = { glb: 'model.glb', obj: 'model.obj', fbx: 'model.fbx', ply: 'cloud.ply', las: 'cloud.las', geotiff: 'dsm.tif' }[f];
   const realBytes = d.formats.files[real];
   const webAsset = f === 'geotiff' ? null : (a.mesh?.[f] || a.points?.[f]);
-  side.innerHTML = '';
+  side.innerHTML = ''; below.innerHTML = '';
 
-  const head = el('div', 'panel pad');
-  head.innerHTML = `<div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
-      <h3 style="font-size:16px">${esc(info[0])}</h3><span class="tag accent">${esc(info[1])}</span>
-      ${d.formats.produced.includes(f) ? '<span class="tag pass" style="margin-left:auto">written &amp; re-opened</span>' : ''}
-    </div><p class="hint" style="margin:0">${esc(info[2])}</p>`;
-  side.appendChild(head);
-
-  const facts = el('div', 'panel pad');
   let rows = '';
-  const kv = (k, v) => { rows += `<div class="k">${k}</div><div class="v">${v}</div>`; };
+  const kv = (k, v) => { rows += `<div class="kpirow two"><div class="lbl">${k}</div><div class="v">${v}</div></div>`; };
   if (f === 'geotiff') {
     const r = a.rasters || {};
     kv('Products', 'height model + orthophoto');
@@ -414,8 +409,15 @@ function buildFormatSide(f) {
     kv('Texture', mb(d.formats.files['textured_material_00_map_Kd.jpg']));
     if (f === 'glb') kv('Layers carried', 'texture, confidence, zone');
   }
-  facts.innerHTML = `<div class="kv">${rows}</div>`;
-  side.appendChild(facts);
+  const card = el('div', 'factcard glass');
+  card.innerHTML = `<div class="fhead"><h3>${esc(info[0])}</h3><span class="tag accent">${esc(info[1])}</span>` +
+    `${d.formats.produced.includes(f) ? '<span class="tag pass">written &amp; re-opened</span>' : ''}` +
+    `<button class="ftoggle" type="button" aria-expanded="true" title="Show or hide the details">Details</button></div>` +
+    `<div class="fbodytxt"><p class="hint">${esc(info[2])}</p><div class="factrows">${rows}</div></div>`;
+  card.querySelector('.ftoggle').onclick = (e) => {
+    const off = side.classList.toggle('collapsed'); e.currentTarget.setAttribute('aria-expanded', String(!off));
+  };
+  side.appendChild(card);
 
   const dl = el('div', 'panel pad');
   dl.innerHTML = `<h4 style="font-size:13.5px;margin-bottom:8px">Take a copy</h4>
@@ -427,7 +429,7 @@ function buildFormatSide(f) {
     </div>
     <p class="hint" style="margin:9px 0 0">The web copy above is reduced so it loads over a browser connection.
       The full ${esc(info[0])} listed as “file size” is the one the pipeline wrote${f === 'geotiff' ? '' : `, ${mb(realBytes)}`}.</p>`;
-  side.appendChild(dl);
+  below.appendChild(dl);
 
   const why = el('div', 'panel pad');
   why.innerHTML = `<h4 style="font-size:13.5px;margin-bottom:6px">Why this format is in the set</h4>
@@ -439,7 +441,7 @@ function buildFormatSide(f) {
       glb: 'One self-contained file that any browser, phone or game engine can display without a plug-in.',
       fbx: 'The format Blender, 3ds Max, Maya and Unreal expect for handing a model between tools.',
     }[f] || '')}</p>`;
-  side.appendChild(why);
+  below.appendChild(why);
 }
 
 // ── 3-D viewers ───────────────────────────────────────────────────────────────
@@ -474,9 +476,10 @@ function viewerLoop(on) {
   if (on) R.resize();
 }
 function clearObject() { const c = ctx(); if (c.object) { c.scene.remove(c.object); c.object = null; } }
-function busy(on, text) {
-  $('loading').hidden = !on;
-  if (text) $('loading').querySelector('.txt').textContent = text;
+function busy(on, text, failed) {
+  const box = $('loading');
+  box.hidden = !on; box.classList.toggle('err', !!failed);
+  if (text) box.querySelector('.txt').textContent = text;
 }
 function frameObject(obj) {
   const c = ctx();
@@ -497,7 +500,7 @@ function setBg() {
 function loadMesh(f) {
   const d = state.data, asset = d.formats.assets.mesh?.[f];
   $('rasterview').hidden = true;
-  if (!asset) { busy(true, `No ${f.toUpperCase()} asset for this run`); return; }
+  if (!asset) { busy(true, `No ${f.toUpperCase()} asset for this run`, true); return; }
   busy(true, `Loading the ${f.toUpperCase()} through its own reader…`);
   clearObject(); setBg();
   const url = `runs/${d.key}/assets/${asset.file}`;
@@ -512,7 +515,7 @@ function loadMesh(f) {
     meshModes(obj, f);
     $('viewhint').textContent = `Drag to orbit · right-drag to pan · scroll to zoom. Loaded from ${asset.file} with three.js ${f.toUpperCase()}Loader.`;
   };
-  const fail = (e) => busy(true, `Could not read the ${f.toUpperCase()}: ${e?.message || e}`);
+  const fail = (e) => busy(true, `Could not read ${asset.file} with ${{ glb: 'GLTFLoader', obj: 'OBJLoader', fbx: 'FBXLoader' }[f]}: ${e?.message || e}`, true);
   if (f === 'glb') new GLTFLoader().load(url, (g) => done(g.scene), null, fail);
   else if (f === 'obj') new OBJLoader().load(url, done, null, fail);
   else new FBXLoader().load(url, done, null, fail);
@@ -569,7 +572,7 @@ function drawLegend(mode) {
 function loadPoints(f) {
   const d = state.data, asset = d.formats.assets.points?.[f];
   $('rasterview').hidden = true;
-  if (!asset) { busy(true, `No ${f.toUpperCase()} asset for this run`); return; }
+  if (!asset) { busy(true, `No ${f.toUpperCase()} asset for this run`, true); return; }
   busy(true, `Loading the ${f.toUpperCase()}…`);
   clearObject(); setBg();
   const url = `runs/${d.key}/assets/${asset.file}`;
@@ -590,7 +593,7 @@ function loadPoints(f) {
     new PLYLoader().load(url, (g) => {
       if (!g.attributes.color) g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(0.7), 3));
       show(g, null);
-    }, null, (e) => busy(true, `Could not read the PLY: ${e?.message || e}`));
+    }, null, (e) => busy(true, `Could not read ${asset.file} with PLYLoader: ${e?.message || e}`, true));
   } else {
     fetch(url).then((r) => r.arrayBuffer()).then((buf) => {
       const las = parseLAS(buf);
@@ -598,7 +601,7 @@ function loadPoints(f) {
       g.setAttribute('position', new THREE.BufferAttribute(las.xyz, 3));
       g.setAttribute('color', new THREE.BufferAttribute(las.rgb, 3));
       show(g, las);
-    }).catch((e) => busy(true, `Could not read the LAS: ${e?.message || e}`));
+    }).catch((e) => busy(true, `Could not read ${asset.file} with the LAS reader: ${e?.message || e}`, true));
   }
 }
 
@@ -677,16 +680,19 @@ function pointModes(pts, las, f) {
 function showRaster() {
   const d = state.data, r = d.formats.assets.rasters || {};
   clearObject(); busy(false);
-  $('mode-bar').hidden = false; $('hud').hidden = false; $('legend').hidden = true;
+  $('mode-bar').hidden = false; $('hud').hidden = true; $('legend').hidden = true;     // the raster's numbers sit beside the image, not in the corner HUD
   $('rasterview').hidden = false;
   const bar = $('mode-bar'); bar.innerHTML = '';
   const pick = (which) => {
     [...bar.children].forEach((b) => b.classList.toggle('on', b.dataset.m === which));
     const info = r[which]; if (!info) return;
     $('rasterimg').src = `runs/${d.key}/assets/${info.file}`;
-    $('hud').innerHTML = `<div class="hint" style="margin:0">
-      <b>${esc(info.crs || '')}</b><br>${num(info.res_m?.[0], 2)} m per pixel · ${info.px?.[0]}×${info.px?.[1]} shown<br>
-      east ${num(info.bounds?.[0], 0)}–${num(info.bounds?.[2], 0)} m · north ${num(info.bounds?.[1], 0)}–${num(info.bounds?.[3], 0)} m</div>`;
+    const row = (k, v) => `<div class="kpirow two"><div class="lbl">${k}</div><div class="v">${v}</div></div>`;
+    $('rastercap').textContent = which === 'dsm' ? 'Height model' : 'Orthophoto';
+    $('rasterinfo').innerHTML = `<div class="rinfo-h">${which === 'dsm' ? 'Height model' : 'Orthophoto'}</div>` +
+      row('Coordinate system', esc(info.crs || '—')) + row('Resolution', `${num(info.res_m?.[0], 2)} m per pixel`) +
+      row('Shown here', `${info.px?.[0]}×${info.px?.[1]} px`) +
+      row('East', `${num(info.bounds?.[0], 0)}–${num(info.bounds?.[2], 0)} m`) + row('North', `${num(info.bounds?.[1], 0)}–${num(info.bounds?.[3], 0)} m`);
     if (which === 'dsm' && info.min_m != null) {
       $('legend').hidden = false;
       $('legend').innerHTML = `<b>Surface height</b>

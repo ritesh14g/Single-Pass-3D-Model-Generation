@@ -3133,3 +3133,44 @@ and 360. Stage 2's loop-rate check was made robust (median of three samples; sta
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 6 — Outputs page restyle (format switcher, overlays, fact panel), viewer logic untouched.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 6: Outputs page restyle
+**Goal:** the format viewer keeps every capability and looks like the rest of the redesign. Viewer logic untouched.
+**Modified:** `site/index.html` (raster frame + info markup, `#fmtbelow`), `site/app.js`, `site/styles.css`,
+`site/stages.js` (the Outputs page's description and checks now follow the viewer).
+**Presentation changes:**
+- **Format switcher:** six labelled cards (name, what it is, "✓ written & re-opened"); the active one takes the page
+  accent (lavender). Still six direct children in `FORMATS` order, so `showFormat` is unchanged; buttons carry `data-format`.
+- **Stage:** taller (`--stage-h` = min(78vh, 760px), was min(66vh, 620px)) and full width. On screens ≥ 1100 px the fact
+  card is an overlay at the top-right; under that it stacks below the stage as the side column did. A Details toggle
+  collapses it to its header. Mode bar (top-left), legend (bottom-left) and HUD (bottom-right) share one glass style and
+  keep clear of the canvas centre and of each other. "Take a copy" and "Why this format" moved to a row under the stage.
+- **Fact rows** are `.kpirow`s with exactly the rows the old panel had.
+- **GeoTIFF:** the image sits in a frame with a caption, and its coordinate system, resolution, size and bounds sit
+  beside it (they were in a corner HUD); the height legend is kept for the height model.
+- **Failure state:** a red, readable message that names the file and the reader — `Could not read mesh.glb with
+  GLTFLoader: …` — with the spinner gone; the viewer recovers on the next format.
+- **The viewer comes first on the page.** After the first look, the techniques and description sat above it and pushed
+  the model below the fold, so they now follow it, with the measured checks.
+**Not changed:** `loadMesh` / `loadPoints` / `showRaster` logic, `parseLAS`, `meshModes`, `pointModes`, `frameObject`, the
+colour maths (`confColour`, `zoneColour`, `CLASS_COLOUR`, the height ramp) and the legends. Only the messages passed to
+`busy()` and a class toggle on the overlay changed in the loaders.
+**Verified** (`scratchpad/stage6.mjs`, 45 checks, all pass; Stages 2–5 and the flash test re-run and pass):
+- **Nothing lost, proven by content, not by eye:** the previous commit's page was served beside the new one and, for all
+  12 flight × format combinations, the fact rows (label and value), download links, "why" text, download note, colour-mode
+  buttons, the legend for **every** mode, HUD text, view hint, description and tags are identical; GeoTIFF's CRS,
+  resolution, size and east/north ranges all appear beside the image.
+- Layout at 1440 px: stage = 100% of its container, fact card inside the stage's top-right, no overlay covers the canvas
+  centre, no two overlays overlap, 702 px tall at a 900 px viewport; at 900 px the card stacks below the stage.
+- GeoTIFF: info to the right of the frame in the same band, inside the stage and clear of the fact card; real bounds
+  (`414769–415248 m` east, `3016595–3017471 m` north); legend shown for height and hidden for orthophoto.
+- Failure states for GLB, OBJ, FBX, PLY and LAS (each request blocked in turn): message names the right file and the
+  right reader, red, spinner hidden; OBJ then loads and the error clears.
+- One WebGL context through every format; 360 px on all 12 flight × format views: no horizontal scroll, fact card below
+  the stage, raster info inside the stage; zero console problems (the blocked requests aside).
+**Known, left as is:** at 1440 px a wide point cloud's right tip can sit under the fact card; Details collapses it.
+Moving the camera would change `frameObject`, which this stage does not touch.
+**Not verified:** real-GPU rendering. Not deployed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 7 — full verification pass, then deploy.

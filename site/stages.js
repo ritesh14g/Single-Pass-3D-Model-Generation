@@ -194,9 +194,8 @@ export function buildStagePages(d) {
     const { intro, measured, tail } = section(d, cfg);
     const list = (byPage[id] || []);
     const make = (html) => { const w = el('div', 'stage-gen', html); w.dataset.gen = id; return w; };
-    if (id === 'export') {                                       // the viewer stays where it was; techniques above it, measured checks below
-      sec.querySelector('.fmtbar').before(make(intro));
-      const after = make(measured + tail); sec.querySelector('.outwrap').after(after);
+    if (id === 'export') {                                       // the viewer comes first: it is what this page is for; everything else follows it
+      const after = make(intro + measured + tail); sec.querySelector('#fmtbelow').after(after);
       list.forEach((p) => after.querySelector('.proclist').appendChild(procCard(p)));
     } else {
       const host = $(`body-${id}`); host.innerHTML = '';
