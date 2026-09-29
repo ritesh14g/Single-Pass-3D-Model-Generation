@@ -500,3 +500,10 @@ table.metrics tr.grp .pbox { margin-left: 10px; min-width: 36px; justify-content
 .pl { display: block; margin-bottom: 10px; }
 .vbox { white-space: nowrap; }
 @media (max-width: 620px) { .vbox { white-space: normal; overflow-wrap: anywhere; } }
+
+.gbw { position: relative; }
+.bmark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink); opacity: .75; border-radius: 1px; }
+.gpair .gb .val { white-space: nowrap; }
+
+/* the Forecast button lives at the page's bottom-right corner, so the viewer's readout sits clear of it */
+@media (min-width: 701px) { .float.br { right: 124px; } }

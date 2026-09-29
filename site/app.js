@@ -41,6 +41,7 @@ async function init() {
   $('gpu-open').onclick = () => gpuSheet.open();
   panels = createPanels({ getData: () => state.data, getExtra: loadExtra, onState: (p) => { state.panel = p; syncUrl(true); } });
   $('metrics-open').onclick = () => panels.openMetrics();
+  $('forecast-open').onclick = () => panels.openForecast();
   $('foot').innerHTML = `Every figure on this page is read from a completed pipeline run: its input check, its
     stage scores and the files it wrote. Processed on an NVIDIA H100 80&nbsp;GB MIG&nbsp;2g.20gb slice
     (19.6&nbsp;GB, 3 CPU cores). Reference surface for the accuracy comparison: USGS 3DEP lidar.
@@ -253,7 +254,7 @@ async function startReplay() {
 }
 
 // ── Metrics and Forecast (panels.js, added in the next stages) ────────────────
-function openPanel(name) { if (name === 'metrics') panels.openMetrics(); }
+function openPanel(name) { if (name === 'metrics') panels.openMetrics(); else if (name === 'forecast') panels.openForecast(); }
 
 // ── step 4: outputs ───────────────────────────────────────────────────────────
 const FORMATS = ['glb', 'obj', 'fbx', 'ply', 'las', 'geotiff'];

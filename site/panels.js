@@ -4,7 +4,7 @@
    Limitations are deliberately not shown in Metrics; they belong with the forecast. */
 import { el, esc, num, clock, val, STATUS_WORD, scoreColour, STAGES } from './ui.js';
 import { makeSheet } from './sheet.js';
-import { stageViz, wireViz } from './charts.js';
+import { stageViz, wireViz, forecastChart } from './charts.js';
 
 const procsFor = (d, s) => (d.processes || []).filter((p) => (s.process ? p.process === s.process : s.processes ? s.processes.includes(p.process) : p.stage === s.stage));
 const firstSentence = (t) => { const m = String(t || '').match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : String(t || '')).trim(); };
@@ -42,6 +42,32 @@ function stageContent(d, s) {
     summary: [`${s.desc} ${kp.length} measurements across ${procs.length} ${procs.length === 1 ? 'process' : 'processes'}: ${c.pass} met their target, ${c.warn} came near it, ${c.fail} fell below it and ${c.info} were recorded for information.`,
       procs.map((p) => `<span class="pl"><b>${esc(p.process)}</b>${p.score == null ? '' : ` (${Math.round(p.score)})`}: ${esc(firstSentence(p.what))}</span>`).join('')].filter(Boolean),
     raw: true };
+}
+
+// Measured time for a 10-minute video, from the pipeline's own projection in data.json. Each stage's allowance is its share of
+// the 15-minute budget (Reconstruction owns three: Track B's and the refinement's are handed to Track A when they do not run).
+const FSTAGES = [['preflight', 'Input check', ['preflight']], ['ingest', 'Ingest', ['ingest']], ['condition', 'Conditioning', ['condition']],
+  ['track_a', 'Reconstruction', ['track_b', 'refine_ba', 'track_a_mvs']], ['fusion', 'Occlusion handling', ['fusion']], ['geo', 'Georeferencing', ['geo']], ['export', 'Outputs', ['export']]];
+const KPI = (d, proc, key) => (d.processes || []).find((p) => p.process === proc)?.kpis.find((k) => k.key === key);
+
+function forecastContent(d) {
+  const p = d.projection || {}, budgets = d.time?.stage_budgets_s || {}, by = Object.fromEntries((p.stages || []).map((s) => [s.stage, s]));
+  const rows = FSTAGES.filter(([k]) => by[k]).map(([k, label, keys]) => {
+    const parts = keys.map((x) => budgets[x]), budget = parts.every((v) => v != null) ? parts.reduce((a, v) => a + v, 0) : null;
+    return { label, measured: by[k].seconds, forecast: by[k].projected_s, budget };
+  });
+  const verdict = (f, b) => (b == null ? 'info' : f <= b ? 'pass' : 'fail');
+  const time = rows.map((r) => row({ label: r.label, detail: `Measured ${clock(r.measured)} on this ${clock(p.video_s)} flight`, value: clock(r.forecast), target: r.budget != null ? `≤ ${clock(r.budget)}` : '—', status: verdict(r.forecast, r.budget) }));
+  time.push(row({ label: 'Total', detail: `Measured ${clock(p.total_s)}, scaled by ${num(p.factor, 1)}× for a ${clock(p.target_video_s)} video`, value: clock(p.projected_total_s), target: `≤ ${clock(p.budget_s)}`, status: verdict(p.projected_total_s, p.budget_s) }));
+  const kept = KPI(d, 'Frame selection', 'frames_selected'), same = [KPI(d, 'Coverage and gaps (§6.4)', 'coverage_pct'), KPI(d, 'Metric (vs telemetry)', 'cam_vs_gps_rms_m')].filter(Boolean);
+  const vol = kept && p.factor ? [row({ label: 'Frames kept', detail: `${num(kept.value, 0)} kept on this flight, scaled by the same ${num(p.factor, 1)}×`, value: `≈ ${num(Math.round(kept.value * p.factor), 0)}`, target: '—', status: 'info' })] : [];
+  const keep = same.map((k) => row({ label: k.label, detail: 'Depends on the flight, not on how long it is', value: val(k.value), unit: k.unit, target: k.target, status: k.status }));
+  const body = group('Processing time for a 10-minute video', null, time) + (vol.length ? group('Volume', null, vol) : '') + (keep.length ? group('Unchanged by length', null, keep) : '');
+  const over = p.projected_total_s && p.budget_s ? p.projected_total_s / p.budget_s : null;
+  return { rows, table: table(body),
+    summary: [`${p.basis || ''}`,
+      `On this hardware the forecast is <b>${clock(p.projected_total_s)}</b> against the ${clock(p.budget_s)} target${over ? `, about ${num(over, 1)}× the target` : ''}. The machine that ran this flight is ${d.device === 'cuda' ? 'a shared slice of one GPU with 3 CPU cores' : esc(String(d.device))}; the reference machine has a full GPU and eight or more cores, and several of the heaviest steps (decoding, meshing, texturing) are limited by those cores rather than by the GPU.`,
+      'The route to the target is to select frames straight from the video\'s own keyframes instead of decoding everything, to run the stages overlapped rather than one after another, and to run on the reference hardware. Each is a change in how the work is scheduled, not in what is produced.'] };
 }
 
 export function createPanels({ getData, getExtra, onState }) {
@@ -89,8 +115,25 @@ export function createPanels({ getData, getExtra, onState }) {
   });
   body.addEventListener('pointercancel', () => { sx = sy = null; });
 
+  // Forecast: the same dialog layout as Metrics, without a stage strip.
+  const fRoot = document.getElementById('forecast-sheet');
+  let fsilent = false;
+  const fsheet = makeSheet(fRoot, { onClose: () => { if (!fsilent) onState(null); } });
+  fRoot.innerHTML = `<div class="sheet-box" role="dialog" aria-modal="true" aria-labelledby="f-title">
+    <header class="sheet-head"><div><h3 id="f-title">Forecast</h3><p class="hint" id="f-sub"></p></div>
+      <div class="m-nav"><button class="btn ghost sm" type="button" data-close data-autofocus>Close ✕</button></div></header>
+    <div class="mbody"><div class="mleft" id="f-left" tabindex="0" aria-label="Forecast for a 10-minute video"></div><aside class="mright" id="f-right" aria-label="How to read the forecast"></aside></div></div>`;
+  function renderForecast() {
+    const d = getData(), c = forecastContent(d), p = d.projection || {};
+    fRoot.querySelector('#f-sub').textContent = `${d.video} · measured on ${clock(p.video_s)} of video, forecast for ${clock(p.target_video_s)}`;
+    fRoot.querySelector('#f-left').innerHTML = `<div class="mhead"><h2>A 10-minute video</h2></div><div class="vgrid">${forecastChart(d, c.rows)}</div>${c.table}`;
+    fRoot.querySelector('#f-right').innerHTML = `<h4>How to read this</h4>` + c.summary.map((t) => `<p>${t}</p>`).join('');
+    wireViz(fRoot.querySelector('#f-left'));
+  }
+
   return {
+    openForecast() { renderForecast(); fsheet.open(); onState('forecast'); },
     async openMetrics(at) { if (typeof at === 'number') stage = at; extra = (await getExtra?.()) || {}; render(); msheet.open(); onState('metrics'); },
-    closeAll() { silent = true; msheet.close(); silent = false; },
+    closeAll() { silent = true; fsilent = true; msheet.close(); fsheet.close(); silent = false; fsilent = false; },
   };
 }

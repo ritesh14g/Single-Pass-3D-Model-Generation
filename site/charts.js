@@ -135,6 +135,17 @@ function fileSizes(d) {
     set.map(([k, l]) => ({ label: l, v: f[k], text: MB(f[k]), cells: [l, MB(f[k])] })).sort((a, b) => b.v - a.v), 'MB', ['File', 'Size']);
 }
 
+// ── forecast: measured (gray) against the 10-minute forecast (accent), the stage's allowance ticked ──
+export function forecastChart(d, rows) {                  // rows: [{ label, measured, forecast, budget }]
+  const peak = Math.max(...rows.flatMap((r) => [r.measured, r.forecast, r.budget || 0]), 1);
+  const bar = (v, c) => `<div class="gb"><div class="track"><i style="width:${Math.max((v / peak) * 100, 0.8)}%;background:${c}"></i></div><div class="val">${clock(v)}</div></div>`;
+  const body = rows.map((r) => `<div class="gpair" data-tip="${esc(`${r.label}. Measured ${clock(r.measured)}, forecast ${clock(r.forecast)}${r.budget ? `, allowance ${clock(r.budget)}` : ''}.`)}">` +
+    `<div class="lbl">${esc(r.label)}</div><div class="gbars"><div class="gbw">${bar(r.forecast, '#0D47A1')}${r.budget ? `<b class="bmark" style="left:${(r.budget / peak) * 100}%" title="allowance ${esc(clock(r.budget))}"></b>` : ''}</div>${bar(r.measured, GRAY)}</div></div>`).join('');
+  return card('Measured against the forecast, by stage', 'Bars share one time axis. The tick on each forecast bar is the time that stage is allowed in a 15-minute run.', body,
+    miniTable(['Stage', 'Measured', 'Forecast (10 min)', 'Allowance'], rows.map((r) => [r.label, clock(r.measured), clock(r.forecast), r.budget ? clock(r.budget) : '—'])),
+    legend([['#0D47A1', 'Forecast for a 10-minute video'], [GRAY, 'Measured on this flight']]));
+}
+
 // ── assembly ───────────────────────────────────────────────────────────────────────────
 export function stageViz(d, id, extra = {}) {
   const cards = [];
