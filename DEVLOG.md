@@ -3320,3 +3320,10 @@ run was allotted 540 s.
 **Incident, fixed:** my test driver left one Chrome profile folder (about 300 MB each, 172 of them, **15 GB**) in the temp directory on every run because it deleted the profile while Chrome was still exiting, and the disk filled. They were deleted (only `cdp-*` folders in `%TEMP%`, after stopping any Chrome using them); the driver now waits for Chrome to exit, retries the delete, and turns off Chrome's disk caches. Verified: a run leaves nothing behind.
 **Not done:** deploy to `gh-pages`; the full keyboard/five-width sweep for the v2 design; real-GPU frame rates; `pytest` (nothing it covers changed).
 
+
+### 2026-09-29 — ritesh14g (with Claude) — site v2 deployed
+**Deployed** to `gh-pages` (commit `c6f342c`, fast-forward of `f079741`) after an explicit go-ahead. Live: https://ritesh14g.github.io/Single-Pass-3D-Model-Generation/
+**How:** `data/site/` is the local `gh-pages` clone (no remote configured, git-ignored by the main repo). `site/*.js|html|css` were copied over it, committed there, and pushed with `git push https://github.com/ritesh14g/Single-Pass-3D-Model-Generation.git HEAD:gh-pages`. Run data (`runs/`, `esri/`, `dji/`, `vendor/`) was unchanged.
+**Verified live:** index and run JSON return 200; the output page loads in Chrome in light and dark, with the toggle and the 3-D canvas present. The full `stage7.mjs` suite has **not** been re-run against the live URL.
+**Fixed by this deploy:** the old `num()` bug (whole numbers printed with zeros stripped).
+**Not done:** keyboard / five-width sweep for v2; real-GPU frame rates.
