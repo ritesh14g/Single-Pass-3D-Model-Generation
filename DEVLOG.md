@@ -3220,3 +3220,16 @@ Reconstruction with `track_a_mvs` alone, so the pipeline's HTML report calls Esr
 run was allotted 540 s.
 **Next:** deploy, once approved: run `build_site.py` on a machine that has the run folders (or copy `site/` over the current
 `data/site/`), publish `data/site/` to `gh-pages`, then re-run `stage7.mjs` against the live URL.
+
+### 2026-09-29 — ritesh14g (with Claude) — site v2, S1: light theme
+**Brief:** `SITE_V2_PLAN.md`. Scope for this iteration: S1–S5 plus the Connect GPU panel as UI only; the backend (S6–S9) is next iteration.
+**Modified:** `site/styles.css` (tokens), `site/hero.js` (recoloured and re-blended), `SITE_V2_PLAN.md` (scope decision).
+**Decisions:**
+- Light theme on the palette `#E3F2FD · #90CAF9 · #2196F3 · #0D47A1`. Text and emphasis use the deep blue `#0D47A1`, fills and bars the mid blue; the nine per-page accents (and the `[data-accent]` mechanism) are gone.
+- **The 3-D viewport and everything laid over it stay dark** (`.stage3d`, `.darkzone`, and the fact card while it floats over the stage), by scoping the dark tokens instead of maintaining two stylesheets. This is the part of the output page that was called out as looking good; the light chrome sits around it.
+- Status colours (green / amber / red) and Zone 1/2/3 keep their meanings; status colours are darker variants so they hold 4.5:1 on white and on their own tints.
+- **The hero was reworked, not recoloured:** it used additive blending, which disappears on a light ground. Now normal blending, with the ramp running pale → mid → deep blue so the summit is darkest; geometry unchanged.
+**Verified:** contrast over 30 pairs (ink / muted / faint on all four surfaces, accent text, white on the accent button, every status colour on its tint, white and page) — four missed 4.5:1 (`--faint`, `--ok`) and were darkened; all pass. Landing and output pages inspected at 1440 px: no console problems.
+**Not done here:** the flow itself (S2). The old wizard, quality report and landing sections are still present in this commit, now in light colours.
+**Next:** S2 — flow restructure.
+

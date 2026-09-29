@@ -1,57 +1,40 @@
-/* Single-pass drone 3D — demo console. One dark theme; a stage accent per page.
+/* Single-pass drone 3D. Light product chrome on the palette below; the 3-D viewport stays dark (see .stage3d).
+   Palette: #E3F2FD · #90CAF9 · #2196F3 · #0D47A1.
    Reserved meanings (never reuse these hues for decoration):
      status  green = met · amber = near target · red = below target · grey = recorded
      zones   Zone 1 #29a645 · Zone 2 #e8a521 · Zone 3 #d93838 (set in app.js, legends match) */
 :root {
+  color-scheme: light;
+  --pal-1: #E3F2FD; --pal-2: #90CAF9; --pal-3: #2196F3; --pal-4: #0D47A1;
+  --bg: #E3F2FD; --bg-2: #CFE6FA; --panel: #FFFFFF; --panel-2: #F3F9FE;
+  --ink: #0B1F3A; --muted: #3B5573; --faint: #46617F; --line: #B4D2EE; --line-2: #D6E7F7;
+
+  /* status: reserved. Darker than the dark theme's so they hold 4.5:1 on white and on their own tint */
+  --ok: #17702F; --warn: #8A5A00; --bad: #C62828; --info: #3B5573;
+  --ok-bg: #DDF3E3; --warn-bg: #FFF0C7; --bad-bg: #FDE2E2; --info-bg: #E4EEF8;
+
+  /* one accent family, straight from the palette: text and emphasis use the deep blue, fills and bars the mid blue */
+  --accent: var(--pal-4); --accent-fill: var(--pal-3); --accent-soft: #E7F2FD; --accent-line: var(--pal-2);
+  --accent-ink: #FFFFFF;
+  --s-home: var(--pal-4);
+
+  --shadow: 0 1px 2px rgba(13,71,161,.08), 0 8px 24px rgba(13,71,161,.10);
+  --shadow-lg: 0 2px 6px rgba(13,71,161,.12), 0 18px 48px rgba(13,71,161,.18);
+  --r: 12px; --r-sm: 8px; --head-h: 56px;
+}
+/* The viewport and everything laid over it keep the dark tokens: a textured model reads best on a dark ground,
+   which is why CAD and GIS tools do the same. */
+.stage3d, .darkzone {
   color-scheme: dark;
   --bg: #070b14; --bg-2: #0a1120; --panel: #0e1524; --panel-2: #121b2e;
   --ink: #e8edf7; --muted: #a3b0c7; --faint: #8592ab; --line: #22304d; --line-2: #182238;
-
-  /* status — reserved */
   --ok: #3fb950; --warn: #d29922; --bad: #f85149; --info: #a3b0c7;
   --ok-bg: #12261a; --warn-bg: #2a2310; --bad-bg: #2d1414; --info-bg: #1a2233;
-
-  /* stage accents — cool / violet / teal range, clear of the status and zone hues */
-  --s-home: #38bdf8;      --s-input: #60a5fa;    --s-check: #818cf8;
-  --s-ingest: #22d3ee;    --s-condition: #a78bfa; --s-recon: #e879f9;
-  --s-fusion: #2dd4bf;    --s-geo: #7dd3fc;      --s-export: #c4b5fd;
-  --s-home-soft: color-mix(in srgb, var(--s-home) 12%, var(--panel));
-  --s-input-soft: color-mix(in srgb, var(--s-input) 12%, var(--panel));
-  --s-check-soft: color-mix(in srgb, var(--s-check) 12%, var(--panel));
-  --s-ingest-soft: color-mix(in srgb, var(--s-ingest) 12%, var(--panel));
-  --s-condition-soft: color-mix(in srgb, var(--s-condition) 12%, var(--panel));
-  --s-recon-soft: color-mix(in srgb, var(--s-recon) 12%, var(--panel));
-  --s-fusion-soft: color-mix(in srgb, var(--s-fusion) 12%, var(--panel));
-  --s-geo-soft: color-mix(in srgb, var(--s-geo) 12%, var(--panel));
-  --s-export-soft: color-mix(in srgb, var(--s-export) 12%, var(--panel));
-  --s-home-line: color-mix(in srgb, var(--s-home) 40%, var(--panel));
-  --s-input-line: color-mix(in srgb, var(--s-input) 40%, var(--panel));
-  --s-check-line: color-mix(in srgb, var(--s-check) 40%, var(--panel));
-  --s-ingest-line: color-mix(in srgb, var(--s-ingest) 40%, var(--panel));
-  --s-condition-line: color-mix(in srgb, var(--s-condition) 40%, var(--panel));
-  --s-recon-line: color-mix(in srgb, var(--s-recon) 40%, var(--panel));
-  --s-fusion-line: color-mix(in srgb, var(--s-fusion) 40%, var(--panel));
-  --s-geo-line: color-mix(in srgb, var(--s-geo) 40%, var(--panel));
-  --s-export-line: color-mix(in srgb, var(--s-export) 40%, var(--panel));
-
-  /* the page accent: everything accent-coloured reads these three */
-  --accent: var(--s-home); --accent-soft: var(--s-home-soft); --accent-line: var(--s-home-line);
-  --accent-ink: #04101c;
-
+  --accent: #38bdf8; --accent-fill: #38bdf8; --accent-soft: #12283c; --accent-line: #1e5776; --accent-ink: #04101c;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.45);
   --shadow-lg: 0 2px 6px rgba(0,0,0,.5), 0 18px 48px rgba(0,0,0,.6);
-  --r: 12px; --r-sm: 8px; --head-h: 56px;
+  color: var(--ink);
 }
-/* Setting data-accent on <main>, a section or a single element rebinds the page accent. */
-[data-accent="home"]      { --accent: var(--s-home);      --accent-soft: var(--s-home-soft);      --accent-line: var(--s-home-line); }
-[data-accent="input"]     { --accent: var(--s-input);     --accent-soft: var(--s-input-soft);     --accent-line: var(--s-input-line); }
-[data-accent="check"]     { --accent: var(--s-check);     --accent-soft: var(--s-check-soft);     --accent-line: var(--s-check-line); }
-[data-accent="ingest"]    { --accent: var(--s-ingest);    --accent-soft: var(--s-ingest-soft);    --accent-line: var(--s-ingest-line); }
-[data-accent="condition"] { --accent: var(--s-condition); --accent-soft: var(--s-condition-soft); --accent-line: var(--s-condition-line); }
-[data-accent="recon"]     { --accent: var(--s-recon);     --accent-soft: var(--s-recon-soft);     --accent-line: var(--s-recon-line); }
-[data-accent="fusion"]    { --accent: var(--s-fusion);    --accent-soft: var(--s-fusion-soft);    --accent-line: var(--s-fusion-line); }
-[data-accent="geo"]       { --accent: var(--s-geo);       --accent-soft: var(--s-geo-soft);       --accent-line: var(--s-geo-line); }
-[data-accent="export"]    { --accent: var(--s-export);    --accent-soft: var(--s-export-soft);    --accent-line: var(--s-export-line); }
 
 * { box-sizing: border-box; }
 /* An explicit `display` in any rule below would otherwise beat the `hidden` attribute. */
@@ -59,7 +42,7 @@
 html, body { height: 100%; }
 body {
   margin: 0; background-color: var(--bg); color: var(--ink);
-  background-image: radial-gradient(1100px 420px at 50% -180px, color-mix(in srgb, var(--s-home) 9%, transparent), transparent);
+  background-image: radial-gradient(1100px 420px at 50% -180px, color-mix(in srgb, var(--pal-3) 16%, transparent), transparent);
   background-repeat: no-repeat;
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -80,8 +63,8 @@ header.top {
 .top-in { max-width: 1420px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 18px; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand .dot { width: 26px; height: 26px; border-radius: 7px; flex: none;
-  background: linear-gradient(135deg, var(--s-home), color-mix(in srgb, var(--s-home) 45%, #6d5cf0));
-  box-shadow: 0 0 18px color-mix(in srgb, var(--s-home) 45%, transparent); }
+  background: linear-gradient(135deg, var(--pal-3), var(--pal-4));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--pal-4) 30%, transparent); }
 .brand b { font-size: 15px; white-space: nowrap; }
 .brand span { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 @media (max-width: 860px) { .brand span { display: none; } }
@@ -163,7 +146,7 @@ body[data-view="home"] .runswitch { display: none; }
 .progress .seg { display: block; height: 6px; border-radius: 3px; border: 1px solid var(--accent-line); background: transparent; }
 .progress li.done .seg { background: var(--accent); border-color: var(--accent); }
 .progress li.current .seg { background: var(--accent); border-color: var(--accent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-fill) 55%, transparent); }
 .progress .lbl { display: flex; align-items: flex-start; gap: 6px; margin-top: 7px; font-size: 12px; font-weight: 650; line-height: 1.25; }
 .progress .lbl .t { min-width: 0; overflow-wrap: anywhere; }
 .progress .lbl i { padding-top: 1px; }
@@ -189,13 +172,13 @@ a.brand { color: inherit; text-decoration: none; }
 .hero { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: clamp(20px, 4vw, 60px);
   align-items: center; min-height: calc(100vh - var(--head-h) - 110px); }
 .hero-viz { position: relative; aspect-ratio: 1 / .9; max-height: 660px; width: 100%; border-radius: 20px; overflow: hidden;
-  background: radial-gradient(ellipse 70% 58% at 50% 62%, color-mix(in srgb, var(--s-home) 13%, transparent), transparent 72%); }
+  background: radial-gradient(ellipse 70% 58% at 50% 62%, color-mix(in srgb, var(--pal-2) 38%, transparent), transparent 72%); }
 .hero-viz canvas, .hero-fallback { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hero-cap { position: absolute; left: 14px; bottom: 10px; z-index: 2; color: var(--faint); font-size: 11.5px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .04em; text-transform: uppercase; }
 .hero-copy .eyebrow { color: var(--accent); font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .hero h1 { font-size: clamp(30px, 4.3vw, 52px); line-height: 1.08; letter-spacing: -.022em; margin: 10px 0 16px; font-weight: 750; }
-.hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--s-home), #a5b4fc);
+.hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--pal-4), #1976D2);
   -webkit-background-clip: text; background-clip: text; color: transparent; }
 .hero-copy > p { color: var(--muted); font-size: 15.5px; max-width: 58ch; margin: 0 0 18px; }
 .hero-copy .chips { margin-bottom: 22px; }
@@ -336,7 +319,7 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .runcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: var(--accent-line); }
 .runcard .thumb { height: 128px; position: relative; display: grid; place-items: center; overflow: hidden;
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, var(--bg-2)), var(--bg-2)); }
-.runcard .thumb img { width: 100%; height: 100%; object-fit: cover; filter: drop-shadow(0 2px 8px rgba(0,0,0,.35)); }
+.runcard .thumb img { width: 100%; height: 100%; object-fit: cover;  }
 .runcard .thumb .badge { position: absolute; left: 10px; top: 10px; }
 .runcard .body { padding: 13px 15px 15px; }
 .runcard h4 { font-size: 15.5px; }
@@ -397,7 +380,7 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .float.br { right: auto; left: 12px; bottom: auto; top: 62px; } .legend { max-width: calc(100% - 24px); } }
 /* one family for every overlay: mode bar, legend, HUD, raster info and the fact card */
 .glass { background: color-mix(in srgb, var(--panel) 80%, transparent); backdrop-filter: blur(12px) saturate(160%);
-  border: 1px solid var(--accent-line); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.42); padding: 9px 11px; }
+  border: 1px solid var(--accent-line); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.30); padding: 9px 11px; }
 .segbar { display: flex; gap: 3px; padding: 4px; }
 .segbar button { padding: 5px 11px; border: none; background: none; color: var(--muted); border-radius: 7px;
   cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 650; }
@@ -433,6 +416,8 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .side { display: grid; gap: 12px; margin-top: 12px; }
 @media (min-width: 1100px) {
   .side { position: absolute; top: 12px; right: 12px; width: 332px; margin: 0; max-height: calc(var(--stage-h) - 100px); overflow: auto; z-index: 6; }
+  .side { color-scheme: dark; --panel: #0e1524; --panel-2: #121b2e; --ink: #e8edf7; --muted: #a3b0c7; --faint: #8592ab; --line: #22304d; --line-2: #182238;
+    --ok: #3fb950; --ok-bg: #12261a; --accent: #38bdf8; --accent-soft: #12283c; --accent-line: #1e5776; color: var(--ink); }
 }
 .factcard { padding: 12px 14px 8px; }
 .fhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -451,7 +436,7 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 
 /* ---------- QA slide-over ---------- */
-.scrim { position: fixed; inset: 0; background: rgba(2,4,10,.62); backdrop-filter: blur(2px);
+.scrim { position: fixed; inset: 0; background: rgba(11,31,58,.45); backdrop-filter: blur(2px);
   z-index: 70; opacity: 0; pointer-events: none; transition: .25s; }
 .scrim.on { opacity: 1; pointer-events: auto; }
 .qa {

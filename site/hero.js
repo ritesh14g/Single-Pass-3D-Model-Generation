@@ -12,7 +12,7 @@ import * as THREE from 'three';
 
 const NX = 44, NZ = 32;                                   // node grid: ~1,400 nodes
 const WORLD = { x: 1.7, z: 1.25, y: 1.15 };               // half-width, half-depth, peak height
-const RAMP = ['#1b3a8f', '#38bdf8', '#eaf6ff'];           // valley → slope → peak
+const RAMP = ['#90CAF9', '#2196F3', '#0D47A1'];           // valley → slope → peak, straight from the palette; darkest at the summit so it reads on a light ground
 
 // deterministic value noise, so the ridge is identical on every load
 const hash = (i, j) => { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) ^ 0x5bd1e995; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -75,7 +75,7 @@ function sprite() {
   return new THREE.CanvasTexture(c);
 }
 
-const additive = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false };
+const additive = { transparent: true, blending: THREE.NormalBlending, depthWrite: false };   // additive light vanishes on a light ground
 function circle(radius, segs = 128) {
   const p = []; for (let k = 0; k < segs; k++) { const a = (k / segs) * Math.PI * 2; p.push(new THREE.Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius)); }
   return new THREE.BufferGeometry().setFromPoints(p);
@@ -101,35 +101,35 @@ export function createHero(host, fallback) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(t.pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(t.col, 3));
   const lineGeo = geo.clone(); lineGeo.setIndex(t.idx);
-  const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: 0.22, ...additive }));
+  const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: 0.5, ...additive }));
   const map = sprite();
-  const nodes = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.085, map, vertexColors: true, sizeAttenuation: true, opacity: 0.95, ...additive }));
-  world.add(lines, nodes); fade.push([lines.material, 0.22], [nodes.material, 0.95]);
+  const nodes = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.085, map, vertexColors: true, sizeAttenuation: true, opacity: 1, ...additive }));
+  world.add(lines, nodes); fade.push([lines.material, 0.5], [nodes.material, 1]);
 
   // graticule on the ground plane: two rings, compass ticks, and a faint meridian arc over the ridge
-  const ink = new THREE.Color('#7dd3fc');
-  [[2.1, 0.22], [2.65, 0.14]].forEach(([r, o]) => {
+  const ink = new THREE.Color('#1565C0');
+  [[2.1, 0.5], [2.65, 0.3]].forEach(([r, o]) => {
     const m = new THREE.LineBasicMaterial({ color: ink, opacity: o, ...additive }); world.add(new THREE.LineLoop(circle(r), m)); fade.push([m, o]);
   });
   const ticks = []; for (let k = 0; k < 36; k++) { const a = (k / 36) * Math.PI * 2, r0 = 2.65, r1 = k % 9 === 0 ? 2.95 : 2.8;
     ticks.push(new THREE.Vector3(Math.cos(a) * r0, 0, Math.sin(a) * r0), new THREE.Vector3(Math.cos(a) * r1, 0, Math.sin(a) * r1)); }
-  const tickMat = new THREE.LineBasicMaterial({ color: ink, opacity: 0.3, ...additive });
-  world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), tickMat)); fade.push([tickMat, 0.3]);
+  const tickMat = new THREE.LineBasicMaterial({ color: ink, opacity: 0.55, ...additive });
+  world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), tickMat)); fade.push([tickMat, 0.55]);
   const arc = []; for (let k = 0; k <= 64; k++) { const a = (k / 64) * Math.PI; arc.push(new THREE.Vector3(0, Math.sin(a) * 1.95, Math.cos(a) * 2.65)); }
-  const arcGeo = new THREE.BufferGeometry().setFromPoints(arc), arcMat = new THREE.LineDashedMaterial({ color: ink, dashSize: 0.07, gapSize: 0.06, opacity: 0.2, ...additive });
-  const meridian = new THREE.Line(arcGeo, arcMat); meridian.computeLineDistances(); world.add(meridian); fade.push([arcMat, 0.2]);
+  const arcGeo = new THREE.BufferGeometry().setFromPoints(arc), arcMat = new THREE.LineDashedMaterial({ color: ink, dashSize: 0.07, gapSize: 0.06, opacity: 0.55, ...additive });
+  const meridian = new THREE.Line(arcGeo, arcMat); meridian.computeLineDistances(); world.add(meridian); fade.push([arcMat, 0.55]);
 
   // geolocation marker on the saddle: beam, spinning head, anchored ring, two pulsing rings
   const marker = new THREE.Group(); marker.position.copy(t.marker); world.add(marker);
-  const beamMat = new THREE.MeshBasicMaterial({ color: '#7dd3fc', opacity: 0.7, ...additive });
+  const beamMat = new THREE.MeshBasicMaterial({ color: '#0D47A1', opacity: 0.85, ...additive });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.95, 8), beamMat); beam.position.y = 0.475; marker.add(beam);
-  const headMat = new THREE.MeshBasicMaterial({ color: '#e0f2fe' });
+  const headMat = new THREE.MeshBasicMaterial({ color: '#0D47A1' });
   const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.075), headMat); head.position.y = 1.0; marker.add(head);
   const ringGeo = new THREE.RingGeometry(0.16, 0.178, 64);
-  const mkRing = (o) => { const m = new THREE.MeshBasicMaterial({ color: '#bae6fd', opacity: o, side: THREE.DoubleSide, depthTest: false, ...additive });
+  const mkRing = (o) => { const m = new THREE.MeshBasicMaterial({ color: '#1976D2', opacity: o, side: THREE.DoubleSide, depthTest: false, ...additive });
     const r = new THREE.Mesh(ringGeo, m); r.rotation.x = -Math.PI / 2; r.position.y = 0.012; r.renderOrder = 5; marker.add(r); return r; };
-  const still = mkRing(0.45), pulseA = mkRing(0.9), pulseB = mkRing(0.9);
-  fade.push([beamMat, 0.7], [still.material, 0.45]);
+  const still = mkRing(0.8), pulseA = mkRing(0.95), pulseB = mkRing(0.95);
+  fade.push([beamMat, 0.85], [still.material, 0.8]);
 
   const basePulse = { a: pulseA.material.opacity, b: pulseB.material.opacity };
   let intro = reduced ? 1 : 0, active = false, visible = true, lost = false, raf = false;
