@@ -7,8 +7,9 @@
 import { esc, num, clock, val, mb } from './ui.js';
 
 const ZONE = { 1: '#29a645', 2: '#e8a521', 3: '#d93838' };            // reserved: the same zone colours as the viewers and legends
-const POS = '#1565C0', NEG = '#C2410C';                               // diverging poles (validated: dE 32 normal / 25 protan against each other)
-const GRAY = '#7A8FA6';                                               // de-emphasis
+// Colours are CSS variables (styles.css), so an open dialog re-themes live. Validated pairs: light #1565C0 / #C2410C, dark #3D8BE0 / #D9692A.
+const POS = 'var(--c-pos)', NEG = 'var(--c-neg)';                    // diverging poles
+const GRAY = 'var(--c-gray)';                                         // de-emphasis
 const W = 640;
 
 const kpi = (d, proc, key) => (d.processes || []).find((p) => p.process === proc)?.kpis.find((k) => k.key === key);
@@ -72,11 +73,11 @@ function bench(d) {
   const peak = Math.max(...kinds.flatMap((k) => [dev(by[k].on), dev(by[k].off)]).filter((v) => v != null), 1);
   const bar = (r, c, lab) => { const v = dev(r); return `<div class="gb"><div class="track"><i style="width:${v == null ? 0 : Math.max((v / peak) * 100, 1.2)}%;background:${c}"></i></div><div class="val">${v == null ? 'n/a' : `${fmt(v, 1)} m`}</div></div>`; };
   const rows = kinds.map((k) => `<div class="gpair" data-tip="${esc(`${NAME[k]}. Cleanup on: ${fmt(dev(by[k].on), 1)} m, ${by[k].on?.registered ?? '—'} frames placed. Cleanup off: ${fmt(dev(by[k].off), 1)} m, ${by[k].off?.registered ?? '—'} frames placed.`)}">` +
-    `<div class="lbl">${esc(NAME[k])}</div><div class="gbars">${bar(by[k].on, '#0D47A1')}${bar(by[k].off, GRAY)}</div></div>`).join('');
+    `<div class="lbl">${esc(NAME[k])}</div><div class="gbars">${bar(by[k].on, 'var(--c-on)')}${bar(by[k].off, GRAY)}</div></div>`).join('');
   const base = b.rows.find((r) => r.kind === 'clean');
   return card('Cleanup on and off, on damaged footage', `Same flight re-run with damage injected (${(b.severities || []).join(', ')}). Bars show how far the camera path moved from the undamaged run; shorter is better.${base ? ` Undamaged baseline: ${base.registered} frames placed.` : ''}`,
     rows, miniTable(['Damage', 'Cleanup on (m)', 'Cleanup off (m)', 'Frames placed on / off'], kinds.map((k) => [NAME[k], fmt(dev(by[k].on), 1), fmt(dev(by[k].off), 1), `${by[k].on?.registered ?? '—'} / ${by[k].off?.registered ?? '—'}`])),
-    legend([['#0D47A1', 'Cleanup on'], [GRAY, 'Cleanup off']]));
+    legend([['var(--c-on)', 'Cleanup on'], [GRAY, 'Cleanup off']]));
 }
 
 // ── one continuous series as a line: camera residual along the flight ──────────────────
@@ -92,10 +93,10 @@ function residualLine(res, target) {
   const pts = f.map((r, i) => ({ x: x(i), y: y(r[1]), tip: `${r[0].replace(/\.jpg$/, '')} · ${fmt(r[1], 2)} m${r[2] ? '' : ' · not used in the fit'}` }));
   const svg = `<svg class="vsvg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Camera residual against the GPS track along the flight, from ${fmt(ys[0], 1)} to ${fmt(last[1], 1)} metres" data-line='${JSON.stringify(pts).replace(/'/g, '&#39;')}'>
     ${ticks}<line class="gl ref" x1="${L}" x2="${W - R}" y1="${y(target)}" y2="${y(target)}"/><text class="ax ref" x="${W - R + 6}" y="${y(target) + 4}">${target} m target</text>
-    <path d="${area}" fill="#2196F3" fill-opacity=".10"/><path d="${line}" fill="none" stroke="#0D47A1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${x(f.length - 1)}" cy="${y(last[1])}" r="5" fill="#0D47A1" stroke="var(--panel)" stroke-width="2"/><text class="ax end" x="${x(f.length - 1) + 10}" y="${y(last[1]) - 8}">${fmt(last[1], 1)} m</text>
+    <path d="${area}" fill="var(--c-area)" fill-opacity=".10"/><path d="${line}" fill="none" stroke="var(--c-line)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(f.length - 1)}" cy="${y(last[1])}" r="5" fill="var(--c-line)" stroke="var(--panel)" stroke-width="2"/><text class="ax end" x="${x(f.length - 1) + 10}" y="${y(last[1]) - 8}">${fmt(last[1], 1)} m</text>
     <text class="ax" x="${L}" y="${H - 6}">first frame</text><text class="ax" x="${W - R}" y="${H - 6}" text-anchor="end">last frame</text>
-    <line class="xh" x1="0" x2="0" y1="${T}" y2="${T + ih}" hidden/><circle class="xd" r="5" fill="#0D47A1" stroke="var(--panel)" stroke-width="2" hidden/><rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent"/></svg>`;
+    <line class="xh" x1="0" x2="0" y1="${T}" y2="${T + ih}" hidden/><circle class="xd" r="5" fill="var(--c-line)" stroke="var(--panel)" stroke-width="2" hidden/><rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent"/></svg>`;
   return card('Camera position against the GPS track, along the flight', `How far each camera sits from the GPS track after the fit, in flight order (${res.count} cameras). Where the line is high, the reconstructed path and the GPS disagree most.`,
     svg, miniTable(['Frame', 'Residual (m)', 'Used in the fit'], f.map((r) => [r[0].replace(/\.jpg$/, ''), fmt(r[1], 2), r[2] ? 'yes' : 'no'])));
 }
@@ -140,10 +141,10 @@ export function forecastChart(d, rows) {                  // rows: [{ label, mea
   const peak = Math.max(...rows.flatMap((r) => [r.measured, r.forecast, r.budget || 0]), 1);
   const bar = (v, c) => `<div class="gb"><div class="track"><i style="width:${Math.max((v / peak) * 100, 0.8)}%;background:${c}"></i></div><div class="val">${clock(v)}</div></div>`;
   const body = rows.map((r) => `<div class="gpair" data-tip="${esc(`${r.label}. Measured ${clock(r.measured)}, forecast ${clock(r.forecast)}${r.budget ? `, allowance ${clock(r.budget)}` : ''}.`)}">` +
-    `<div class="lbl">${esc(r.label)}</div><div class="gbars"><div class="gbw">${bar(r.forecast, '#0D47A1')}${r.budget ? `<b class="bmark" style="left:${(r.budget / peak) * 100}%" title="allowance ${esc(clock(r.budget))}"></b>` : ''}</div>${bar(r.measured, GRAY)}</div></div>`).join('');
+    `<div class="lbl">${esc(r.label)}</div><div class="gbars"><div class="gbw">${bar(r.forecast, 'var(--c-on)')}${r.budget ? `<b class="bmark" style="left:${(r.budget / peak) * 100}%" title="allowance ${esc(clock(r.budget))}"></b>` : ''}</div>${bar(r.measured, GRAY)}</div></div>`).join('');
   return card('Measured against the forecast, by stage', 'Bars share one time axis. The tick on each forecast bar is the time that stage is allowed in a 15-minute run.', body,
     miniTable(['Stage', 'Measured', 'Forecast (10 min)', 'Allowance'], rows.map((r) => [r.label, clock(r.measured), clock(r.forecast), r.budget ? clock(r.budget) : '—'])),
-    legend([['#0D47A1', 'Forecast for a 10-minute video'], [GRAY, 'Measured on this flight']]));
+    legend([['var(--c-on)', 'Forecast for a 10-minute video'], [GRAY, 'Measured on this flight']]));
 }
 
 // ── assembly ───────────────────────────────────────────────────────────────────────────
@@ -151,7 +152,7 @@ export function stageViz(d, id, extra = {}) {
   const cards = [];
   if (id === 'check') {
     const c = { pass: 0, warn: 0, fail: 0, info: 0 }; (d.input_check?.checks || []).forEach((x) => { c[x.status] = (c[x.status] || 0) + 1; });
-    cards.push(stack([['Met', c.pass, '#17702F'], ['Near target', c.warn, '#B7791F'], ['Below target', c.fail, '#C62828'], ['Recorded', c.info, GRAY]], 'Input checks by result', 'Every check the file went through before any compute was spent.'));
+    cards.push(stack([['Met', c.pass, 'var(--ok)'], ['Near target', c.warn, 'var(--warn)'], ['Below target', c.fail, 'var(--bad)'], ['Recorded', c.info, GRAY]], 'Input checks by result', 'Every check the file went through before any compute was spent.'));
     const s = d.input_check?.sync;
     if (s?.r_best != null) cards.push(card('Video and GPS agreement', 'How well the motion seen in the image tracks the ground speed the GPS reports.', `<div class="meter"><div class="lbl">Agreement</div><div class="track"><i class="fill pass" style="width:${Math.round(s.r_best * 100)}%"></i></div><div class="val">${Math.round(s.r_best * 100)}%</div><div class="tgt">read at a ${fmt(s.lag_s, 2)} s offset, applied automatically</div></div>`));
   } else if (id === 'ingest') {

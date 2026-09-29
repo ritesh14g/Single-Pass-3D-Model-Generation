@@ -12,7 +12,13 @@ import * as THREE from 'three';
 
 const NX = 44, NZ = 32;                                   // node grid: ~1,400 nodes
 const WORLD = { x: 1.7, z: 1.25, y: 1.15 };               // half-width, half-depth, peak height
-const RAMP = ['#90CAF9', '#2196F3', '#0D47A1'];           // valley → slope → peak, straight from the palette; darkest at the summit so it reads on a light ground
+// Two looks for the same terrain. Light: normal blending and a pale-to-deep ramp, darkest at the summit, so it reads on a pale ground.
+// Dark: additive light and a deep-to-bright ramp, so the nodes glow on a dark one.
+const THEMES = {
+  light: { ramp: ['#90CAF9', '#2196F3', '#0D47A1'], blend: THREE.NormalBlending, lines: 0.5, nodes: 1, ring: [0.5, 0.3], ticks: 0.55, arc: 0.55, ink: '#1565C0', beam: ['#0D47A1', 0.85], head: '#0D47A1', still: ['#1976D2', 0.8], pulse: 0.95 },
+  dark: { ramp: ['#1b3a8f', '#38bdf8', '#eaf6ff'], blend: THREE.AdditiveBlending, lines: 0.22, nodes: 0.95, ring: [0.22, 0.14], ticks: 0.3, arc: 0.2, ink: '#7dd3fc', beam: ['#7dd3fc', 0.7], head: '#e0f2fe', still: ['#bae6fd', 0.45], pulse: 0.9 },
+};
+const themeName = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
 
 // deterministic value noise, so the ridge is identical on every load
 const hash = (i, j) => { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) ^ 0x5bd1e995; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -34,7 +40,7 @@ function rawHeight(x, z) {                                // x, z in [-1, 1]
 }
 
 function terrain() {
-  const pos = new Float32Array(NX * NZ * 3), col = new Float32Array(NX * NZ * 3), raw = new Float32Array(NX * NZ);
+  const pos = new Float32Array(NX * NZ * 3), col = new Float32Array(NX * NZ * 3), raw = new Float32Array(NX * NZ), ts = new Float32Array(NX * NZ);
   const xs = new Float32Array(NX * NZ), zs = new Float32Array(NX * NZ);
   let lo = Infinity, hi = -Infinity;
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
@@ -43,11 +49,9 @@ function terrain() {
     xs[n] = -1 + 2 * (i + jx) / (NX - 1); zs[n] = -1 + 2 * (j + jz) / (NZ - 1);
     raw[n] = rawHeight(xs[n], zs[n]); lo = Math.min(lo, raw[n]); hi = Math.max(hi, raw[n]);
   }
-  const ramp = RAMP.map((c) => new THREE.Color(c)), tmp = new THREE.Color();
-  for (let n = 0; n < NX * NZ; n++) {
-    const t = (raw[n] - lo) / (hi - lo);
-    if (t < 0.55) tmp.copy(ramp[0]).lerp(ramp[1], t / 0.55); else tmp.copy(ramp[1]).lerp(ramp[2], (t - 0.55) / 0.45);
-    pos.set([xs[n] * WORLD.x, t * WORLD.y, zs[n] * WORLD.z], n * 3); col.set([tmp.r, tmp.g, tmp.b], n * 3);
+  for (let n = 0; n < NX * NZ; n++) {                       // colours are painted per theme (applyTheme); here only the normalised height is kept
+    const t = (raw[n] - lo) / (hi - lo); ts[n] = t;
+    pos.set([xs[n] * WORLD.x, t * WORLD.y, zs[n] * WORLD.z], n * 3);
   }
   const idx = [];
   for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
@@ -64,7 +68,7 @@ function terrain() {
   }
   const sx = PEAK[0] + (SECOND[0] - PEAK[0]) * saddle.t, sz = PEAK[1] + (SECOND[1] - PEAK[1]) * saddle.t;
   const marker = new THREE.Vector3(sx * WORLD.x, ((saddle.h - lo) / (hi - lo)) * WORLD.y, sz * WORLD.z);
-  return { pos, col, idx, marker };
+  return { pos, col, ts, idx, marker };
 }
 
 function sprite() {
@@ -87,7 +91,7 @@ export function createHero(host, fallback) {
   const showFallback = () => { host.querySelector('canvas')?.setAttribute('hidden', ''); fallback?.removeAttribute('hidden'); };
   let renderer;
   try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' }); }
-  catch { showFallback(); return { setActive() {}, dispose() {} }; }
+  catch { showFallback(); return { setActive() {}, setTheme() {}, dispose() {} }; }
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
   renderer.setClearColor(0x000000, 0);
   host.prepend(renderer.domElement);
@@ -97,41 +101,60 @@ export function createHero(host, fallback) {
   const wrap = new THREE.Group(), world = new THREE.Group();
   wrap.add(world); scene.add(wrap);
 
-  const t = terrain(), fade = [];                                     // fade: [material, base opacity]
+  const t = terrain(), fade = [], E = {};                              // fade: [material, base opacity]; E names the entries a theme changes
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(t.pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(t.col, 3));
   const lineGeo = geo.clone(); lineGeo.setIndex(t.idx);
-  const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: 0.5, ...additive }));
+  const reg = (name, m) => { const e = [m, 1]; E[name] = e; fade.push(e); return m; };
+  const lines = new THREE.LineSegments(lineGeo, reg('lines', new THREE.LineBasicMaterial({ vertexColors: true, ...additive })));
   const map = sprite();
-  const nodes = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.085, map, vertexColors: true, sizeAttenuation: true, opacity: 1, ...additive }));
-  world.add(lines, nodes); fade.push([lines.material, 0.5], [nodes.material, 1]);
+  const nodes = new THREE.Points(geo, reg('nodes', new THREE.PointsMaterial({ size: 0.085, map, vertexColors: true, sizeAttenuation: true, ...additive })));
+  world.add(lines, nodes);
 
   // graticule on the ground plane: two rings, compass ticks, and a faint meridian arc over the ridge
-  const ink = new THREE.Color('#1565C0');
-  [[2.1, 0.5], [2.65, 0.3]].forEach(([r, o]) => {
-    const m = new THREE.LineBasicMaterial({ color: ink, opacity: o, ...additive }); world.add(new THREE.LineLoop(circle(r), m)); fade.push([m, o]);
+  const inkMats = [];
+  [[2.1, 'ring0'], [2.65, 'ring1']].forEach(([r, name]) => {
+    const m = reg(name, new THREE.LineBasicMaterial({ color: 0xffffff, ...additive })); inkMats.push(m); world.add(new THREE.LineLoop(circle(r), m));
   });
   const ticks = []; for (let k = 0; k < 36; k++) { const a = (k / 36) * Math.PI * 2, r0 = 2.65, r1 = k % 9 === 0 ? 2.95 : 2.8;
     ticks.push(new THREE.Vector3(Math.cos(a) * r0, 0, Math.sin(a) * r0), new THREE.Vector3(Math.cos(a) * r1, 0, Math.sin(a) * r1)); }
-  const tickMat = new THREE.LineBasicMaterial({ color: ink, opacity: 0.55, ...additive });
-  world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), tickMat)); fade.push([tickMat, 0.55]);
+  const tickMat = reg('ticks', new THREE.LineBasicMaterial({ color: 0xffffff, ...additive })); inkMats.push(tickMat);
+  world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ticks), tickMat));
   const arc = []; for (let k = 0; k <= 64; k++) { const a = (k / 64) * Math.PI; arc.push(new THREE.Vector3(0, Math.sin(a) * 1.95, Math.cos(a) * 2.65)); }
-  const arcGeo = new THREE.BufferGeometry().setFromPoints(arc), arcMat = new THREE.LineDashedMaterial({ color: ink, dashSize: 0.07, gapSize: 0.06, opacity: 0.55, ...additive });
-  const meridian = new THREE.Line(arcGeo, arcMat); meridian.computeLineDistances(); world.add(meridian); fade.push([arcMat, 0.55]);
+  const arcGeo = new THREE.BufferGeometry().setFromPoints(arc), arcMat = reg('arc', new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.07, gapSize: 0.06, ...additive })); inkMats.push(arcMat);
+  const meridian = new THREE.Line(arcGeo, arcMat); meridian.computeLineDistances(); world.add(meridian);
 
   // geolocation marker on the saddle: beam, spinning head, anchored ring, two pulsing rings
   const marker = new THREE.Group(); marker.position.copy(t.marker); world.add(marker);
-  const beamMat = new THREE.MeshBasicMaterial({ color: '#0D47A1', opacity: 0.85, ...additive });
+  const beamMat = reg('beam', new THREE.MeshBasicMaterial({ color: 0xffffff, ...additive }));
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.95, 8), beamMat); beam.position.y = 0.475; marker.add(beam);
-  const headMat = new THREE.MeshBasicMaterial({ color: '#0D47A1' });
+  const headMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.075), headMat); head.position.y = 1.0; marker.add(head);
   const ringGeo = new THREE.RingGeometry(0.16, 0.178, 64);
-  const mkRing = (o) => { const m = new THREE.MeshBasicMaterial({ color: '#1976D2', opacity: o, side: THREE.DoubleSide, depthTest: false, ...additive });
+  const mkRing = () => { const m = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthTest: false, ...additive });
     const r = new THREE.Mesh(ringGeo, m); r.rotation.x = -Math.PI / 2; r.position.y = 0.012; r.renderOrder = 5; marker.add(r); return r; };
-  const still = mkRing(0.8), pulseA = mkRing(0.95), pulseB = mkRing(0.95);
-  fade.push([beamMat, 0.85], [still.material, 0.8]);
+  const still = mkRing(), pulseA = mkRing(), pulseB = mkRing();
+  reg('still', still.material);
 
-  const basePulse = { a: pulseA.material.opacity, b: pulseB.material.opacity };
+  const basePulse = { a: 1, b: 1 };
+  // Recolours the same geometry for a theme, live: vertex colours, every material's colour, base opacity and blending.
+  function applyTheme(name) {
+    const c = THEMES[name], ramp = c.ramp.map((h) => new THREE.Color(h)), tmp = new THREE.Color();
+    for (const attr of [geo.attributes.color, lineGeo.attributes.color]) {
+      for (let n = 0; n < t.ts.length; n++) {
+        const v = t.ts[n];
+        if (v < 0.55) tmp.copy(ramp[0]).lerp(ramp[1], v / 0.55); else tmp.copy(ramp[1]).lerp(ramp[2], (v - 0.55) / 0.45);
+        attr.setXYZ(n, tmp.r, tmp.g, tmp.b);
+      }
+      attr.needsUpdate = true;
+    }
+    E.lines[1] = c.lines; E.nodes[1] = c.nodes; E.ring0[1] = c.ring[0]; E.ring1[1] = c.ring[1]; E.ticks[1] = c.ticks; E.arc[1] = c.arc; E.beam[1] = c.beam[1]; E.still[1] = c.still[1];
+    basePulse.a = basePulse.b = c.pulse;
+    inkMats.forEach((m) => m.color.set(c.ink));
+    beamMat.color.set(c.beam[0]); headMat.color.set(c.head); still.material.color.set(c.still[0]); pulseA.material.color.set(c.still[0]); pulseB.material.color.set(c.still[0]);
+    [lines.material, nodes.material, ...inkMats, beamMat, still.material, pulseA.material, pulseB.material].forEach((m) => { m.blending = c.blend; m.needsUpdate = true; });
+  }
+  applyTheme(themeName());
   let intro = reduced ? 1 : 0, active = false, visible = true, lost = false, raf = false;
   const tilt = { x: 0, y: 0, tx: 0, ty: 0 };
   const rad = (d) => (d * Math.PI) / 180;
@@ -181,6 +204,7 @@ export function createHero(host, fallback) {
 
   return {
     setActive(on) { active = on; if (on) size(); sync(); },
+    setTheme(name) { applyTheme(name); if (reduced && active) frame(performance.now()); },
     dispose() {
       renderer.setAnimationLoop(null); ro.disconnect(); io.disconnect(); document.removeEventListener('visibilitychange', onVis);
       host.removeEventListener('pointermove', onMove); host.removeEventListener('pointerleave', onLeave);

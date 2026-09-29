@@ -37,6 +37,7 @@ async function init() {
   watchHeader();
   buildFlights(state.runs, openFlight);
   wireNav(); wireInput(); wireHome();
+  wireTheme();
   wireGpuPanel(); gpuSheet = makeSheet($('gpu-sheet'));
   $('gpu-open').onclick = () => gpuSheet.open();
   panels = createPanels({ getData: () => state.data, getExtra: loadExtra, onState: (p) => { state.panel = p; syncUrl(true); } });
@@ -50,6 +51,27 @@ async function init() {
   await route();
 }
 let gpuSheet = null, panels = null;
+
+// ── theme ─────────────────────────────────────────────────────────────────────
+// Set before first paint by a small script in <head> (the saved choice, else the system setting). Here: the toggle, and following the
+// system live for as long as nothing has been chosen. The 3-D viewport is dark in both themes.
+const THEME_KEY = 'sp3d.theme';
+const currentTheme = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+function setTheme(name, save) {
+  document.documentElement.dataset.theme = name;
+  if (save) { try { localStorage.setItem(THEME_KEY, name); } catch { /* the choice just will not be remembered */ } }
+  const b = $('theme-toggle'), label = name === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  b.setAttribute('aria-pressed', String(name === 'dark')); b.setAttribute('aria-label', label); b.title = label;
+  hero?.setTheme(name);
+}
+function wireTheme() {
+  $('theme-toggle').onclick = () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark', true);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    let saved = null; try { saved = localStorage.getItem(THEME_KEY); } catch { /* none */ }
+    if (saved !== 'light' && saved !== 'dark') setTheme(e.matches ? 'dark' : 'light', false);
+  });
+  setTheme(currentTheme(), false);
+}
 
 // The sticky header's real height, so anything pinned under it sits flush at any width.
 function watchHeader() {

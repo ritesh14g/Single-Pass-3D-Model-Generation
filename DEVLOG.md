@@ -3298,3 +3298,25 @@ run was allotted 540 s.
 **Not done:** deploy to `gh-pages` (waits for a go-ahead: it publishes to the URL in the SIH deck); the earlier keyboard/accessibility and five-width sweep was run for the previous design and has **not** been repeated for this one beyond the 360 px checks in each stage; `pytest` not re-run (nothing it covers changed); real-GPU frame rates.
 **Live-site note:** the deployed site still has the `num()` bug from the earlier design (whole numbers with zeros stripped) until this is deployed.
 
+### 2026-09-29 — ritesh14g (with Claude) — site v2: dark mode toggle
+**Decisions (asked, answered):** the default is the **system setting**; the **3-D viewport is dark in both themes**.
+**Modified:** `site/index.html`, `site/styles.css`, `site/hero.js`, `site/charts.js`, `site/app.js`.
+**How it works:** the theme is `data-theme` on `<html>`, set by a small inline script in `<head>` **before first paint**: the saved choice if there is one, otherwise the system setting, so there is no flash of the wrong theme. A header toggle (moon in light, sun in dark; `aria-pressed`, a label that says what it will do, keyboard-operable) flips it and saves the choice. Until something is chosen the page **follows the system live**; after a choice it no longer does. Dark uses the original dark token values, which already existed.
+**What had to change, because the light theme had left things hard-coded:**
+- **Charts:** every colour was a literal hex, and `#0D47A1` on a dark surface all but vanishes. They are now CSS variables (`--c-line`, `--c-pos`, `--c-neg`, `--c-on`, `--c-gray`, `--c-area`), so an *open* dialog recolours in place with no redraw. Status stacks use `--ok / --warn / --bad`.
+- **Dark diverging pair:** run through the `dataviz` validator in dark mode. My first picks failed the dark lightness band (OKLCH L 0.48–0.67); `#3D8BE0` / `#D9692A` pass all five checks. (Light stays `#1565C0` / `#C2410C`.)
+- **Hero:** `setTheme()` recolours the same terrain live: vertex colours, every material's colour and base opacity, and blending (additive glow on dark, normal on light). Reduced-motion users get the static frame redrawn.
+- **Small literals:** `#fff` text on badges, the Forecast button and the connector's segmented control, white input fields, the tooltip's ink-on-ink, the page and hero glows.
+**Not changed:** `#stage3d`, `.darkzone` and the floating fact card keep their own scoped dark tokens, so the viewport and its overlays are identical in both themes.
+**Verified** (`scratchpad/v2.mjs theme`, 30 checks, run three times in a row; then S2–S5 re-run under **both** system schemes):
+- system dark / system light: the page is that theme from first paint and **never flips** (a MutationObserver from document start records only the correct value); the toggle shows the right icon.
+- follows the system live both ways when nothing is chosen; a click flips it, updates `aria-pressed` and the label, saves it; a later system change no longer overrides it; the choice **survives a reload against the system's opposite**; toggling back is remembered; works from the keyboard.
+- hero: light shows dark nodes on a pale ground and dark shows bright ones on a dark ground, **switching with no reload**, and light restores.
+- viewport background is dark in both themes; an open chart recolours in place (line and both tile-bar colours match the theme's values).
+- **Text contrast: every visible piece of text (4,000–4,300 per theme) measured against its real composited background, across the landing page, input window, refusal, GPU dialog, output page for GLB / LAS / GeoTIFF, every Metrics stage and Forecast, for both flights: none below 4.5:1 (3:1 for large text), in either theme.** (A first light-mode run flagged the floating fact card at 1.03:1; that was the audit measuring it against the page behind instead of the canvas it floats over; the audit now uses the canvas.)
+- 360 px: with the extra header button, no overlap, nothing outside the viewport, no sideways scroll, in both themes, on landing, input and output.
+- S2, S3, S4, S5 suites pass with the system set to light and to dark; zero console problems.
+**Test-flake note:** a system colour change reaches the page on the next frame (measured 120–320 ms, 18 of 18 flips), so the earlier fixed 300 ms wait sat on the edge and failed intermittently; those checks now wait for the outcome. It was the test, not the site.
+**Incident, fixed:** my test driver left one Chrome profile folder (about 300 MB each, 172 of them, **15 GB**) in the temp directory on every run because it deleted the profile while Chrome was still exiting, and the disk filled. They were deleted (only `cdp-*` folders in `%TEMP%`, after stopping any Chrome using them); the driver now waits for Chrome to exit, retries the delete, and turns off Chrome's disk caches. Verified: a run leaves nothing behind.
+**Not done:** deploy to `gh-pages`; the full keyboard/five-width sweep for the v2 design; real-GPU frame rates; `pytest` (nothing it covers changed).
+

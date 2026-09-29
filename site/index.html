@@ -6,6 +6,13 @@
 <title>Single-Pass Drone 3D</title>
 <meta name="description" content="SIH 2026 PS-17 prototype: a drone video and its position log become a georeferenced 3D model in six formats, with a measured quality report.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f6feb'/><path d='M8 20l8-9 8 9z' fill='white'/></svg>">
+<meta name="color-scheme" content="light dark">
+<script>
+/* The theme is decided before first paint: the saved choice if there is one, otherwise the system setting. */
+(function () { var t; try { t = localStorage.getItem("sp3d.theme"); } catch (e) {}
+  if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t; })();
+</script>
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -23,6 +30,10 @@
       </div>
     </a>
     <div class="top-actions">
+      <button class="btn sm icon theme" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
+        <svg class="i-moon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.5 13.6A8.5 8.5 0 1 1 10.4 3.5a6.8 6.8 0 0 0 10.1 10.1z" fill="currentColor"/></svg>
+        <svg class="i-sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></g></svg>
+      </button>
       <button class="btn sm gpu-btn" id="gpu-open" type="button" hidden><i class="gpu-dot" id="gpu-dot"></i><span>Connect GPU</span></button>
       <button class="btn primary sm" id="metrics-open" type="button" hidden>Metrics</button>
     </div>
