@@ -2923,3 +2923,42 @@ confirmed present. `pytest` not run — nothing under `src/`, `configs/`, `tests
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 1 — dark theme, stage accent tokens, chips / progress / stat components.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 1: dark theme and design system
+**Goal:** one dark palette, nine stage accents, and the shared components later stages need. Existing four
+steps unchanged in structure and copy.
+**Modified:**
+- `site/styles.css` — single dark palette (`color-scheme: dark`, explicit `body` background); the
+  `prefers-color-scheme` block and the light palette are gone. Nine `--s-*` accent tokens, each with `-soft`
+  (12% over the panel) and `-line` (40%) variants. `[data-accent="<page>"]` rebinds `--accent`,
+  `--accent-soft`, `--accent-line` on any element, so every accent-coloured rule recolours itself. New
+  components: `.chips/.chip`, `.progress` (segmented, each `<li>` carries its own `data-accent`), `.statgrid/.stat`,
+  `.kpirow` (shares its rules with `.kpi`). Every existing class kept. Added a global `:focus-visible` ring and a
+  `prefers-reduced-motion` guard on the step animation. `[hidden] { display:none !important }` kept.
+- `site/app.js` — `setBg()` is one dark scene colour (`0x0a1120`, the panel background); helpers `chips`, `stat`,
+  `kpiRow`, `progressBar` added for Stages 3–5 (unused until then). The colour maths (`confColour`,
+  `zoneColour`, `CLASS_COLOUR`, the height ramp) is untouched, so legends still match.
+**Not modified:** `site/index.html`, anything under `src/`, `configs/`, `tests/`, `ui/`.
+**Decisions:**
+- **Reconstruction accent moved from pink `#f472b6` to fuchsia `#e879f9`.** Measured hue distance from the
+  reserved status/zone hues was 31° for the pink (that page shows red "below target" tags beside its accent);
+  fuchsia is 68°. Nearest any accent now comes to a reserved hue: Occlusion teal 39°, Ingest cyan 55°.
+- Two accent pairs are close in hue and rely on their labels and position rather than colour alone: Input-check
+  indigo / Outputs lavender / Conditioning violet (234° / 252° / 255°) and Georeferencing / Landing (199° / 198°).
+  They are never adjacent in the progress bar except Occlusion teal next to Georeferencing pale blue (27° apart,
+  different lightness).
+**Verified:**
+- Contrast, parsed from the tokens in the file (`scratchpad/contrast.py`): all nine accents ≥ 6.2:1 as text on the
+  page, panel and their own `-soft`; ≥ 6.6:1 as a bar fill; button ink on accent ≥ 6.4:1; `--faint` 5.5:1 on
+  the lightest panel; every status colour ≥ 5.1:1 on its own background. 0 failures.
+- Headless Chrome (SwiftShader) against the served build: Input, Input check, Pipeline, Outputs (GLB Esri, LAS
+  DJI) and the QA slide-over all render dark with no page console errors; the loading overlay clears; GLB and LAS
+  load. New components rendered on a scratch page at 1440 px: progress in three states, chips per accent,
+  stat tiles, KPI rows with all four status tags, callout, buttons.
+- `app.js` passes `node --input-type=module --check`.
+**Not verified:** phone width. Headless Chrome will not go below ~500 px, so a 390 px screenshot was a crop, not
+a test; the responsive pass happens in Stage 4 when the bar is live and again in Stage 7. `pytest` not run —
+nothing it covers changed. Not yet deployed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 2 — landing hero (procedural blue node terrain, geolocation marker).

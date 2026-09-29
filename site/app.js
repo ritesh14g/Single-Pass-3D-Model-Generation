@@ -19,6 +19,36 @@ const clock = (s) => s == null ? '—' : (s >= 60 ? `${Math.floor(s / 60)} min $
 const val = (v) => typeof v === 'boolean' ? (v ? 'yes' : 'no') : (typeof v === 'number' ? num(v, 3) : (v == null ? '—' : String(v)));
 const STATUS_WORD = { pass: 'Met', warn: 'Near target', fail: 'Below target', info: 'Recorded' };
 
+// ── shared components (styles.css: .chips, .progress, .statgrid, .kpirow) ─────
+// Return HTML strings or nodes only; nothing here reads or computes a measured value.
+const chips = (list) => `<div class="chips">${list.map((c) => {
+  const [text, tip] = Array.isArray(c) ? c : [c];
+  return `<span class="chip"${tip ? ` title="${esc(tip)}"` : ''}>${esc(text)}</span>`;
+}).join('')}</div>`;
+const stat = (label, value, context) => `<div class="stat"><div class="k">${esc(label)}</div>` +
+  `<div class="v">${esc(value)}</div>${context ? `<div class="c">${esc(context)}</div>` : ''}</div>`;
+const kpiRow = (k) => `<div class="kpirow"><div><div class="lbl">${esc(k.label)}</div>` +
+  `<div class="det">${esc(k.detail || '')}</div></div>` +
+  `<div class="v">${esc(val(k.value))}${k.unit ? ' ' + esc(k.unit) : ''}<div class="tgt">target ${esc(k.target || '—')}</div></div>` +
+  `<div><span class="tag ${esc(k.status)}">${STATUS_WORD[k.status] || ''}</span></div></div>`;
+// steps: [{ id, title, accent? }]; each segment carries its own data-accent so it recolours itself.
+function progressBar(steps, currentId, onPick) {
+  const at = steps.findIndex((s) => s.id === currentId);
+  const nav = el('nav'); nav.className = 'progress'; nav.setAttribute('aria-label', 'Pipeline progress');
+  const ol = el('ol');
+  steps.forEach((s, i) => {
+    const li = el('li', i < at ? 'done' : (i === at ? 'current' : ''));
+    li.dataset.accent = s.accent || s.id;
+    const b = el('button', '', `<span class="seg"></span><span class="lbl"><i>${i + 1}</i>${esc(s.title)}</span>`);
+    b.type = 'button';
+    if (i === at) b.setAttribute('aria-current', 'step');
+    b.onclick = () => onPick(s.id);
+    li.appendChild(b); ol.appendChild(li);
+  });
+  nav.appendChild(ol);
+  return nav;
+}
+
 const state = { runs: [], data: null, step: 0, format: 'glb', qaTab: 'processes', own: {} };
 
 // ── boot ──────────────────────────────────────────────────────────────────────
@@ -448,8 +478,7 @@ function frameObject(obj) {
   c.controls.target.copy(centre); c.controls.update();
 }
 function setBg() {
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  ctx().scene.background = new THREE.Color(dark ? 0x0b0d10 : 0xeeeff1);
+  ctx().scene.background = new THREE.Color(0x0a1120);     // --bg-2, so the canvas meets the panel edge cleanly
 }
 
 function loadMesh(f) {
