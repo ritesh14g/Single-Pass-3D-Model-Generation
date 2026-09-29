@@ -12,6 +12,7 @@ import { createHero } from './hero.js';
 
 import { $, el, esc, mb, num, clock, val, STATUS_WORD, scoreColour, chips, stat, kpiRow, progressBar, RUN_BLURB, RUN_LABEL } from './ui.js';
 import { buildTargets, buildFlights, loadAll } from './landing.js';
+import { buildStagePages } from './stages.js';
 
 const state = { runs: [], data: null, step: 'home', format: 'glb', qaTab: 'processes', own: {} };
 
@@ -249,6 +250,7 @@ async function loadRun(key, advance) {
   state.data = await (await fetch(`runs/${key}/data.json`)).json();
   buildChecks();
   renderStageTimes();
+  buildStagePages(state.data);
   buildFormatBar();
   buildQA();
   paintRunSwitch();

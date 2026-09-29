@@ -3088,3 +3088,48 @@ same three keys from `data.json`; all 59 checks pass.
 **Not touched, but noted:** `src/qa/report.py:272` still compares `track_a` with `track_a_mvs` only, so the
 pipeline's own HTML report shows Esri Reconstruction as "over". That is a pipeline-side inconsistency; UI-only scope,
 so left as is (candidate for the next iteration's issue list).
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 5: content of the six pipeline pages
+**Goal:** every pipeline page states the real techniques, what the stage does in a few lines, the measured
+numbers, one diagnostic, every check grouped by process, and what the stage does not tell you.
+**Created:** `site/stages.js`. **Modified:** `site/app.js` (calls `buildStagePages` on every run load),
+`site/styles.css` (`.does`, `.meter`, `.zonebar`, `.tbar`, `.rbar`, `.viz`, `.sec-h`).
+**Page shape (identical on all six):** technique chips → "What it does" as four short parts (Input / Operation /
+Output / Decision) → four headline numbers → one diagnostic → every process as a collapsible card with its KPI rows
+and its own does / accounts-for / does-not-measure text → one "What this stage does not tell you" callout → pager.
+The Outputs page keeps its viewer exactly where it was: description above it, measured checks below.
+**Diagnostics (all from data already in `data.json`):** Ingest and Conditioning — KPI meters filled to the measured
+share, coloured by the check's own status; Reconstruction — seconds per stage, with this stage highlighted, plus the
+run manifest; Occlusion — the Zone 1 / 2 / 3 stacked bar in the reserved zone colours with gap count and area;
+Georeferencing — horizontal / vertical / all-axes residual against the problem statement's 1 m marker, plus the lidar
+shape table (Esri) or an explicit "No reference survey" (DJI).
+**Decisions:**
+- **Stat labels and context lines are the KPI's own `label` and `detail`.** No meaning is written on the page that the
+  pipeline did not state. The only authored text is technique keywords and the four-part descriptions, which are about
+  the method, not about any run.
+- **Every keyword was checked against the source before it went on a page.** Corrected from the brief: blocking is
+  detected by comparing gradient energy across 8×8 block boundaries with energy inside them (not a DCT) and corrected
+  with a bilateral / guided filter (`src/condition/artifacts.py`); the Laplacian blur measure is in `blur.py`; "MRF
+  texturing" was dropped (nothing in the source states it) in favour of "OpenMVS texturing".
+- **Processes route by name, then by stage label**, so a process added later is shown on its stage's page rather than
+  silently dropped. Georeferencing → geo; Formats and Coverage → Outputs.
+- **Skipped steps are stated, not zeroed.** Both runs' manifests record `track_b` and `refine_ba` as skipped as
+  standalone steps; the page says "Not run as its own step" and that their results are scored inside Track A.
+- Fractions the pipeline reports as 0..1 are shown as percentages (a units conversion of one field; nothing derived).
+**Bug found and fixed:** a KPI the run did not record (DJI has no blockiness reduction: no frame needed correcting)
+rendered as a tile labelled `BLOCKINESS_REDUCTION` with a dash. It now gets a readable label and "Not recorded for this
+run." Large counts get thousands separators.
+**Verified** (`scratchpad/stage5.mjs`, 34 checks, all pass; Stage 2, 3, 4 suites re-run and pass): on both runs every page
+has 7–12 chips, a four-part description, four stats, a filled diagnostic, the callout, and no `undefined` / `NaN`;
+**all 19 processes render exactly once across the six pages, and all 79 KPI rows are present**, for each run; **33
+headline figures found on the pages exactly as `data.json` states them** (expected strings computed independently);
+DJI geo says "No reference survey" and shows no lidar table, Esri geo shows Zone 1 RMS 2.87; both runs' recon pages
+read "Not run as its own step" for Track B and refinement and "Done" with a time for Track A; the zone bar uses
+rgb(41,166,69) / (232,165,33) / (217,56,56); four flight switches leave the same number of generated blocks and cards
+(replaced, not stacked); Outputs: description above the viewer, checks below, GLB / LAS / GeoTIFF still switch, one
+viewer context; no horizontal scroll at 360 px on any of the six pages for both runs; zero console problems at 1440
+and 360. Stage 2's loop-rate check was made robust (median of three samples; stable across three runs).
+**Not verified:** rendering on real hardware. Not deployed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 6 — Outputs page restyle (format switcher, overlays, fact panel), viewer logic untouched.
