@@ -87,6 +87,9 @@ Stage numbers follow the spec's section headings. `src/stages.py` is authoritati
 | `CLAUDE.md` | — | Instructions for AI agents (points here) |
 | `CLOUD_GPU_GUIDE.md` | — | Rented GPU box: machine choice, setup, data transfer, remote Lab UI, what to record |
 | `context.md` | — | Brief for the team building the SIH national-round deck: PS, what is built with what, measured results, uniqueness, criteria fit, limitations, slide outline, judge Q&A |
+| `site/` | site | **Tracked source** of the public demo console: `index.html`, `app.js`, `styles.css`. `build_site.py` copies it into the git-ignored `data/site/`; edit here, never in `data/site/` |
+| `SITE_UI_REDESIGN_PROMPT.md` | site | Staged brief for the public demo site's UI-only redesign: dark theme, landing hero, one page per pipeline stage, progress bar. Eight stages, one commit each |
+| `scripts/build_site.py` | site | Builds `data/site/` from finished run folders: `data.json` per run (input check, KPIs by process, times + 10-min projection, coverage, accuracy) and one web-sized file per export format. Reads only; never runs the pipeline |
 | `configs/default.yaml` | all | Every tunable (rule 3: no magic numbers in code) |
 | `configs/fast.yaml`, `accurate.yaml` | all | Preset overlays (deep-merged) |
 | `src/stages.py` | all | **Stage registry**: status, execution order, manifest/budget ownership |
@@ -2870,3 +2873,53 @@ the same again against the live URL.
 **Deployed:** https://ritesh14g.github.io/Single-Pass-3D-Model-Generation/ — `gh-pages` recreated as a single clean
 commit (132 MB of assets; largest file 15.2 MB, well inside GitHub's limits), pushed in 2 min.
 **Not changed:** anything under `src/`, `configs/`, `tests/`. Tests unaffected.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign brief written (no code yet)
+**Goal:** plan a UI-only redesign of the public demo site — dark themed and colour-coded, a landing page
+with a procedurally generated blue node terrain plus a geolocation marker, a features section, and **one page
+per pipeline stage** with a segmented progress bar, technical keywords and short descriptions. Pipeline logic
+untouched.
+**Created:** `SITE_UI_REDESIGN_PROMPT.md` — eight stages (0 track the source · 1 dark theme and tokens ·
+2 landing hero · 3 landing content · 4 per-stage routing and progress bar · 5 per-stage content ·
+6 outputs restyle · 7 verify and deploy), each a single commit, each with Goal / Do / Don't / Accept /
+Commit message. Records the `data.json` contract, the reserved status and zone colours, and the four bugs
+already paid for on this page so they are not reintroduced.
+**Modified:** `DEVLOG.md` (this entry).
+**Decisions:**
+- **The site's hand-written source is untracked** — `.gitignore:40` ignores all of `data/site/`, so
+  `index.html`, `app.js` and `styles.css` exist only on this laptop and on `gh-pages`. Stage 0 of the brief
+  moves them to a tracked `site/` and has `build_site.py` copy them into `data/site/` at build time, which is
+  the only reason the redesign can be committed stage by stage. The build output stays git-ignored.
+- **The hero must generate its geometry in JavaScript**, not load a GLB: the landing page has to paint
+  immediately, and `runs/*/assets/` files are 6–15 MB.
+- **Two WebGL contexts is the main technical risk** (hero + outputs viewer), so the brief makes pausing the
+  hero's animation loop off-screen an acceptance criterion rather than a suggestion.
+- Status colours (green/amber/red) and zone colours stay reserved; the nine stage accents live in the
+  cool/violet/teal range so nothing collides with a measured meaning.
+**Dead ends:** none — no code written this session.
+**Tests:** not run; nothing executable changed.
+**Open issues added/closed:** none.
+**Next:** work `SITE_UI_REDESIGN_PROMPT.md` Stage 0, then Stage 1. Verify each stage in headless Chrome
+before committing; deploy once at Stage 7.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 0: site source tracked (no visual change)
+**Goal:** make the demo console's hand-written source committable so Stages 1–7 are real commits.
+**Created:** `site/index.html`, `site/app.js`, `site/styles.css` — byte-for-byte copies of the files that were
+only in the git-ignored `data/site/` (SHA-256 identical, 7,158 / 53,798 / 18,384 bytes). From now on these are
+the source of truth; never edit `data/site/*` by hand.
+**Modified:** `scripts/build_site.py` — `SITE_SRC = ROOT / "site"` and, at the end of `main()`, a loop that copies
+every file under `site/` into `data/site/` (`shutil.copy2`, relative paths kept, one log line with the count).
+Nothing else in the file changed: data extraction, asset export, `PROCESS_INFO`, `PROCESS_ORDER`, `FORMAT_INFO`
+are untouched. `.gitignore` unchanged (`data/site/` stays ignored; `site/` is not matched by any rule).
+**Decisions:** the copy runs **after** the runs are built and after `vendor/`, so a redesign edit in `site/`
+always wins over whatever is in `data/site/`.
+**Verified:** `py_compile` clean; the copy step run against a throwaway output directory copied 3 files, all
+hash-identical to `site/`. `git status` shows `site/` as new and untracked-by-ignore, plus the two expected
+modified files.
+**Not verified (and why):** a full `build_site.py` run. `build_run` deletes `data/site/runs/<key>/` before
+rebuilding, and `data/interim/esri_s6` / `dji47_rep` did not resolve from this checkout (the Esri one is a junction
+into `data/box/`), so a full build here could have wiped the published assets. Run it only once those sources are
+confirmed present. `pytest` not run — nothing under `src/`, `configs/`, `tests/` or `ui/` changed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 1 — dark theme, stage accent tokens, chips / progress / stat components.

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Single-Pass Drone 3D</title>
+<meta name="description" content="SIH 2026 PS-17 prototype: a drone video and its position log become a georeferenced 3D model in six formats, with a measured quality report.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f6feb'/><path d='M8 20l8-9 8 9z' fill='white'/></svg>">
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <b>Single-Pass Drone 3D</b><br>
+        <span>SIH 2026 · PS-17 · NTRO · working prototype</span>
+      </div>
+    </div>
+    <nav class="rail" id="rail"></nav>
+  </div>
+</header>
+
+<div class="qa-fab">
+  <button class="btn primary" id="qa-open">Quality report</button>
+</div>
+
+<main>
+  <!-- ─────────────────────────── 1. input ─────────────────────────── -->
+  <section class="step on" data-step="0">
+    <div class="head">
+      <div class="eyebrow">Step 1 of 4</div>
+      <h2>Give the system a flight</h2>
+      <p>The pipeline takes one ordinary drone video together with whatever position log came with it, and
+         returns a georeferenced 3D model. Start from a prepared flight below to walk through the whole
+         process with real measured results, or drop your own files to see what the input check reads from them.</p>
+    </div>
+
+    <div class="grid cols-2" style="margin-bottom:16px">
+      <div class="panel pad">
+        <h3 style="font-size:15px;margin-bottom:4px">Video</h3>
+        <p class="hint" style="margin-bottom:12px">Any container or codec the decoder can open — MP4, MOV, MPEG-TS, H.264, H.265, MPEG-2.</p>
+        <div class="dropzone" id="dz-video" tabindex="0" role="button" aria-label="Choose a video file">
+          <div class="ico">🎞</div>
+          <h4>Drop a drone video</h4>
+          <p>or click to choose · read in your browser, nothing is uploaded</p>
+        </div>
+        <div class="filelist" id="fl-video"></div>
+      </div>
+      <div class="panel pad">
+        <h3 style="font-size:15px;margin-bottom:4px">Position log <span class="tag info" style="vertical-align:middle">optional</span></h3>
+        <p class="hint" style="margin-bottom:12px">DJI <code>.SRT</code>, flight-record CSV or TXT, GPX, KML, GeoJSON, PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, or MISB KLV carried inside the video itself.</p>
+        <div class="dropzone" id="dz-tel" tabindex="0" role="button" aria-label="Choose a telemetry file">
+          <div class="ico">🛰</div>
+          <h4>Drop a telemetry file</h4>
+          <p>or click to choose · detected by content, not by file extension</p>
+        </div>
+        <div class="filelist" id="fl-tel"></div>
+      </div>
+    </div>
+
+    <div class="panel pad" id="own-note" hidden>
+      <div class="callout">
+        <b>Your file was read here in the browser.</b> Full reconstruction needs a CUDA GPU, so this hosted
+        demo replays two flights that were processed end to end on one. Everything you see from here on —
+        every check, timing, score and output file — comes from those real runs. To process your own footage,
+        run <code>python -m src.cli run &lt;video&gt; --csv &lt;telemetry&gt;</code> from the repository.
+      </div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px">Prepared flights</h3>
+    <div class="grid cols-2" id="runcards"></div>
+  </section>
+
+  <!-- ─────────────────────────── 2. input check ─────────────────────────── -->
+  <section class="step" data-step="1">
+    <div class="head">
+      <div class="eyebrow">Step 2 of 4 · runs before any processing time is spent</div>
+      <h2>Input check</h2>
+      <p>Before reconstructing anything, the system reads the file itself, the position log and the agreement
+         between the two. Each check reports a measured value, what it means, and how to fix it when it is
+         worth fixing. A blocking result stops the run here rather than after twenty minutes of computation.</p>
+    </div>
+    <div id="check-body"></div>
+  </section>
+
+  <!-- ─────────────────────────── 3. pipeline ─────────────────────────── -->
+  <section class="step" data-step="2">
+    <div class="head">
+      <div class="eyebrow">Step 3 of 4</div>
+      <h2>The pipeline, stage by stage</h2>
+      <p>Seven stages take the video from frames to finished products. The times beside each stage are the
+         real measured durations from this run; the progress replays them at speed.</p>
+    </div>
+    <div id="flow-body"></div>
+  </section>
+
+  <!-- ─────────────────────────── 4. outputs ─────────────────────────── -->
+  <section class="step" data-step="3">
+    <div class="head">
+      <div class="eyebrow">Step 4 of 4</div>
+      <h2>Outputs — all six formats</h2>
+      <p>Every format below is a real file written by this run and loaded here through its own reader.
+         Rotate, zoom and inspect each one, and switch what the colours mean.</p>
+    </div>
+    <div class="fmtbar" id="fmtbar"></div>
+    <div class="outwrap">
+      <div>
+        <div class="stage3d" id="stage3d">
+          <div class="loading" id="loading"><div><div class="spin"></div><div class="txt">Loading…</div></div></div>
+          <div class="float tl glass segbar" id="mode-bar" hidden></div>
+          <div class="float bl glass legend" id="legend" hidden></div>
+          <div class="float br glass" id="hud" hidden></div>
+          <div class="rasterview" id="rasterview" hidden><img id="rasterimg" alt="Raster preview"></div>
+        </div>
+        <p class="hint" style="margin-top:9px" id="viewhint"></p>
+      </div>
+      <aside class="side" id="fmtside"></aside>
+    </div>
+  </section>
+</main>
+
+<footer class="foot" id="foot"></footer>
+
+<!-- ─────────────────────────── quality report ─────────────────────────── -->
+<div class="scrim" id="scrim"></div>
+<aside class="qa" id="qa" aria-label="Quality report">
+  <header>
+    <div style="flex:1;min-width:0">
+      <h3>Quality report</h3>
+      <div class="sub" id="qa-sub"></div>
+    </div>
+    <button class="btn ghost sm" id="qa-close">Close ✕</button>
+  </header>
+  <div class="tabs" id="qa-tabs"></div>
+  <div class="body" id="qa-body"></div>
+</aside>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

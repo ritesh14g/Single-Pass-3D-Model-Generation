@@ -34,6 +34,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "data" / "site"
+SITE_SRC = ROOT / "site"        # tracked hand-written page (index.html, app.js, styles.css), copied into SITE
 BUILD = ROOT / "data" / "site_build"
 DEFAULT_RUNS = {"esri": "data/interim/esri_s6", "dji": "data/interim/dji47_rep"}
 CLOUD_POINTS = 400_000          # points kept for the web PLY/LAS (both the same subsample)
@@ -577,6 +578,14 @@ def main() -> None:
             dst = SITE / "vendor" / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+    copied = 0
+    for src in sorted(SITE_SRC.rglob("*")):
+        if src.is_file():
+            dst = SITE / src.relative_to(SITE_SRC)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            copied += 1
+    log(f"   site source: {copied} file(s) copied from {SITE_SRC.relative_to(ROOT)}/")
     log(f"== done: {len(index)} run(s); site {sum(p.stat().st_size for p in SITE.rglob('*') if p.is_file()) / 1e6:.1f} MB")
 
 
