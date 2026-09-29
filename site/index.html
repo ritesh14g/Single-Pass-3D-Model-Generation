@@ -22,13 +22,13 @@
         <span>SIH 2026 · PS-17 · NTRO · working prototype</span>
       </div>
     </a>
-    <nav class="rail" id="rail" hidden></nav>
+    <div class="top-actions">
+      <div class="runswitch" id="run-switch" role="group" aria-label="Prepared flight" hidden></div>
+      <button class="btn primary sm" id="qa-open" type="button">Quality report</button>
+    </div>
   </div>
 </header>
-
-<div class="qa-fab">
-  <button class="btn primary" id="qa-open">Quality report</button>
-</div>
+<div id="progress-host" hidden></div>
 
 <main>
   <!-- ─────────────────────────── landing ─────────────────────────── -->
@@ -135,9 +135,9 @@
   </section>
 
   <!-- ─────────────────────────── 1. input ─────────────────────────── -->
-  <section class="step" data-step="0">
+  <section class="step" data-step="input">
     <div class="head">
-      <div class="eyebrow">Step 1 of 4</div>
+      <div class="eyebrow"></div>
       <h2>Give the system a flight</h2>
       <p>The pipeline takes one ordinary drone video together with whatever position log came with it, and
          returns a georeferenced 3D model. Start from a prepared flight below to walk through the whole
@@ -181,9 +181,9 @@
   </section>
 
   <!-- ─────────────────────────── 2. input check ─────────────────────────── -->
-  <section class="step" data-step="1">
+  <section class="step" data-step="check">
     <div class="head">
-      <div class="eyebrow">Step 2 of 4 · runs before any processing time is spent</div>
+      <div class="eyebrow"></div>
       <h2>Input check</h2>
       <p>Before reconstructing anything, the system reads the file itself, the position log and the agreement
          between the two. Each check reports a measured value, what it means, and how to fix it when it is
@@ -192,21 +192,60 @@
     <div id="check-body"></div>
   </section>
 
-  <!-- ─────────────────────────── 3. pipeline ─────────────────────────── -->
-  <section class="step" data-step="2">
+  <!-- ─────────────────────────── ingest ─────────────────────────── -->
+  <section class="step" data-step="ingest">
     <div class="head">
-      <div class="eyebrow">Step 3 of 4</div>
-      <h2>The pipeline, stage by stage</h2>
-      <p>Seven stages take the video from frames to finished products. The times beside each stage are the
-         real measured durations from this run; the progress replays them at speed.</p>
+      <div class="eyebrow"></div>
+      <h2>Ingest</h2>
+      <p>Decodes the video and keeps the frames that overlap each other enough to reconstruct from, rejecting blurred ones.</p>
     </div>
-    <div id="flow-body"></div>
+    <div class="stage-body" id="body-ingest"></div>
+  </section>
+
+  <!-- ─────────────────────────── conditioning ─────────────────────────── -->
+  <section class="step" data-step="condition">
+    <div class="head">
+      <div class="eyebrow"></div>
+      <h2>Conditioning</h2>
+      <p>Cleans each kept frame: compression blocking, exposure drift, shadows, moving objects, and noisy GPS.</p>
+    </div>
+    <div class="stage-body" id="body-condition"></div>
+  </section>
+
+  <!-- ─────────────────────────── reconstruction ─────────────────────────── -->
+  <section class="step" data-step="recon">
+    <div class="head">
+      <div class="eyebrow"></div>
+      <h2>Reconstruction</h2>
+      <p>Solves where the camera was for every frame, then builds the dense surface and paints the photographs onto it.</p>
+    </div>
+    <div class="stage-body" id="body-recon"></div>
+  </section>
+
+  <!-- ─────────────────────────── occlusion handling ─────────────────────────── -->
+  <section class="step" data-step="fusion">
+    <div class="head">
+      <div class="eyebrow"></div>
+      <h2>Occlusion handling</h2>
+      <p>Labels every surface by how well it was really seen, fills thin areas from anchored depth, and outlines what was never seen at all.</p>
+    </div>
+    <div class="stage-body" id="body-fusion"></div>
+  </section>
+
+  <!-- ─────────────────────────── georeferencing ─────────────────────────── -->
+  <section class="step" data-step="geo">
+    <div class="head">
+      <div class="eyebrow"></div>
+      <h2>Georeferencing</h2>
+      <p>Places the model on the map from the GPS track and resolves what the heights are measured from.</p>
+    </div>
+    <div class="stage-body" id="body-geo"></div>
   </section>
 
   <!-- ─────────────────────────── 4. outputs ─────────────────────────── -->
-  <section class="step" data-step="3">
+  <section class="step" data-step="export">
     <div class="head">
-      <div class="eyebrow">Step 4 of 4</div>
+      <div class="eyebrow"></div>
       <h2>Outputs — all six formats</h2>
       <p>Every format below is a real file written by this run and loaded here through its own reader.
          Rotate, zoom and inspect each one, and switch what the colours mean.</p>

@@ -85,30 +85,16 @@ header.top {
 .brand b { font-size: 15px; white-space: nowrap; }
 .brand span { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 @media (max-width: 860px) { .brand span { display: none; } }
+@media (max-width: 560px) { .brand b { display: none; } .top-in { gap: 10px; } }
 
-/* step rail */
-.rail { display: flex; gap: 4px; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
-.rail::-webkit-scrollbar { display: none; }
-.rail button {
-  display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid transparent;
-  background: none; color: var(--muted); border-radius: 999px; cursor: pointer; font: inherit;
-  font-size: 13.5px; font-weight: 550; white-space: nowrap;
-}
-.rail button:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
-.rail button.on { background: var(--panel); color: var(--ink); border-color: var(--accent-line); box-shadow: var(--shadow); }
-.rail button:disabled { opacity: .42; cursor: default; }
-.rail .n {
-  width: 19px; height: 19px; border-radius: 50%; background: var(--panel-2); color: var(--faint);
-  font-size: 11.5px; display: grid; place-items: center; font-weight: 700; flex: none;
-}
-.rail button.on .n { background: var(--accent); color: var(--accent-ink); }
-.rail button.done .n { background: var(--ok-bg); color: var(--ok); }
-@media (max-width: 720px) { .rail button span.lbl { display: none; } .rail button { padding: 7px 9px; } }
+
 
 /* ---------- layout ---------- */
 main { max-width: 1420px; margin: 0 auto; padding: 22px 20px 80px; }
 .step { display: none; animation: rise .28s ease both; }
 .step.on { display: block; }
+/* Nothing shows until routing has picked a page, so a deep link never flashes the landing page first. */
+body:not([data-view]) .step { display: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .step { animation: none; } }
 .head { margin-bottom: 18px; }
@@ -159,9 +145,15 @@ main { max-width: 1420px; margin: 0 auto; padding: 22px 20px 80px; }
 .chip[title] { cursor: help; text-decoration: underline dotted color-mix(in srgb, var(--accent) 55%, transparent); text-underline-offset: 3px; }
 
 /* segmented progress bar: one <li> per step, each carrying its own data-accent */
-.progress { position: sticky; top: var(--head-h); z-index: 35; padding: 12px 20px 10px;
-  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(160%) blur(12px);
-  border-bottom: 1px solid var(--line); }
+.progress { padding: 12px 20px 10px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(160%) blur(12px); border-bottom: 1px solid var(--line); }
+#progress-host { position: sticky; top: var(--head-h); z-index: 35; }
+.top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; }
+.runswitch { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.runswitch button { padding: 5px 12px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+.runswitch button:hover { color: var(--ink); }
+.runswitch button.on { background: var(--s-home); color: var(--accent-ink); }
+body[data-view="home"] .runswitch { display: none; }
 .progress ol { list-style: none; margin: 0 auto; padding: 0; max-width: 1420px; display: flex; gap: 6px; }
 .progress li { flex: 1 1 0; min-width: 0; transition: flex-grow .3s ease; }
 .progress li.current { flex-grow: 2.4; }
@@ -189,7 +181,6 @@ main { max-width: 1420px; margin: 0 auto; padding: 22px 20px 80px; }
 
 /* ---------- landing ---------- */
 a.brand { color: inherit; text-decoration: none; }
-body[data-view="home"] .qa-fab { display: none; }
 .hero { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: clamp(20px, 4vw, 60px);
   align-items: center; min-height: calc(100vh - var(--head-h) - 110px); }
 .hero-viz { position: relative; aspect-ratio: 1 / .9; max-height: 660px; width: 100%; border-radius: 20px; overflow: hidden;
@@ -266,6 +257,19 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .applist { display: flex; flex-wrap: wrap; gap: 8px; }
 .applist span { padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 13.5px; }
 
+/* ---------- wizard pages ---------- */
+.stagetime { margin: 0 0 22px; padding: 12px 16px 13px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); max-width: 760px; }
+.tt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.tt-k { color: var(--muted); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.tt-v { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tt-b { color: var(--muted); font-size: 13px; }
+.timebar { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; margin-top: 10px; }
+.timebar i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); }
+.timebar.over i { background: var(--bad); }
+.pager { display: flex; align-items: center; gap: 12px; margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); }
+.pager .pager-pos { margin: 0 auto; color: var(--faint); font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .05em; }
+@media (max-width: 520px) { .pager { flex-wrap: wrap; } .pager .pager-pos { order: 3; width: 100%; text-align: center; margin: 4px 0 0; } .pager .btn { flex: 1 1 auto; justify-content: center; } }
+
 /* ---------- step 1: input ---------- */
 .dropzone {
   border: 2px dashed var(--line); border-radius: var(--r); background: var(--panel-2);
@@ -318,22 +322,6 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .verdict .ring { width: 46px; height: 46px; flex: none; border-radius: 50%; display: grid; place-items: center;
   font-size: 20px; font-weight: 800; }
 
-/* ---------- pipeline ---------- */
-.flow { display: grid; gap: 10px; }
-.node { display: grid; grid-template-columns: 34px 1fr auto; gap: 13px; align-items: start;
-  padding: 13px 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel);
-  opacity: .5; transition: .3s; }
-.node.active { opacity: 1; border-color: var(--accent); box-shadow: var(--shadow-lg); }
-.node.done { opacity: 1; }
-.node .mark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--panel-2); color: var(--faint); font-size: 13px; font-weight: 700; }
-.node.active .mark { background: var(--accent); color: var(--accent-ink); }
-.node.done .mark { background: var(--ok-bg); color: var(--ok); }
-.node h4 { font-size: 14.5px; }
-.node p { color: var(--muted); font-size: 13px; margin: 3px 0 0; }
-.node .t { font-size: 13px; font-weight: 700; color: var(--muted); white-space: nowrap; }
-.bar { height: 3px; background: var(--line-2); border-radius: 2px; overflow: hidden; margin-top: 9px; }
-.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
 
 /* ---------- outputs ---------- */
 .outwrap { display: grid; grid-template-columns: 1fr 340px; gap: 14px; align-items: start; }
@@ -383,8 +371,6 @@ table.targets .pf b { font-variant-numeric: tabular-nums; }
 .hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 
 /* ---------- QA slide-over ---------- */
-.qa-fab { position: fixed; right: 18px; top: 66px; z-index: 60; }
-.qa-fab .btn { box-shadow: var(--shadow-lg); }
 .scrim { position: fixed; inset: 0; background: rgba(2,4,10,.62); backdrop-filter: blur(2px);
   z-index: 70; opacity: 0; pointer-events: none; transition: .25s; }
 .scrim.on { opacity: 1; pointer-events: auto; }

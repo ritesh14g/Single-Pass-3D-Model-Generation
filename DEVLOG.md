@@ -3034,3 +3034,45 @@ omitted; zero console problems.
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 4 — one page per pipeline stage with a segmented progress bar.
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 4: one page per stage, segmented progress bar
+**Goal:** replace the single "Pipeline" step with one page per stage and show where the user is with a barred
+progress indicator. Pipeline logic untouched.
+**Modified:**
+- `site/index.html` — steps are named (`input, check, ingest, condition, recon, fusion, geo, export`); the old
+  pipeline section is replaced by five stage sections (Ingest, Conditioning, Reconstruction, Occlusion handling,
+  Georeferencing); the Quality-report button and a flight switcher (Esri | DJI) live in the header on every page;
+  `#progress-host` sits under the header.
+- `site/app.js` — a `STEPS` table (id, title, budget key, measured-seconds reader) is the single source for the bar,
+  the pagers, the eyebrows and the time blocks; `goto(id)`; `?step=<id>`, with the old `?step=1..4` mapped to
+  `input / check / recon / export` and anything else opening the landing page; per-page pager (previous / next, with
+  Overview at both ends); per-page measured-time block with a bar that fills once on entry; `paintRunSwitch`;
+  opening the Quality report from a page lands on its most relevant tab (geo → Accuracy, export → Outputs, the rest
+  → By process); `--head-h` follows the header's real height, so the bar sits directly under it at any width.
+- `site/styles.css` — progress host is what sticks; `.pager`, `.stagetime`, `.timebar`, `.runswitch`; the rail, the
+  animated pipeline list and the floating Quality button rules are removed.
+**Removed:** the animated stage list (`buildFlow` / `runFlow`) — each stage now carries its own timing; the pill rail;
+the floating Quality button (it would have sat on top of the bar).
+**Decisions:**
+- **Stage time vs budget** uses `stage_budgets_s`: check → `preflight`, Reconstruction → `track_a_mvs`. Over budget is
+  stated with a tag and a red bar rather than clipped: Esri Reconstruction 4 min 3 s against 4 min 0 s; DJI Ingest,
+  Reconstruction and Export are over too.
+- **Nothing is visible until routing has picked a page** (`body:not([data-view]) .step { display:none }`). Before, a deep
+  link showed the landing page until data finished loading and then jumped. A failed start still shows the landing page
+  and the error message.
+- The check page's own "Run the pipeline" / "Back" buttons are gone; the shared pager replaces them.
+**Verified** (`scratchpad/stage4.mjs`, 59 checks, all pass; plus `flash.mjs`; Stage 2's 30 and Stage 3's 20 re-run
+and pass): 8 segments in a `<nav><ol>`; on each page exactly one current with `aria-current="step"`, all earlier done and
+all later upcoming, eyebrow `Step N of 8 · Title`, page accent equal to that page's token, 8 distinct accents; bar
+stays pinned under the header while scrolling; Next walks input → export and Previous walks back; every `?step=<id>`;
+legacy `1..4`, `nonsense`, `0`, `9` and none; `?run=dji&step=export&format=las&qa=speed` restores page, flight, format
+and QA tab; the flight switcher keeps the step on all 8 pages in both directions and changes the figures; **14 stage
+times traced to `data.json`**, budgets and over-budget tags correct; Quality report opens on the right tab from
+ingest / recon / geo / export and Escape closes it; keyboard: Tab moves along the segments, focus outline visible,
+Enter activates; no animation loop runs on a stage page; WebGL contexts never exceed 2; **360 px on all 8 pages: no
+horizontal scroll, exactly one visible label, header fits**; zero console problems at 1440 and 360.
+**Not yet:** the stage pages carry only their description and time; keywords, KPIs and diagnostics are Stage 5.
+Not deployed.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 5 — stage page content: keyword chips, short descriptions, measured KPIs, diagnostics.

@@ -10,10 +10,10 @@ import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { createHero } from './hero.js';
 
-import { $, el, esc, mb, num, clock, val, STATUS_WORD, scoreColour, chips, stat, kpiRow, progressBar, RUN_BLURB } from './ui.js';
+import { $, el, esc, mb, num, clock, val, STATUS_WORD, scoreColour, chips, stat, kpiRow, progressBar, RUN_BLURB, RUN_LABEL } from './ui.js';
 import { buildTargets, buildFlights, loadAll } from './landing.js';
 
-const state = { runs: [], data: null, step: 0, format: 'glb', qaTab: 'processes', own: {} };
+const state = { runs: [], data: null, step: 'home', format: 'glb', qaTab: 'processes', own: {} };
 
 // ── boot ──────────────────────────────────────────────────────────────────────
 // Anything that goes wrong is shown on the page rather than leaving a blank panel.
@@ -23,6 +23,7 @@ function report(what, e) {
   let box = $('errbox');
   if (!box) { box = el('div', 'callout'); box.id = 'errbox'; box.style.borderLeftColor = 'var(--bad)'; box.style.background = 'var(--bad-bg)'; document.querySelector('main').prepend(box); }
   box.innerHTML = `<b>Something did not load.</b> ${errors.map(esc).join('<br>')}`;
+  document.body.dataset.view ||= 'home';                  // a failed start still shows the landing page and this message
 }
 addEventListener('error', (e) => report('Script', e.error || e.message));
 addEventListener('unhandledrejection', (e) => report('Load', e.reason));
@@ -32,7 +33,8 @@ init().catch((e) => report('Startup', e));
 async function init() {
   const idx = await (await fetch('runs/index.json')).json();
   state.runs = idx.runs || [];
-  buildRail();
+  watchHeader();
+  decoratePages();
   buildRunCards();
   buildHeroFigs();
   // Landing sections that compare the prepared flights; loaded alongside, never blocking the first paint.
@@ -47,45 +49,97 @@ async function init() {
     quality report and the files it wrote. Processed on an NVIDIA H100 80&nbsp;GB MIG&nbsp;2g.20gb slice
     (19.6&nbsp;GB, 3 CPU cores). Reference surface for the accuracy comparison: USGS 3DEP lidar.
     <a href="https://github.com/ritesh14g/Single-Pass-3D-Model-Generation">Source code</a>.`;
-  // Deep link for the demo and for screenshots: ?run=dji&step=4&format=las&qa=speed
+  // Deep link for the demo and for screenshots: ?run=dji&step=export&format=las&qa=speed (?step=1..4 still work)
   const q = new URLSearchParams(location.search);
   const key = q.get('run') && state.runs.some((r) => r.key === q.get('run')) ? q.get('run') : (state.runs[0]?.key || 'esri');
   await loadRun(key, false);
   const fmt = q.get('format');
   if (fmt && FORMATS.includes(fmt)) state.format = fmt;
-  // No ?step, or one that is not a number, opens the landing page; ?step=1..4 keeps its old meaning.
-  const n = parseInt(q.get('step'), 10);
-  goto(Number.isFinite(n) ? Math.min(Math.max(n - 1, 0), STEPS.length - 1) : 'home');
+  goto(resolveStep(q.get('step')));
   if (q.get('qa')) {
     if (QA_TABS.some(([k]) => k === q.get('qa'))) state.qaTab = q.get('qa');
     buildQA(); $('qa').classList.add('on'); $('scrim').classList.add('on');
   }
 }
 
-// ── step rail ─────────────────────────────────────────────────────────────────
-const STEPS = ['Input', 'Input check', 'Pipeline', 'Outputs'];
-function buildRail() {
-  const rail = $('rail'), home = state.step === 'home';
-  rail.hidden = home;                      // the landing page is not a numbered step and has no rail
-  rail.innerHTML = '';
-  if (home) return;
-  STEPS.forEach((name, i) => {
-    const b = el('button', i === state.step ? 'on' : (i < state.step ? 'done' : ''),
-      `<i class="n">${i < state.step ? '✓' : i + 1}</i><span class="lbl">${name}</span>`);
-    b.onclick = () => goto(i);
-    rail.appendChild(b);
+// ── steps ─────────────────────────────────────────────────────────────────────
+// The wizard is eight pages in the order the video meets them; the landing page ('home') is outside the count.
+// `seconds` reads a stage's measured time from data.json, `budget` names its key in time.stage_budgets_s.
+const stageSec = (k) => (d) => d.time?.stage_seconds?.[k];
+const STEPS = [
+  { id: 'input', title: 'Input' },
+  { id: 'check', title: 'Input check', budget: 'preflight', seconds: (d) => d.input_check?.timing_s?.total },
+  { id: 'ingest', title: 'Ingest', budget: 'ingest', seconds: stageSec('ingest') },
+  { id: 'condition', title: 'Conditioning', budget: 'condition', seconds: stageSec('condition') },
+  { id: 'recon', title: 'Reconstruction', budget: 'track_a_mvs', seconds: stageSec('track_a') },
+  { id: 'fusion', title: 'Occlusion handling', budget: 'fusion', seconds: stageSec('fusion') },
+  { id: 'geo', title: 'Georeferencing', budget: 'geo', seconds: stageSec('geo') },
+  { id: 'export', title: 'Outputs', budget: 'export', seconds: stageSec('export') },
+];
+const STEP_IDS = STEPS.map((s) => s.id);
+// ?step=<id>. The old numeric form (1..4) maps to the nearest page; anything else opens the landing page.
+const LEGACY_STEP = { 1: 'input', 2: 'check', 3: 'recon', 4: 'export' };
+const resolveStep = (raw) => (STEP_IDS.includes(raw) ? raw : (LEGACY_STEP[raw] || 'home'));
+
+function goto(id) {
+  if (id !== 'home' && !STEP_IDS.includes(id)) id = 'home';
+  state.step = id;
+  const home = id === 'home';
+  document.body.dataset.view = home ? 'home' : 'wizard';
+  document.querySelector('main').dataset.accent = id;             // recolours everything accent-coloured on the page
+  document.querySelectorAll('.step').forEach((s) => s.classList.toggle('on', s.dataset.step === id));
+  paintProgress();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  viewerLoop(id === 'export');
+  if (id === 'export') showFormat(state.format);
+  playTime(id);
+  syncHero();
+}
+
+// Segmented progress bar under the header on every wizard page; hidden on the landing page.
+function paintProgress() {
+  const host = $('progress-host'), home = state.step === 'home';
+  host.hidden = home; host.innerHTML = '';
+  if (!home) host.appendChild(progressBar(STEPS, state.step, goto));
+}
+// The sticky bar sits directly under the header, whatever height the header has at this width.
+function watchHeader() {
+  const head = document.querySelector('header.top');
+  const set = () => document.documentElement.style.setProperty('--head-h', head.offsetHeight + 'px');
+  new ResizeObserver(set).observe(head); set();
+}
+// Eyebrow, measured-time block and prev/next pager for every wizard page.
+function decoratePages() {
+  STEPS.forEach((s, i) => {
+    const sec = document.querySelector(`.step[data-step="${s.id}"]`); if (!sec) return;
+    sec.querySelector('.head .eyebrow').textContent = `Step ${i + 1} of ${STEPS.length} · ${s.title}`;
+    if (s.seconds) { const t = el('div', 'stagetime'); t.dataset.time = s.id; sec.querySelector('.head').after(t); }
+    const prev = STEPS[i - 1], next = STEPS[i + 1], pager = el('div', 'pager');
+    pager.innerHTML = (prev ? `<button class="btn" data-go="${prev.id}">← ${esc(prev.title)}</button>` : `<button class="btn ghost" data-go="home">← Overview</button>`) +
+      `<span class="pager-pos">${i + 1} / ${STEPS.length}</span>` +
+      (next ? `<button class="btn primary" data-go="${next.id}">Next: ${esc(next.title)} →</button>` : `<button class="btn ghost" data-go="home">Overview →</button>`);
+    pager.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => goto(b.dataset.go); });
+    sec.appendChild(pager);
   });
 }
-function goto(i) {
-  state.step = i;
-  document.body.dataset.view = i === 'home' ? 'home' : 'wizard';
-  document.querySelectorAll('.step').forEach((s) => s.classList.toggle('on', s.dataset.step === String(i)));
-  buildRail();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (i === 2) runFlow();
-  viewerLoop(i === 3);
-  if (i === 3) showFormat(state.format);
-  syncHero();
+// Measured time for a stage against its share of the time budget; the bar fills once when the page is entered.
+function renderStageTimes() {
+  const d = state.data, budgets = d.time?.stage_budgets_s || {};
+  STEPS.forEach((s) => {
+    const host = document.querySelector(`[data-time="${s.id}"]`); if (!host || !s.seconds) return;
+    const secs = s.seconds(d), budget = budgets[s.budget];
+    const over = secs != null && budget != null && secs > budget;
+    host.innerHTML = `<div class="tt-head"><span class="tt-k">Measured on this run</span><span class="tt-v">${clock(secs)}</span>` +
+      `${budget != null ? `<span class="tt-b">of a ${clock(budget)} budget</span>` : ''}${over ? '<span class="tag fail">Over budget</span>' : ''}</div>` +
+      (budget != null && secs != null ? `<div class="timebar${over ? ' over' : ''}"><i data-w="${Math.min(100, (secs / budget) * 100)}"></i></div>` : '');
+  });
+}
+function playTime(id) {
+  const fill = document.querySelector(`.step[data-step="${id}"] .timebar i`); if (!fill) return;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  fill.style.transition = 'none'; fill.style.width = still ? fill.dataset.w + '%' : '0';
+  if (still) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.transition = 'width 1.1s cubic-bezier(.2,.7,.2,1)'; fill.style.width = fill.dataset.w + '%'; }));
 }
 
 // ── landing page ──────────────────────────────────────────────────────────────
@@ -97,8 +151,8 @@ function syncHero() {
 }
 function wireHome() {
   $('home-link').onclick = (e) => { e.preventDefault(); goto('home'); };
-  $('hero-run').onclick = () => goto(0);
-  $('hero-out').onclick = () => goto(3);
+  $('hero-run').onclick = () => goto('input');
+  $('hero-out').onclick = () => goto('export');
 }
 // One line per prepared flight, straight from runs/index.json. Nothing is computed here.
 function buildHeroFigs() {
@@ -192,10 +246,23 @@ async function readText(file) {
 async function loadRun(key, advance) {
   state.data = await (await fetch(`runs/${key}/data.json`)).json();
   buildChecks();
-  buildFlow();
+  renderStageTimes();
   buildFormatBar();
   buildQA();
-  if (advance) goto(1);
+  paintRunSwitch();
+  if (advance) goto('check');
+  else if (state.step === 'export') showFormat(state.format);   // switching flights on the Outputs page reloads its viewer
+  playTime(state.step);
+}
+// Both prepared flights are selectable from every wizard page; switching keeps you on the same step.
+function paintRunSwitch() {
+  const box = $('run-switch'); box.hidden = state.runs.length < 2; box.innerHTML = '';
+  state.runs.forEach((r) => {
+    const on = r.key === state.data?.key, b = el('button', on ? 'on' : '', esc(RUN_LABEL[r.key] || r.key));
+    b.type = 'button'; b.title = r.video || ''; b.setAttribute('aria-pressed', String(on));
+    b.onclick = () => { if (!on) loadRun(r.key, false).catch((e) => report('Load', e)); };
+    box.appendChild(b);
+  });
 }
 
 // ── step 2: input check ───────────────────────────────────────────────────────
@@ -261,14 +328,9 @@ function buildChecks() {
   note.innerHTML = esc(ic.note || '');
   body.appendChild(note);
 
-  const act = el('div', 'actions'); act.style.marginTop = '16px';
-  act.innerHTML = `<button class="btn primary">Run the pipeline →</button><button class="btn ghost">← Back to input</button>`;
-  act.children[0].onclick = () => goto(2);
-  act.children[1].onclick = () => goto(0);
-  body.appendChild(act);
 }
 
-// ── step 3: pipeline ──────────────────────────────────────────────────────────
+// Stage names and one-line descriptions, keyed by the manifest's stage key (the QA speed table reads these).
 const STAGE_TEXT = {
   preflight: ['Input check', 'Reads the container, the position log and whether the two agree, before any time is spent.'],
   ingest: ['Ingest', 'Decodes the video and keeps the frames that overlap each other enough to reconstruct from, rejecting blurred ones.'],
@@ -279,62 +341,6 @@ const STAGE_TEXT = {
   export: ['Export', 'Writes all six formats, classifies the point cloud and renders the height model and orthophoto.'],
   qa: ['Quality report', 'Scores every process against its target, compares against a reference surface and records the timings.'],
 };
-function buildFlow() {
-  const d = state.data, stages = d.time?.stage_seconds || {}, body = $('flow-body');
-  body.innerHTML = '';
-  const total = d.time?.total_s || Object.values(stages).reduce((a, b) => a + b, 0);
-
-  const bar = el('div', 'panel pad'); bar.style.marginBottom = '14px';
-  bar.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center">
-      <div class="metric"><b>${clock(total)}</b><span>total, measured</span></div>
-      <div class="metric"><b>${clock(d.time?.video_s)}</b><span>of video</span></div>
-      <div class="metric"><b>${d.viewer?.faces ? (d.viewer.faces / 1e6).toFixed(2) + ' M' : '—'}</b><span>surface triangles produced</span></div>
-      <div style="margin-left:auto" class="actions">
-        <button class="btn sm" id="replay">Replay</button>
-        <button class="btn primary sm" id="toout">See the outputs →</button>
-      </div>
-    </div>`;
-  body.appendChild(bar);
-  $('replay') && ($('replay').onclick = () => runFlow(true));
-  $('toout') && ($('toout').onclick = () => goto(3));
-
-  const flow = el('div', 'flow'); flow.id = 'flow';
-  Object.entries(stages).forEach(([key, secs], i) => {
-    const [name, text] = STAGE_TEXT[key] || [key, ''];
-    const n = el('div', 'node'); n.dataset.stage = key;
-    n.innerHTML = `<div class="mark">${i + 1}</div>
-      <div><h4>${esc(name)}</h4><p>${esc(text)}</p><div class="bar"><i></i></div></div>
-      <div class="t">${clock(secs)}</div>`;
-    flow.appendChild(n);
-  });
-  body.appendChild(flow);
-
-  const after = el('div', 'callout'); after.style.marginTop = '14px';
-  after.innerHTML = `The quality report scores each of these by the <b>process</b> inside it, not by the stage as a
-    whole, and states what every score does and does not account for. Open it from the button at the top right.`;
-  body.appendChild(after);
-}
-let flowTimer = null;
-function runFlow(force) {
-  const flow = $('flow'); if (!flow) return;
-  const nodes = [...flow.children];
-  if (!force && nodes.some((n) => n.classList.contains('done'))) return;
-  clearTimeout(flowTimer);
-  nodes.forEach((n) => { n.className = 'node'; n.querySelector('.bar > i').style.width = '0'; });
-  const secs = Object.values(state.data.time?.stage_seconds || {});
-  const total = secs.reduce((a, b) => a + b, 0) || 1;
-  let i = 0;
-  const next = () => {
-    if (i >= nodes.length) return;
-    const n = nodes[i], ms = Math.max(260, (secs[i] / total) * 5200);
-    n.classList.add('active');
-    const fill = n.querySelector('.bar > i');
-    requestAnimationFrame(() => { fill.style.transition = `width ${ms}ms linear`; fill.style.width = '100%'; });
-    flowTimer = setTimeout(() => { n.classList.remove('active'); n.classList.add('done'); n.querySelector('.mark').textContent = '✓'; i++; next(); }, ms);
-  };
-  next();
-}
-
 // ── step 4: outputs ───────────────────────────────────────────────────────────
 const FORMATS = ['glb', 'obj', 'fbx', 'ply', 'las', 'geotiff'];
 function buildFormatBar() {
@@ -696,10 +702,12 @@ function showRaster() {
 function wireQA() {
   const open = () => { $('qa').classList.add('on'); $('scrim').classList.add('on'); };
   const close = () => { $('qa').classList.remove('on'); $('scrim').classList.remove('on'); };
-  $('qa-open').onclick = open; $('qa-close').onclick = close; $('scrim').onclick = close;
+  $('qa-open').onclick = () => { state.qaTab = QA_FOR_STEP[state.step] || state.qaTab; buildQA(); open(); };
+  $('qa-close').onclick = close; $('scrim').onclick = close;
   addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 }
 
+const QA_FOR_STEP = { check: 'processes', ingest: 'processes', condition: 'processes', recon: 'processes', fusion: 'processes', geo: 'accuracy', export: 'formats' };
 const QA_TABS = [['processes', 'By process'], ['accuracy', 'Accuracy'], ['speed', 'Speed & 10-minute forecast'], ['formats', 'Outputs']];
 function buildQA() {
   const d = state.data;
