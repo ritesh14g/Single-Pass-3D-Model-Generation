@@ -39,7 +39,7 @@ async function init() {
   wireNav(); wireInput(); wireHome();
   wireGpuPanel(); gpuSheet = makeSheet($('gpu-sheet'));
   $('gpu-open').onclick = () => gpuSheet.open();
-  panels = createPanels({ getData: () => state.data, onState: (p) => { state.panel = p; syncUrl(true); } });
+  panels = createPanels({ getData: () => state.data, getExtra: loadExtra, onState: (p) => { state.panel = p; syncUrl(true); } });
   $('metrics-open').onclick = () => panels.openMetrics();
   $('foot').innerHTML = `Every figure on this page is read from a completed pipeline run: its input check, its
     stage scores and the files it wrote. Processed on an NVIDIA H100 80&nbsp;GB MIG&nbsp;2g.20gb slice
@@ -204,6 +204,14 @@ async function readText(file) {
   return `${lines.length}+ lines · ${kind}`;
 }
 
+
+// The one continuous series the charts need beyond data.json: each camera's residual along the flight.
+const extraCache = {};
+async function loadExtra() {
+  const key = state.data.key;
+  if (!(key in extraCache)) extraCache[key] = await fetch(`runs/${key}/residuals.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return { residuals: extraCache[key] };
+}
 
 // ── run loading ───────────────────────────────────────────────────────────────
 async function loadRun(key) {

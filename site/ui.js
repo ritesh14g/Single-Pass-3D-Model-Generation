@@ -14,7 +14,14 @@ export const num = (v, d = 2) => {
   return s.includes('.') ? s.replace(/\.?0+$/, '') : s;
 };
 export const clock = (s) => s == null ? '—' : (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${s < 10 ? s.toFixed(1) : Math.round(s)} s`);
-export const val = (v) => typeof v === 'boolean' ? (v ? 'yes' : 'no') : (typeof v === 'number' ? num(v, 3) : (v == null ? '—' : String(v)));
+// A measured value as words. Structured values (exposure, borders, sync, notes) read as "key value · key value", never [object Object].
+export const val = (v) => {
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'number') return num(v, 3);
+  if (Array.isArray(v)) return `${v.length} noted`;
+  if (v && typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k.replace(/_/g, ' ')} ${typeof x === 'number' ? num(x, 3) : x}`).join(' · ');
+  return v == null ? '—' : String(v);
+};
 export const STATUS_WORD = { pass: 'Met', warn: 'Near target', fail: 'Below target', info: 'Recorded' };
 export const RUN_BLURB = {
   esri: ['Surveillance aircraft', 'High, wide-angle pass over a river and woodland. Telemetry is MISB KLV carried inside the video stream itself — no separate file.'],

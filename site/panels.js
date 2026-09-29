@@ -4,7 +4,7 @@
    Limitations are deliberately not shown in Metrics; they belong with the forecast. */
 import { el, esc, num, clock, val, STATUS_WORD, scoreColour, STAGES } from './ui.js';
 import { makeSheet } from './sheet.js';
-import { stageViz } from './charts.js';
+import { stageViz, wireViz } from './charts.js';
 
 const procsFor = (d, s) => (d.processes || []).filter((p) => (s.process ? p.process === s.process : s.processes ? s.processes.includes(p.process) : p.stage === s.stage));
 const firstSentence = (t) => { const m = String(t || '').match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : String(t || '')).trim(); };
@@ -44,9 +44,9 @@ function stageContent(d, s) {
     raw: true };
 }
 
-export function createPanels({ getData, onState }) {
+export function createPanels({ getData, getExtra, onState }) {
   const mRoot = document.getElementById('metrics-sheet');
-  let stage = 0;
+  let stage = 0, extra = {};
   let silent = false;                                    // closing because the page is navigating must not rewrite the URL history is using
   const msheet = makeSheet(mRoot, { onClose: () => { if (!silent) onState(null); } });
 
@@ -66,7 +66,8 @@ export function createPanels({ getData, onState }) {
     const t = c.counts;
     $m('#m-left').innerHTML = `<div class="mhead"><h2>${esc(s.title)}</h2><div class="mcounts">` +
       ['pass', 'warn', 'fail', 'info'].filter((k) => t[k]).map((k) => `<span class="tag ${k}">${t[k]} ${STATUS_WORD[k].toLowerCase()}</span>`).join('') + `</div></div>` +
-      `<div id="m-viz">${stageViz(d, s.id)}</div>${c.table}`;
+      `<div id="m-viz">${stageViz(d, s.id, extra)}</div>${c.table}`;
+    wireViz($m('#m-left'));
     $m('#m-right').innerHTML = `<h4>Summary</h4>` + c.summary.map((p) => `<p>${c.raw ? p : esc(p)}</p>`).join('');
     $m('#m-left').scrollTop = 0; $m('#m-right').scrollTop = 0;
     $m('[data-prev]').disabled = stage === 0; $m('[data-next]').disabled = stage === STAGES.length - 1;
@@ -89,7 +90,7 @@ export function createPanels({ getData, onState }) {
   body.addEventListener('pointercancel', () => { sx = sy = null; });
 
   return {
-    openMetrics(at) { if (typeof at === 'number') stage = at; render(); msheet.open(); onState('metrics'); },
+    async openMetrics(at) { if (typeof at === 'number') stage = at; extra = (await getExtra?.()) || {}; render(); msheet.open(); onState('metrics'); },
     closeAll() { silent = true; msheet.close(); silent = false; },
   };
 }

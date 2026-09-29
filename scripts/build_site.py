@@ -466,6 +466,25 @@ def export_rasters(run_dir: Path, out: Path) -> dict:
     return info
 
 
+def export_residuals(run_dir: Path, out: Path, keep: int = 400) -> dict:
+    """residuals.json: each camera's residual against the GPS track, in flight order, for the Metrics chart.
+
+    Read straight from geo/camera_residuals.csv; evenly thinned only if a run has more than `keep` cameras."""
+    import csv
+
+    src = run_dir / "geo" / "camera_residuals.csv"
+    if not src.is_file():
+        log("   !! no camera_residuals.csv; skipping the residual series")
+        return {}
+    with src.open(newline="", encoding="utf-8") as fh:
+        rows = [(r["frame"], float(r["residual_m"]), str(r["inlier"]).strip().lower() == "true") for r in csv.DictReader(fh)]
+    step = max(len(rows) // keep, 1)
+    thinned = rows[::step]
+    (out / "residuals.json").write_text(json.dumps({"count": len(rows), "step": step,
+                                                    "frames": [[f, round(m, 3), ok] for f, m, ok in thinned]}), encoding="utf-8")
+    return {"file": "residuals.json", "count": len(rows)}
+
+
 def build_run(key: str, run_dir: Path) -> dict:
     run_dir = (ROOT / run_dir) if not Path(run_dir).is_absolute() else Path(run_dir)
     log(f"== {key}: {run_dir}")
@@ -486,6 +505,8 @@ def build_run(key: str, run_dir: Path) -> dict:
     points = export_point_formats(run_dir, assets)
     log("   rasters (geotiff previews)")
     rasters = export_rasters(run_dir, assets)
+    log("   camera residual series")
+    export_residuals(run_dir, out_dir)
 
     export_dir = run_dir / "export"
     files = {p.name: p.stat().st_size for p in sorted(export_dir.glob("*")) if p.is_file()}

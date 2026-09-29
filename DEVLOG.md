@@ -3256,3 +3256,30 @@ run was allotted 540 s.
 **Verified** (`scratchpad/v2.mjs s3`, 31 checks, headless Chrome): button top-right; modal (page inert, focus inside, Tab wraps, Escape closes and returns focus to the button, a link-opened dialog also closes cleanly, URL records `panel=metrics`); left/right = 66.7% / 33.3%; strip pinned at the top; scrolling the left 500 px moves neither the right summary nor the strip; four columns and no extras; **for both flights, all 29 / 30 input checks, all 19 processes and all 79 measurements appear exactly once, each with a keyword and a value box**; no `lacks`, stated limitation or note text anywhere; →/← , swipe both ways, vertical drag, next button, strip jump, next disabled on the last stage; browser Back with Metrics open lands on the landing page with no stuck dialog; deep links (`?panel=metrics`, legacy `?step=geo`); 360 px: no sideways scroll, summary above the table, target column hides; zero console problems.
 **Next:** S4 — charts.
 
+### 2026-09-29 — ritesh14g (with Claude) — site v2, S4: charts and infographics
+**Method:** the `dataviz` skill: form chosen by the data's job before colour, palette validated by its script, then mark specs, hover, table views.
+**Modified:** `site/charts.js` (was a stub), `site/panels.js` (loads the residual series when Metrics opens; wires hover after each render), `site/app.js`, `site/ui.js`, `site/styles.css`, `scripts/build_site.py`.
+**Data:** `build_site.py` gains `export_residuals()`, which writes `runs/<key>/residuals.json` from `geo/camera_residuals.csv` (evenly thinned only above 400 cameras; esri 49, dji 136, so neither is). It is the one continuous series `data.json` did not carry. The function was run for real against each run's own folder. Everything else plotted is already in `data.json`. `residuals.json` lives in the git-ignored `data/site/`, like the rest of the generated data.
+**Charts, by the job the data does:**
+| Stage | Form | Data |
+|---|---|---|
+| Input check | stacked bar (part-to-whole) + meter | checks by result; video-to-GPS agreement |
+| Ingest, Conditioning, Reconstruction | **meters**: fill = the measured share, colour = the check's own status | KPI values |
+| Conditioning (Esri) | **emphasis** bars: cleanup on (accent) against off (gray), one axis, legend | benchmark rows |
+| Reconstruction | time per stage, this stage highlighted | `stage_seconds` |
+| Occlusion | stacked bar in the reserved Zone 1/2/3 colours + gap count and area | `zones` |
+| Georeferencing | **line** of each camera's residual along the flight, 1 m target marked | `residuals.json` |
+| Georeferencing (Esri) | **diverging bars**: each tile's vertical offset against the lidar | `tile_offsets` |
+| Georeferencing (Esri) | bars: RMS shape accuracy by how well each surface was observed | `points_after_tile_offset` |
+| Outputs | bars: size of each file written, largest first | `formats.files` |
+**Palette validation caught a mistake:** my first choice for "cleanup on vs off" was two blues; the validator FAILED it on lightness band, chroma and contrast. That chart is now the emphasis form (accent + gray). The diverging pair (`#1565C0` / `#C2410C`) passes all five checks (dE 32 normal, 25 protan, 31 tritan).
+**Mark specs:** 2 px line with an 8 px+ end dot ringed in the surface colour; bars at most 24 px with 4 px rounded data-ends from a single baseline; hairline solid recessive grid; text in text tokens, never the series colour; labels only at the end / extreme; clean axis ticks (1, 2, 5 steps); a **table view** under every chart; a hover tooltip on every mark plus a crosshair on the line.
+**No data, no chart:** a flight without a benchmark or a reference survey (DJI) shows "Not recorded for this flight." in place of an empty axis.
+**Bugs found and fixed:**
+- **S3 shipped `[object Object]`** in four input checks (exposure, black borders, gaps and jumps, sync) and in one for placeholder notes. `val()` now reads structured values as words ("dark 0 · overexposed 0"; "2 noted"). The S3 test did not look for it; the S4 test does, on every stage of both flights.
+- Chart labels used the site's number trimmer, so 4.97 read "5" and a caption said "from 9 to 5 metres"; chart labels now keep fixed decimals, and file sizes use the site's `mb()` ("80.9 MB").
+- A tile-chart caption explained the bend as "what a single straight strip produces", a limitation statement in Metrics; it now states the measured sag and tilt only.
+- Y ticks read 0, 3, 5, 8, 10 (a 2.5 step, badly rounded); now clean.
+**Verified** (`scratchpad/v2.mjs s4`, 25 checks; S2 and S3 suites re-run): cards per stage as designed for both flights; every chart has a table view (meter cards sit beside the Metrics table); no undefined / NaN / `[object` anywhere; residual line has one point per camera (49 / 136), a 2 px stroke, an 8 px+ end dot, the last value labelled as `residuals.json` states it, the 1 m target marked; 14 tile bars, at most 24 px, coloured by the sign of each offset in `data.json`; Zone 1 RMS and the GLB size exactly as `data.json` states them; hover shows a crosshair and a tooltip naming the frame and residual, a tile's up/east/north, and hides on leave; the table view opens and holds all 49 rows; DJI's tile, zone and benchmark cards say "Not recorded for this flight."; 360 px on every stage of both flights with no sideways scroll; zero console problems.
+**Next:** S5 — Forecast.
+
