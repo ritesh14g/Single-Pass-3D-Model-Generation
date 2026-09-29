@@ -11,6 +11,7 @@ import { createHero } from './hero.js';
 import { $, el, esc, mb, num, clock, val, STATUS_WORD, scoreColour, chips, stat, kpiRow, RUN_BLURB, RUN_LABEL, STAGES } from './ui.js';
 import { buildFlights } from './landing.js';
 import { makeSheet } from './sheet.js';
+import { createPanels } from './panels.js';
 import { gpu, runPolicy, wireGpuPanel, onGpuChange } from './gpu.js';
 
 const state = { runs: [], data: null, view: 'home', format: 'glb', files: { video: null, tel: null }, panel: null, replay: null };
@@ -38,6 +39,8 @@ async function init() {
   wireNav(); wireInput(); wireHome();
   wireGpuPanel(); gpuSheet = makeSheet($('gpu-sheet'));
   $('gpu-open').onclick = () => gpuSheet.open();
+  panels = createPanels({ getData: () => state.data, onState: (p) => { state.panel = p; syncUrl(true); } });
+  $('metrics-open').onclick = () => panels.openMetrics();
   $('foot').innerHTML = `Every figure on this page is read from a completed pipeline run: its input check, its
     stage scores and the files it wrote. Processed on an NVIDIA H100 80&nbsp;GB MIG&nbsp;2g.20gb slice
     (19.6&nbsp;GB, 3 CPU cores). Reference surface for the accuracy comparison: USGS 3DEP lidar.
@@ -45,7 +48,7 @@ async function init() {
   addEventListener('popstate', () => route().catch((e) => report('Navigation', e)));
   await route();
 }
-let gpuSheet = null;
+let gpuSheet = null, panels = null;
 
 // The sticky header's real height, so anything pinned under it sits flush at any width.
 function watchHeader() {
@@ -89,6 +92,7 @@ function go(view, opts = {}) { show(view); syncUrl(opts.replace); }
 
 function show(view) {
   if (state.view === 'run' && view !== 'run') cancelReplay();
+  if (view !== 'output') { panels?.closeAll(); state.panel = null; }
   state.view = view;
   document.body.dataset.view = view;
   document.querySelectorAll('.step').forEach((s) => s.classList.toggle('on', s.dataset.step === view));
@@ -241,7 +245,7 @@ async function startReplay() {
 }
 
 // ── Metrics and Forecast (panels.js, added in the next stages) ────────────────
-function openPanel() {}
+function openPanel(name) { if (name === 'metrics') panels.openMetrics(); }
 
 // ── step 4: outputs ───────────────────────────────────────────────────────────
 const FORMATS = ['glb', 'obj', 'fbx', 'ply', 'las', 'geotiff'];
