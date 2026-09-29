@@ -6,6 +6,13 @@
 <title>Single-Pass Drone 3D</title>
 <meta name="description" content="SIH 2026 PS-17 prototype: a drone video and its position log become a georeferenced 3D model in six formats, with a measured quality report.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f6feb'/><path d='M8 20l8-9 8 9z' fill='white'/></svg>">
+<meta name="color-scheme" content="light dark">
+<script>
+/* The theme is decided before first paint: the saved choice if there is one, otherwise the system setting. */
+(function () { var t; try { t = localStorage.getItem("sp3d.theme"); } catch (e) {}
+  if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = t; })();
+</script>
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -15,100 +22,132 @@
 
 <header class="top">
   <div class="top-in">
-    <div class="brand">
+    <a class="brand" href="./" id="home-link" aria-label="Single-Pass Drone 3D: back to the landing page">
       <div class="dot"></div>
       <div>
         <b>Single-Pass Drone 3D</b><br>
         <span>SIH 2026 · PS-17 · NTRO · working prototype</span>
       </div>
+    </a>
+    <div class="top-actions">
+      <button class="btn sm icon theme" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
+        <svg class="i-moon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20.5 13.6A8.5 8.5 0 1 1 10.4 3.5a6.8 6.8 0 0 0 10.1 10.1z" fill="currentColor"/></svg>
+        <svg class="i-sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></g></svg>
+      </button>
+      <button class="btn sm gpu-btn" id="gpu-open" type="button" hidden><i class="gpu-dot" id="gpu-dot"></i><span>Connect GPU</span></button>
+      <button class="btn primary sm" id="metrics-open" type="button" hidden>Metrics</button>
     </div>
-    <nav class="rail" id="rail"></nav>
   </div>
 </header>
 
-<div class="qa-fab">
-  <button class="btn primary" id="qa-open">Quality report</button>
-</div>
-
 <main>
-  <!-- ─────────────────────────── 1. input ─────────────────────────── -->
-  <section class="step on" data-step="0">
+  <!-- ─────────────────────────── landing ─────────────────────────── -->
+  <section class="step on" data-step="home">
+    <div class="hero">
+      <div class="hero-viz" id="hero-viz">
+        <!-- shown only when WebGL is unavailable or its context is lost; hero.js prepends the live canvas -->
+        <svg id="hero-fallback" class="hero-fallback" viewBox="0 0 400 300" role="img" aria-label="Illustration: a ridge of blue nodes with a location marker on its saddle" hidden>
+          <g fill="none" stroke="#38bdf8" stroke-opacity=".35" stroke-width="1">
+            <polyline points="20,240 70,200 110,215 150,150 190,60 225,130 258,110 300,175 330,150 380,240"/>
+            <polyline points="20,240 380,240"/><polyline points="70,200 110,240 150,150 150,240 190,60 190,240 258,110 258,240 330,150 330,240"/>
+          </g>
+          <g fill="#7dd3fc"><circle cx="20" cy="240" r="2.5"/><circle cx="70" cy="200" r="2.5"/><circle cx="110" cy="215" r="2.5"/><circle cx="150" cy="150" r="2.5"/>
+            <circle cx="225" cy="130" r="2.5"/><circle cx="258" cy="110" r="2.5"/><circle cx="300" cy="175" r="2.5"/><circle cx="330" cy="150" r="2.5"/><circle cx="380" cy="240" r="2.5"/></g>
+          <circle cx="190" cy="60" r="3.5" fill="#eaf6ff"/>
+          <g stroke="#bae6fd" fill="none"><line x1="225" y1="130" x2="225" y2="80" stroke-width="1.5"/><ellipse cx="225" cy="130" rx="16" ry="6" stroke-opacity=".7"/></g>
+          <path d="M225 72l5 8-5 8-5-8z" fill="#e0f2fe"/>
+        </svg>
+        <div class="hero-cap">Procedural illustration · nodes → surface → map</div>
+      </div>
+      <div class="hero-copy">
+        <div class="eyebrow">SIH 2026 · PS-17 · NTRO · working prototype</div>
+        <h1>One drone pass in.<br><em>A georeferenced 3D model out.</em></h1>
+        <p>Reconstructs terrain, structures and vegetation from a single drone video and its position log.
+           Classical structure-from-motion supplies the measured geometry; a feed-forward depth network fills
+           thinly seen surface, but only where it agrees with measurement. The model is placed on the map from the
+           drone's own GPS with no ground control points, and every surface is labelled measured, inferred or never
+           seen. Six formats come out, each re-opened to verify it.</p>
+        <div class="chips">
+          <span class="chip">single-pass SfM</span><span class="chip">GPS-anchored georeferencing</span>
+          <span class="chip">feed-forward monocular depth</span><span class="chip">confidence-graded surfaces</span>
+          <span class="chip">six export formats</span>
+        </div>
+        <div class="actions hero-actions">
+          <button class="btn primary" id="hero-run">Create 3D model →</button>
+        </div>
+      </div>
+    <section class="land-sec flights-sec" aria-labelledby="l-fl">
+      <div class="eyebrow" id="l-fl">Tested flights</div>
+      <div id="land-flights"></div>
+    </section>
+  </section>
+
+  <!-- ─────────────────────────── input ─────────────────────────── -->
+  <section class="step" data-step="input">
+    <button class="back" type="button" data-go="home">← Back</button>
     <div class="head">
-      <div class="eyebrow">Step 1 of 4</div>
-      <h2>Give the system a flight</h2>
-      <p>The pipeline takes one ordinary drone video together with whatever position log came with it, and
-         returns a georeferenced 3D model. Start from a prepared flight below to walk through the whole
-         process with real measured results, or drop your own files to see what the input check reads from them.</p>
+      <h2>Create a 3D model</h2>
+      <p>Add one drone video. Add its position log too if it came as a separate file.</p>
     </div>
 
-    <div class="grid cols-2" style="margin-bottom:16px">
+    <div class="grid cols-2 inputgrid">
       <div class="panel pad">
-        <h3 style="font-size:15px;margin-bottom:4px">Video</h3>
-        <p class="hint" style="margin-bottom:12px">Any container or codec the decoder can open — MP4, MOV, MPEG-TS, H.264, H.265, MPEG-2.</p>
-        <div class="dropzone" id="dz-video" tabindex="0" role="button" aria-label="Choose a video file">
+        <h3>Drone video <span class="req">Required</span></h3>
+        <p class="hint">Any container or codec the decoder can open: MP4, MOV, MPEG-TS, H.264, H.265, MPEG-2.</p>
+        <div class="dropzone" id="dz-video" tabindex="0" role="button" aria-label="Choose a drone video">
           <div class="ico">🎞</div>
           <h4>Drop a drone video</h4>
-          <p>or click to choose · read in your browser, nothing is uploaded</p>
+          <p>or click to choose</p>
         </div>
         <div class="filelist" id="fl-video"></div>
       </div>
-      <div class="panel pad">
-        <h3 style="font-size:15px;margin-bottom:4px">Position log <span class="tag info" style="vertical-align:middle">optional</span></h3>
-        <p class="hint" style="margin-bottom:12px">DJI <code>.SRT</code>, flight-record CSV or TXT, GPX, KML, GeoJSON, PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, or MISB KLV carried inside the video itself.</p>
-        <div class="dropzone" id="dz-tel" tabindex="0" role="button" aria-label="Choose a telemetry file">
+      <div class="panel pad optional">
+        <h3>Telemetry <span class="opt">Optional</span></h3>
+        <p class="hint">DJI <code>.SRT</code>, flight-record CSV or TXT, GPX, KML, GeoJSON, PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>. Not needed when the position log is carried inside the video (MISB KLV).</p>
+        <div class="dropzone" id="dz-tel" tabindex="0" role="button" aria-label="Choose a telemetry file (optional)">
           <div class="ico">🛰</div>
           <h4>Drop a telemetry file</h4>
-          <p>or click to choose · detected by content, not by file extension</p>
+          <p>or click to choose · detected by content, not by extension</p>
         </div>
         <div class="filelist" id="fl-tel"></div>
       </div>
     </div>
 
-    <div class="panel pad" id="own-note" hidden>
-      <div class="callout">
-        <b>Your file was read here in the browser.</b> Full reconstruction needs a CUDA GPU, so this hosted
-        demo replays two flights that were processed end to end on one. Everything you see from here on —
-        every check, timing, score and output file — comes from those real runs. To process your own footage,
-        run <code>python -m src.cli run &lt;video&gt; --csv &lt;telemetry&gt;</code> from the repository.
+    <div class="runbar">
+      <button class="btn primary run" id="run-btn" type="button" disabled>Run</button>
+      <span class="runhint" id="run-hint">Choose a video to begin.</span>
+    </div>
+    <div class="alert" id="run-alert" role="alert" hidden></div>
+  </section>
+
+  <!-- ─────────────────────────── running ─────────────────────────── -->
+  <section class="step" data-step="run">
+    <div class="runview">
+      <div class="eyebrow" id="run-eyebrow">Creating your 3D model</div>
+      <h2 id="run-title">Working</h2>
+      <p class="runnow" id="run-now"></p>
+      <ol class="runstrip" id="run-strip" aria-label="Stage progress"></ol>
+      <div class="runfoot">
+        <span class="hint" id="run-note"></span>
+        <button class="btn ghost sm" id="run-skip" type="button">Skip to the model →</button>
       </div>
     </div>
-
-    <h3 style="font-size:15px;margin:22px 0 10px">Prepared flights</h3>
-    <div class="grid cols-2" id="runcards"></div>
   </section>
 
-  <!-- ─────────────────────────── 2. input check ─────────────────────────── -->
-  <section class="step" data-step="1">
-    <div class="head">
-      <div class="eyebrow">Step 2 of 4 · runs before any processing time is spent</div>
-      <h2>Input check</h2>
-      <p>Before reconstructing anything, the system reads the file itself, the position log and the agreement
-         between the two. Each check reports a measured value, what it means, and how to fix it when it is
-         worth fixing. A blocking result stops the run here rather than after twenty minutes of computation.</p>
+  <!-- ─────────────────────────── output ─────────────────────────── -->
+  <section class="step" data-step="output">
+    <div class="outhead">
+      <div class="head">
+        <div class="eyebrow" id="out-eyebrow"></div>
+        <h2>Your 3D model, in all six formats</h2>
+        <p>Every format is a real file written by this run and loaded here through its own reader. Rotate, zoom and inspect each one, and switch what the colours mean.</p>
+      </div>
+      <div class="outactions">
+        <button class="btn sm" type="button" id="new-model">New model</button>
+        <button class="btn ghost sm" type="button" data-go="home">← Overview</button>
+      </div>
     </div>
-    <div id="check-body"></div>
-  </section>
-
-  <!-- ─────────────────────────── 3. pipeline ─────────────────────────── -->
-  <section class="step" data-step="2">
-    <div class="head">
-      <div class="eyebrow">Step 3 of 4</div>
-      <h2>The pipeline, stage by stage</h2>
-      <p>Seven stages take the video from frames to finished products. The times beside each stage are the
-         real measured durations from this run; the progress replays them at speed.</p>
-    </div>
-    <div id="flow-body"></div>
-  </section>
-
-  <!-- ─────────────────────────── 4. outputs ─────────────────────────── -->
-  <section class="step" data-step="3">
-    <div class="head">
-      <div class="eyebrow">Step 4 of 4</div>
-      <h2>Outputs — all six formats</h2>
-      <p>Every format below is a real file written by this run and loaded here through its own reader.
-         Rotate, zoom and inspect each one, and switch what the colours mean.</p>
-    </div>
-    <div class="fmtbar" id="fmtbar"></div>
+        <div class="fmtbar" id="fmtbar"></div>
     <div class="outwrap">
       <div>
         <div class="stage3d" id="stage3d">
@@ -116,30 +155,85 @@
           <div class="float tl glass segbar" id="mode-bar" hidden></div>
           <div class="float bl glass legend" id="legend" hidden></div>
           <div class="float br glass" id="hud" hidden></div>
-          <div class="rasterview" id="rasterview" hidden><img id="rasterimg" alt="Raster preview"></div>
+          <div class="rasterview" id="rasterview" hidden>
+            <figure class="rframe"><img id="rasterimg" alt="Raster preview"><figcaption id="rastercap"></figcaption></figure>
+            <div class="rinfo glass" id="rasterinfo"></div>
+          </div>
         </div>
         <p class="hint" style="margin-top:9px" id="viewhint"></p>
       </div>
       <aside class="side" id="fmtside"></aside>
     </div>
+    <div class="fmtbelow" id="fmtbelow"></div>
   </section>
 </main>
 
 <footer class="foot" id="foot"></footer>
+<button class="btn fab" id="forecast-open" type="button" hidden>Forecast</button>
 
-<!-- ─────────────────────────── quality report ─────────────────────────── -->
-<div class="scrim" id="scrim"></div>
-<aside class="qa" id="qa" aria-label="Quality report">
-  <header>
-    <div style="flex:1;min-width:0">
-      <h3>Quality report</h3>
-      <div class="sub" id="qa-sub"></div>
+<!-- ─────────────────────────── Connect GPU ─────────────────────────── -->
+<div class="sheet" id="gpu-sheet" hidden>
+  <div class="sheet-box narrow" role="dialog" aria-modal="true" aria-labelledby="gpu-title">
+    <header class="sheet-head">
+      <div><h3 id="gpu-title">Connect a GPU</h3><p class="hint">Reconstruction needs a CUDA GPU. Attach one here, on this machine or remotely.</p></div>
+      <button class="btn ghost sm" type="button" data-close>Close ✕</button>
+    </header>
+    <div class="sheet-body">
+      <div class="gpu-status" id="gpu-status"></div>
+
+      <div class="gpu-server">
+        <label for="gpu-server-url">Run server</label>
+        <div class="gpu-row"><input id="gpu-server-url" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8770">
+          <button class="btn sm" type="button" id="gpu-test">Test connection</button></div>
+        <p class="hint">The service that runs the pipeline and streams its progress back to this page. It also reports which GPU it can see.</p>
+      </div>
+
+      <div class="gpu-cols">
+        <section class="gpu-card" aria-labelledby="gpu-local-h">
+          <h4 id="gpu-local-h">This machine</h4>
+          <p class="hint">A CUDA GPU in the computer that runs the server.</p>
+          <label for="gpu-device">Device</label>
+          <select id="gpu-device"><option value="auto">Auto-detect (first CUDA device)</option><option value="0">GPU 0</option><option value="1">GPU 1</option><option value="2">GPU 2</option><option value="3">GPU 3</option></select>
+          <label for="gpu-mem">GPU memory to use (GB)</label>
+          <input id="gpu-mem" type="number" min="4" max="192" step="1" placeholder="Detected automatically">
+          <div class="gpu-found" id="gpu-found">Detected devices appear here once the run server is reachable.</div>
+        </section>
+
+        <section class="gpu-card" aria-labelledby="gpu-remote-h">
+          <h4 id="gpu-remote-h">Remote / cloud</h4>
+          <p class="hint">A GPU box you reach over the network.</p>
+          <div class="seg" role="group" aria-label="Connection type">
+            <button type="button" class="on" data-kind="ssh" aria-pressed="true">SSH</button>
+            <button type="button" data-kind="jupyter" aria-pressed="false">Jupyter server</button>
+          </div>
+          <div id="gpu-ssh">
+            <div class="gpu-row2"><div><label for="ssh-host">Host</label><input id="ssh-host" autocomplete="off" spellcheck="false" placeholder="gpu.example.org"></div>
+              <div class="w-port"><label for="ssh-port">Port</label><input id="ssh-port" type="number" value="22" min="1" max="65535"></div></div>
+            <label for="ssh-user">User</label><input id="ssh-user" autocomplete="off" spellcheck="false" placeholder="ubuntu">
+            <label for="ssh-key">Private key file</label><input id="ssh-key" autocomplete="off" spellcheck="false" placeholder="~/.ssh/id_ed25519">
+            <label for="ssh-dir">Remote working directory</label><input id="ssh-dir" autocomplete="off" spellcheck="false" placeholder="/home/ubuntu/single-pass">
+          </div>
+          <div id="gpu-jupyter" hidden>
+            <label for="jup-url">Server URL</label><input id="jup-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://notebook.example.org/user/name">
+            <label for="jup-token">Token</label><input id="jup-token" type="password" autocomplete="off" placeholder="Held for this session only">
+            <label for="jup-dir">Remote working directory</label><input id="jup-dir" autocomplete="off" spellcheck="false" placeholder="single-pass">
+          </div>
+          <p class="hint safe">The page never sends a private key: give the path of a key file the server can read, or rely on the SSH agent. A Jupyter token is kept in memory for this session and not saved.</p>
+        </section>
+      </div>
+
+      <div class="gpu-actions">
+        <button class="btn" type="button" id="gpu-save">Save target</button>
+        <span class="hint" id="gpu-saved"></span>
+      </div>
+      <p class="gpu-cpu"><b>No GPU, no run.</b> Without a connected GPU the pipeline would fall back to the CPU and take many hours, so it is not started.</p>
     </div>
-    <button class="btn ghost sm" id="qa-close">Close ✕</button>
-  </header>
-  <div class="tabs" id="qa-tabs"></div>
-  <div class="body" id="qa-body"></div>
-</aside>
+  </div>
+</div>
+
+<!-- ─────────────────────────── Metrics / Forecast (filled by panels.js) ─────────────────────────── -->
+<div class="sheet" id="metrics-sheet" hidden></div>
+<div class="sheet" id="forecast-sheet" hidden></div>
 
 <script type="module" src="app.js"></script>
 </body>
