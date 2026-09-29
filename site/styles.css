@@ -187,6 +187,33 @@ main { max-width: 1420px; margin: 0 auto; padding: 22px 20px 80px; }
 .stat .v { margin: 4px 0 3px; font-size: 26px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .stat .c { color: var(--muted); font-size: 12.3px; line-height: 1.45; }
 
+/* ---------- landing ---------- */
+a.brand { color: inherit; text-decoration: none; }
+body[data-view="home"] .qa-fab { display: none; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: clamp(20px, 4vw, 60px);
+  align-items: center; min-height: calc(100vh - var(--head-h) - 110px); }
+.hero-viz { position: relative; aspect-ratio: 1 / .9; max-height: 660px; width: 100%; border-radius: 20px; overflow: hidden;
+  background: radial-gradient(ellipse 70% 58% at 50% 62%, color-mix(in srgb, var(--s-home) 13%, transparent), transparent 72%); }
+.hero-viz canvas, .hero-fallback { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hero-cap { position: absolute; left: 14px; bottom: 10px; z-index: 2; color: var(--faint); font-size: 11.5px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .04em; text-transform: uppercase; }
+.hero-copy .eyebrow { color: var(--accent); font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.hero h1 { font-size: clamp(30px, 4.3vw, 52px); line-height: 1.08; letter-spacing: -.022em; margin: 10px 0 16px; font-weight: 750; }
+.hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--s-home), #a5b4fc);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero-copy > p { color: var(--muted); font-size: 15.5px; max-width: 58ch; margin: 0 0 18px; }
+.hero-copy .chips { margin-bottom: 22px; }
+.hero-actions { margin-bottom: 26px; }
+.hero-figs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); border-top: 1px solid var(--line); padding-top: 16px; }
+.hero-figs .fig { display: grid; gap: 2px; font-size: 12.5px; color: var(--muted); }
+.hero-figs .fig b { color: var(--ink); font-size: 13.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-figs .fig .n { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.hero-figs .cap { grid-column: 1 / -1; color: var(--faint); font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; min-height: 0; gap: 8px; }
+  .hero-viz { aspect-ratio: auto; height: 46vh; min-height: 250px; max-height: 420px; }
+}
+
 /* ---------- step 1: input ---------- */
 .dropzone {
   border: 2px dashed var(--line); border-radius: var(--r); background: var(--panel-2);

@@ -2962,3 +2962,39 @@ nothing it covers changed. Not yet deployed.
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 2 — landing hero (procedural blue node terrain, geolocation marker).
+
+### 2026-09-29 — ritesh14g (with Claude) — site UI redesign, Stage 2: landing hero
+**Goal:** a new first page: blue node-and-edge ridge with a geolocation marker on the left, a short technical
+description, keyword chips and entry buttons on the right.
+**Created:** `site/hero.js` — the terrain, generated procedurally (~1,400 nodes on a 44×32 grid, deterministic
+value noise, one dominant peak plus a saddle; `Points` with a soft sprite + additive `LineSegments` with
+alternating diagonals so it reads as a triangulated mesh; height-ramped indigo → sky → near-white). Geolocation
+marker on the true saddle (found by scanning the ridge line between the two main peaks): beam, spinning
+octahedron head, anchored ring, two rings pulsing on a 2.4 s cycle. Graticule: two ground rings, 36 compass ticks,
+dashed meridian arc. Its own renderer, created lazily; pointer parallax ±6°; 1.6 s settle-in.
+**Modified:** `site/index.html` (landing `<section data-step="home">` first, SVG fallback, wordmark is now a link
+home, rail starts hidden), `site/styles.css` (hero grid, ≤ 900 px stacks with the panel capped at 46vh),
+`site/app.js` (a `home` view that is not a numbered step; no `?step` or a non-numeric one opens it, `?step=1..4`
+unchanged; lazy hero creation; entry buttons; one line per prepared flight read from `runs/index.json`;
+`viewerLoop()` pauses the outputs viewer off its page).
+**Decisions:**
+- The hero shows no measured value, and says so in its caption ("procedural illustration"). The figures strip
+  beneath the buttons reads only `runs/index.json` (video length, time to process, coverage).
+- **Outputs viewer loop now pauses off the Outputs page** (`viewerLoop`). It ran forever once created; under
+  software GL its 250k-face render blocked the main thread and collapsed the landing page's frame rate after a
+  visit to Outputs. Lifecycle only: no viewer logic changed.
+- Quality-report button and the rail are hidden on the landing page.
+**Bug found and fixed:** `fallback.hidden = false` does nothing on an `<svg>` (`hidden` is an HTML-element
+property), so the no-WebGL fallback stayed at 0×0. Now `removeAttribute('hidden')`. Caught by the browser test,
+not by reading the code.
+**Verified** (headless Chrome driven over the DevTools protocol, `scratchpad/stage2.mjs`, 30 checks, all pass):
+opens on the landing page; one WebGL context; loop running (47 rAF/s under SwiftShader) and **0 rAF/s off the
+landing page**, resuming on return; 10 landing ↔ outputs round trips leave exactly 2 contexts, 0 lost; after
+Outputs the landing loop returns to its own rate (not stacked); old deep links unchanged (`?step=1`, `?step=2`,
+`?run=dji&step=4&format=las`) and `?step=nonsense` → landing; no horizontal scroll at 360 px; reduced motion →
+0 rAF/s with one static frame drawn; WebGL disabled → SVG fallback 699×629, entry buttons work; zero console
+problems in all three browsers.
+**Not verified:** a real GPU. Frame rates above are software rendering.
+**Dead ends:** none.
+**Open issues added/closed:** none.
+**Next:** Stage 3 — landing content: capabilities, targets vs measured, both flights compared.

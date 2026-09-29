@@ -15,14 +15,14 @@
 
 <header class="top">
   <div class="top-in">
-    <div class="brand">
+    <a class="brand" href="./" id="home-link" aria-label="Single-Pass Drone 3D — back to the landing page">
       <div class="dot"></div>
       <div>
         <b>Single-Pass Drone 3D</b><br>
         <span>SIH 2026 · PS-17 · NTRO · working prototype</span>
       </div>
-    </div>
-    <nav class="rail" id="rail"></nav>
+    </a>
+    <nav class="rail" id="rail" hidden></nav>
   </div>
 </header>
 
@@ -31,8 +31,48 @@
 </div>
 
 <main>
+  <!-- ─────────────────────────── landing ─────────────────────────── -->
+  <section class="step on" data-step="home" data-accent="home">
+    <div class="hero">
+      <div class="hero-viz" id="hero-viz">
+        <!-- shown only when WebGL is unavailable or its context is lost; hero.js prepends the live canvas -->
+        <svg id="hero-fallback" class="hero-fallback" viewBox="0 0 400 300" role="img" aria-label="Illustration: a ridge of blue nodes with a location marker on its saddle" hidden>
+          <g fill="none" stroke="#38bdf8" stroke-opacity=".35" stroke-width="1">
+            <polyline points="20,240 70,200 110,215 150,150 190,60 225,130 258,110 300,175 330,150 380,240"/>
+            <polyline points="20,240 380,240"/><polyline points="70,200 110,240 150,150 150,240 190,60 190,240 258,110 258,240 330,150 330,240"/>
+          </g>
+          <g fill="#7dd3fc"><circle cx="20" cy="240" r="2.5"/><circle cx="70" cy="200" r="2.5"/><circle cx="110" cy="215" r="2.5"/><circle cx="150" cy="150" r="2.5"/>
+            <circle cx="225" cy="130" r="2.5"/><circle cx="258" cy="110" r="2.5"/><circle cx="300" cy="175" r="2.5"/><circle cx="330" cy="150" r="2.5"/><circle cx="380" cy="240" r="2.5"/></g>
+          <circle cx="190" cy="60" r="3.5" fill="#eaf6ff"/>
+          <g stroke="#bae6fd" fill="none"><line x1="225" y1="130" x2="225" y2="80" stroke-width="1.5"/><ellipse cx="225" cy="130" rx="16" ry="6" stroke-opacity=".7"/></g>
+          <path d="M225 72l5 8-5 8-5-8z" fill="#e0f2fe"/>
+        </svg>
+        <div class="hero-cap">Procedural illustration · nodes → surface → map</div>
+      </div>
+      <div class="hero-copy">
+        <div class="eyebrow">SIH 2026 · PS-17 · NTRO · working prototype</div>
+        <h1>One drone pass in.<br><em>A georeferenced 3D model out.</em></h1>
+        <p>Reconstructs terrain, structures and vegetation from a single drone video and its position log.
+           Classical structure-from-motion supplies the measured geometry; a feed-forward depth network fills
+           thinly seen surface, but only where it agrees with measurement. The model is placed on the map from the
+           drone's own GPS with no ground control points, and every surface is labelled measured, inferred or never
+           seen. Six formats come out, each re-opened to verify it.</p>
+        <div class="chips">
+          <span class="chip">single-pass SfM</span><span class="chip">GPS-anchored georeferencing</span>
+          <span class="chip">feed-forward monocular depth</span><span class="chip">confidence-graded surfaces</span>
+          <span class="chip">six export formats</span>
+        </div>
+        <div class="actions hero-actions">
+          <button class="btn primary" id="hero-run">Run a flight through the pipeline →</button>
+          <button class="btn" id="hero-out">See what it produces</button>
+        </div>
+        <div class="hero-figs" id="hero-figs" hidden></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ─────────────────────────── 1. input ─────────────────────────── -->
-  <section class="step on" data-step="0">
+  <section class="step" data-step="0">
     <div class="head">
       <div class="eyebrow">Step 1 of 4</div>
       <h2>Give the system a flight</h2>

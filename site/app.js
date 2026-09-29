@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { createHero } from './hero.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -70,6 +71,8 @@ async function init() {
   state.runs = idx.runs || [];
   buildRail();
   buildRunCards();
+  buildHeroFigs();
+  wireHome();
   wireDropzones();
   wireQA();
   $('foot').innerHTML = `Every figure on this page is read from a completed pipeline run: its input check, its
@@ -82,8 +85,9 @@ async function init() {
   await loadRun(key, false);
   const fmt = q.get('format');
   if (fmt && FORMATS.includes(fmt)) state.format = fmt;
-  const step = Math.min(Math.max(parseInt(q.get('step') || '1', 10) - 1, 0), STEPS.length - 1);
-  goto(step);
+  // No ?step, or one that is not a number, opens the landing page; ?step=1..4 keeps its old meaning.
+  const n = parseInt(q.get('step'), 10);
+  goto(Number.isFinite(n) ? Math.min(Math.max(n - 1, 0), STEPS.length - 1) : 'home');
   if (q.get('qa')) {
     if (QA_TABS.some(([k]) => k === q.get('qa'))) state.qaTab = q.get('qa');
     buildQA(); $('qa').classList.add('on'); $('scrim').classList.add('on');
@@ -93,8 +97,10 @@ async function init() {
 // ── step rail ─────────────────────────────────────────────────────────────────
 const STEPS = ['Input', 'Input check', 'Pipeline', 'Outputs'];
 function buildRail() {
-  const rail = $('rail');
+  const rail = $('rail'), home = state.step === 'home';
+  rail.hidden = home;                      // the landing page is not a numbered step and has no rail
   rail.innerHTML = '';
+  if (home) return;
   STEPS.forEach((name, i) => {
     const b = el('button', i === state.step ? 'on' : (i < state.step ? 'done' : ''),
       `<i class="n">${i < state.step ? '✓' : i + 1}</i><span class="lbl">${name}</span>`);
@@ -104,11 +110,37 @@ function buildRail() {
 }
 function goto(i) {
   state.step = i;
-  document.querySelectorAll('.step').forEach((s) => s.classList.toggle('on', +s.dataset.step === i));
+  document.body.dataset.view = i === 'home' ? 'home' : 'wizard';
+  document.querySelectorAll('.step').forEach((s) => s.classList.toggle('on', s.dataset.step === String(i)));
   buildRail();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (i === 2) runFlow();
+  viewerLoop(i === 3);
   if (i === 3) showFormat(state.format);
+  syncHero();
+}
+
+// ── landing page ──────────────────────────────────────────────────────────────
+// The hero owns its own WebGL context, created on first visit and paused whenever the landing page is not showing.
+let hero = null;
+function syncHero() {
+  if (state.step === 'home') { hero ??= createHero($('hero-viz'), $('hero-fallback')); hero.setActive(true); }
+  else hero?.setActive(false);
+}
+function wireHome() {
+  $('home-link').onclick = (e) => { e.preventDefault(); goto('home'); };
+  $('hero-run').onclick = () => goto(0);
+  $('hero-out').onclick = () => goto(3);
+}
+// One line per prepared flight, straight from runs/index.json. Nothing is computed here.
+function buildHeroFigs() {
+  const box = $('hero-figs');
+  if (!state.runs.length) return;
+  box.innerHTML = '<div class="cap">Prepared flights, processed end to end</div>' + state.runs.map((r) =>
+    `<div class="fig"><b>${esc(r.video)}</b>` +
+    `<span><span class="n">${clock(r.video_s)}</span> of video → <span class="n">${clock(r.total_s)}</span> to process</span>` +
+    `<span><span class="n">${num(r.coverage_pct, 1)}%</span> of the visible ground reconstructed</span></div>`).join('');
+  box.hidden = false;
 }
 
 // ── step 1: input ─────────────────────────────────────────────────────────────
@@ -456,9 +488,16 @@ function ctx() {
     camera.aspect = r.width / Math.max(r.height, 1); camera.updateProjectionMatrix();
   };
   addEventListener('resize', resize); resize();
-  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
-  R = { renderer, scene, camera, controls, host, resize, object: null };
+  const loop = () => { controls.update(); renderer.render(scene, camera); };
+  renderer.setAnimationLoop(loop);
+  R = { renderer, scene, camera, controls, host, resize, loop, object: null };
   return R;
+}
+// The viewer renders only while the Outputs step is showing; no loop is left running on any other page.
+function viewerLoop(on) {
+  if (!R) return;
+  R.renderer.setAnimationLoop(on ? R.loop : null);
+  if (on) R.resize();
 }
 function clearObject() { const c = ctx(); if (c.object) { c.scene.remove(c.object); c.object = null; } }
 function busy(on, text) {
