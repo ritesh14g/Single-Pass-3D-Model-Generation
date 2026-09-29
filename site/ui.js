@@ -55,3 +55,24 @@ export function progressBar(steps, currentId, onPick) {
   }
   return nav;
 }
+
+// ── the seven stages a video passes through, in order ─────────────────────────
+// `seconds` reads a stage's measured time from data.json; `budget` names its key (or keys, summed) in time.stage_budgets_s.
+// Reconstruction owns three allowances (src/stages.py budget_keys); the pipeline hands Track B's and the refinement's to Track A when they do not run.
+const sec = (k) => (d) => d.time?.stage_seconds?.[k];
+export const STAGES = [
+  { id: 'check', title: 'Input check', budget: 'preflight', seconds: (d) => d.input_check?.timing_s?.total, groups: ['Format', 'Video', 'Telemetry', 'Sync', 'Physical consistency', 'Feasibility'],
+    desc: 'Reads the container, the position log and whether the two agree, before any time is spent.' },
+  { id: 'ingest', title: 'Ingest', budget: 'ingest', seconds: sec('ingest'), stage: 'Ingest',
+    desc: 'Decodes the video and keeps the frames that overlap each other enough to reconstruct from, rejecting blurred ones.' },
+  { id: 'condition', title: 'Conditioning', budget: 'condition', seconds: sec('condition'), stage: 'Conditioning',
+    desc: 'Cleans each kept frame: compression blocking, exposure drift, shadows, moving objects, and noisy GPS.' },
+  { id: 'recon', title: 'Reconstruction', budget: ['track_b', 'refine_ba', 'track_a_mvs'], seconds: sec('track_a'), stage: 'Reconstruction',
+    desc: 'Solves where the camera was for every frame, then builds the dense surface and paints the photographs onto it.' },
+  { id: 'fusion', title: 'Occlusion handling', budget: 'fusion', seconds: sec('fusion'), stage: 'Occlusion handling',
+    desc: 'Labels every surface by how well it was really seen, fills thin areas from anchored depth, and outlines what was never seen at all.' },
+  { id: 'geo', title: 'Georeferencing', budget: 'geo', seconds: sec('geo'), process: 'Georeferencing',
+    desc: 'Places the model on the map from the GPS track and resolves what the heights are measured from.' },
+  { id: 'export', title: 'Outputs', budget: 'export', seconds: sec('export'), processes: ['Formats (re-opened)', 'Coverage'],
+    desc: 'Writes all six formats, classifies the point cloud and renders the height model and orthophoto.' },
+];

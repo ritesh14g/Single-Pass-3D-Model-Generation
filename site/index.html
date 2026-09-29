@@ -15,7 +15,7 @@
 
 <header class="top">
   <div class="top-in">
-    <a class="brand" href="./" id="home-link" aria-label="Single-Pass Drone 3D — back to the landing page">
+    <a class="brand" href="./" id="home-link" aria-label="Single-Pass Drone 3D: back to the landing page">
       <div class="dot"></div>
       <div>
         <b>Single-Pass Drone 3D</b><br>
@@ -23,16 +23,15 @@
       </div>
     </a>
     <div class="top-actions">
-      <div class="runswitch" id="run-switch" role="group" aria-label="Prepared flight" hidden></div>
-      <button class="btn primary sm" id="qa-open" type="button">Quality report</button>
+      <button class="btn sm gpu-btn" id="gpu-open" type="button" hidden><i class="gpu-dot" id="gpu-dot"></i><span>Connect GPU</span></button>
+      <button class="btn primary sm" id="metrics-open" type="button" hidden>Metrics</button>
     </div>
   </div>
 </header>
-<div id="progress-host" hidden></div>
 
 <main>
   <!-- ─────────────────────────── landing ─────────────────────────── -->
-  <section class="step on" data-step="home" data-accent="home">
+  <section class="step on" data-step="home">
     <div class="hero">
       <div class="hero-viz" id="hero-viz">
         <!-- shown only when WebGL is unavailable or its context is lost; hero.js prepends the live canvas -->
@@ -63,194 +62,81 @@
           <span class="chip">six export formats</span>
         </div>
         <div class="actions hero-actions">
-          <button class="btn primary" id="hero-run">Run a flight through the pipeline →</button>
-          <button class="btn" id="hero-out">See what it produces</button>
+          <button class="btn primary" id="hero-run">Create 3D model →</button>
         </div>
-        <div class="hero-figs" id="hero-figs" hidden></div>
       </div>
-    </div>
-
-    <div class="land" id="land">
-      <section class="land-sec problem" aria-labelledby="l-problem">
-        <div class="eyebrow" id="l-problem">The problem</div>
-        <p>A single pass sees every surface from only a few angles.</p>
-        <p>Systems built on that either leave holes, or invent geometry without saying so.</p>
-        <p>This one <b>measures what was seen</b>, infers only where the inference is checked against measurement, and <b>outlines the rest as gaps</b>.</p>
-      </section>
-
-      <section class="land-sec" aria-labelledby="l-cap">
-        <div class="eyebrow" id="l-cap">What it does</div>
-        <h2>Eight capabilities, in the order the video meets them</h2>
-        <div class="capgrid">
-          <article class="capcard" data-accent="check"><div class="n">00 · INPUT CHECK</div><h3>Refuses bad input in seconds</h3>
-            <p>Reads the container, the position log and the video↔GPS agreement before any compute is spent, and says how to fix what it finds.</p>
-            <div class="chips"><span class="chip">container probe by content</span><span class="chip">12+ telemetry formats</span><span class="chip">GPS↔video sync</span></div></article>
-          <article class="capcard" data-accent="ingest"><div class="n">01 · INGEST</div><h3>Keeps the frames that matter</h3>
-            <p>Selects frames to hit a target overlap instead of sampling at a fixed interval, and gates out frames too blurred to reconstruct from.</p>
-            <div class="chips"><span class="chip">overlap-targeted selection</span><span class="chip">forward-backward LK</span><span class="chip">NCC verification</span></div></article>
-          <article class="capcard" data-accent="condition"><div class="n">02 · CONDITIONING</div><h3>Cleans each frame and the GPS track</h3>
-            <p>Suppresses compression blocking, evens out exposure, masks moving objects, and filters position outliers before anything is matched.</p>
-            <div class="chips"><span class="chip">blockiness suppression</span><span class="chip">YOLOv8-seg masks</span><span class="chip">RTS-Kalman GPS</span></div></article>
-          <article class="capcard" data-accent="recon"><div class="n">03 · RECONSTRUCTION</div><h3>GPS-anchored SfM and dense surface</h3>
-            <p>Solves every camera with structure-from-motion, refines against the GPS track, then builds a dense cloud, a mesh and a texture.</p>
-            <div class="chips"><span class="chip">COLMAP SfM</span><span class="chip">GPS-prior BA</span><span class="chip">PatchMatch MVS</span><span class="chip">OpenMVS mesh</span></div></article>
-          <article class="capcard" data-accent="recon"><div class="n">03 · TRACK B</div><h3>Learned depth, only where it agrees</h3>
-            <p>A feed-forward depth network adds detail where stereo is thin, scaled to the measured surface and refused wherever it disagrees.</p>
-            <div class="chips"><span class="chip">VGGT-Ω depth</span><span class="chip">RANSAC scale / shift</span><span class="chip">multi-view gate</span></div></article>
-          <article class="capcard" data-accent="fusion"><div class="n">04 · OCCLUSION HANDLING</div><h3>Every surface labelled by how well it was seen</h3>
-            <p>Zone 1 is measured, Zone 2 is thin or anchored, Zone 3 was never observed and is outlined as a gap, never filled.</p>
-            <div class="chips"><span class="chip">voxel zones</span><span class="chip">z-buffer visibility</span><span class="chip">gap polygons → GeoJSON</span></div></article>
-          <article class="capcard" data-accent="geo"><div class="n">05 · GEOREFERENCING</div><h3>On the map from the drone's own GPS</h3>
-            <p>Fits the model to the flight track, converts to a projected coordinate system and resolves what the altitudes were measured from.</p>
-            <div class="chips"><span class="chip">RANSAC similarity fit</span><span class="chip">UTM</span><span class="chip">EGM96 heights</span></div></article>
-          <article class="capcard" data-accent="export"><div class="n">06 · OUTPUTS</div><h3>Six formats, each re-opened to verify</h3>
-            <p>Writes every required format, classifies the point cloud, and carries confidence and zone layers into the files.</p>
-            <div class="chips"><span class="chip">OBJ</span><span class="chip">PLY</span><span class="chip">LAS</span><span class="chip">GeoTIFF</span><span class="chip">GLB</span><span class="chip">FBX</span></div></article>
-        </div>
-      </section>
-
-      <section class="land-sec" aria-labelledby="l-tgt">
-        <div class="eyebrow" id="l-tgt">Targets against measured</div>
-        <h2>What the problem statement asks for, and what the runs did</h2>
-        <p class="lede">Each row states the target, the measured value for both prepared flights and, where it falls short, why.
-           Partial stays partial.</p>
-        <div id="land-targets"></div>
-      </section>
-
-      <section class="land-sec" aria-labelledby="l-fl">
-        <div class="eyebrow" id="l-fl">Two prepared flights</div>
-        <h2>Processed end to end, side by side</h2>
-        <div id="land-flights"></div>
-      </section>
-
-      <section class="land-sec" aria-labelledby="l-app">
-        <div class="eyebrow" id="l-app">Applications named in the problem statement</div>
-        <div class="applist">
-          <span>Border and strategic-area mapping</span><span>Disaster damage assessment</span><span>Urban planning and smart cities</span>
-          <span>Infrastructure inspection</span><span>Construction progress monitoring</span><span>Archaeological documentation</span>
-          <span>Digital twin generation</span><span>Reconnaissance and mission planning</span>
-        </div>
-      </section>
-    </div>
+    <section class="land-sec flights-sec" aria-labelledby="l-fl">
+      <div class="eyebrow" id="l-fl">Tested flights</div>
+      <div id="land-flights"></div>
+    </section>
   </section>
 
-  <!-- ─────────────────────────── 1. input ─────────────────────────── -->
+  <!-- ─────────────────────────── input ─────────────────────────── -->
   <section class="step" data-step="input">
+    <button class="back" type="button" data-go="home">← Back</button>
     <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Give the system a flight</h2>
-      <p>The pipeline takes one ordinary drone video together with whatever position log came with it, and
-         returns a georeferenced 3D model. Start from a prepared flight below to walk through the whole
-         process with real measured results, or drop your own files to see what the input check reads from them.</p>
+      <h2>Create a 3D model</h2>
+      <p>Add one drone video. Add its position log too if it came as a separate file.</p>
     </div>
 
-    <div class="grid cols-2" style="margin-bottom:16px">
+    <div class="grid cols-2 inputgrid">
       <div class="panel pad">
-        <h3 style="font-size:15px;margin-bottom:4px">Video</h3>
-        <p class="hint" style="margin-bottom:12px">Any container or codec the decoder can open — MP4, MOV, MPEG-TS, H.264, H.265, MPEG-2.</p>
-        <div class="dropzone" id="dz-video" tabindex="0" role="button" aria-label="Choose a video file">
+        <h3>Drone video <span class="req">Required</span></h3>
+        <p class="hint">Any container or codec the decoder can open: MP4, MOV, MPEG-TS, H.264, H.265, MPEG-2.</p>
+        <div class="dropzone" id="dz-video" tabindex="0" role="button" aria-label="Choose a drone video">
           <div class="ico">🎞</div>
           <h4>Drop a drone video</h4>
-          <p>or click to choose · read in your browser, nothing is uploaded</p>
+          <p>or click to choose</p>
         </div>
         <div class="filelist" id="fl-video"></div>
       </div>
-      <div class="panel pad">
-        <h3 style="font-size:15px;margin-bottom:4px">Position log <span class="tag info" style="vertical-align:middle">optional</span></h3>
-        <p class="hint" style="margin-bottom:12px">DJI <code>.SRT</code>, flight-record CSV or TXT, GPX, KML, GeoJSON, PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, or MISB KLV carried inside the video itself.</p>
-        <div class="dropzone" id="dz-tel" tabindex="0" role="button" aria-label="Choose a telemetry file">
+      <div class="panel pad optional">
+        <h3>Telemetry <span class="opt">Optional</span></h3>
+        <p class="hint">DJI <code>.SRT</code>, flight-record CSV or TXT, GPX, KML, GeoJSON, PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>. Not needed when the position log is carried inside the video (MISB KLV).</p>
+        <div class="dropzone" id="dz-tel" tabindex="0" role="button" aria-label="Choose a telemetry file (optional)">
           <div class="ico">🛰</div>
           <h4>Drop a telemetry file</h4>
-          <p>or click to choose · detected by content, not by file extension</p>
+          <p>or click to choose · detected by content, not by extension</p>
         </div>
         <div class="filelist" id="fl-tel"></div>
       </div>
     </div>
 
-    <div class="panel pad" id="own-note" hidden>
-      <div class="callout">
-        <b>Your file was read here in the browser.</b> Full reconstruction needs a CUDA GPU, so this hosted
-        demo replays two flights that were processed end to end on one. Everything you see from here on —
-        every check, timing, score and output file — comes from those real runs. To process your own footage,
-        run <code>python -m src.cli run &lt;video&gt; --csv &lt;telemetry&gt;</code> from the repository.
+    <div class="runbar">
+      <button class="btn primary run" id="run-btn" type="button" disabled>Run</button>
+      <span class="runhint" id="run-hint">Choose a video to begin.</span>
+    </div>
+    <div class="alert" id="run-alert" role="alert" hidden></div>
+  </section>
+
+  <!-- ─────────────────────────── running ─────────────────────────── -->
+  <section class="step" data-step="run">
+    <div class="runview">
+      <div class="eyebrow" id="run-eyebrow">Creating your 3D model</div>
+      <h2 id="run-title">Working</h2>
+      <p class="runnow" id="run-now"></p>
+      <ol class="runstrip" id="run-strip" aria-label="Stage progress"></ol>
+      <div class="runfoot">
+        <span class="hint" id="run-note"></span>
+        <button class="btn ghost sm" id="run-skip" type="button">Skip to the model →</button>
       </div>
     </div>
-
-    <h3 style="font-size:15px;margin:22px 0 10px">Prepared flights</h3>
-    <div class="grid cols-2" id="runcards"></div>
   </section>
 
-  <!-- ─────────────────────────── 2. input check ─────────────────────────── -->
-  <section class="step" data-step="check">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Input check</h2>
-      <p>Before reconstructing anything, the system reads the file itself, the position log and the agreement
-         between the two. Each check reports a measured value, what it means, and how to fix it when it is
-         worth fixing. A blocking result stops the run here rather than after twenty minutes of computation.</p>
+  <!-- ─────────────────────────── output ─────────────────────────── -->
+  <section class="step" data-step="output">
+    <div class="outhead">
+      <div class="head">
+        <div class="eyebrow" id="out-eyebrow"></div>
+        <h2>Your 3D model, in all six formats</h2>
+        <p>Every format is a real file written by this run and loaded here through its own reader. Rotate, zoom and inspect each one, and switch what the colours mean.</p>
+      </div>
+      <div class="outactions">
+        <button class="btn sm" type="button" id="new-model">New model</button>
+        <button class="btn ghost sm" type="button" data-go="home">← Overview</button>
+      </div>
     </div>
-    <div id="check-body"></div>
-  </section>
-
-  <!-- ─────────────────────────── ingest ─────────────────────────── -->
-  <section class="step" data-step="ingest">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Ingest</h2>
-      <p>Decodes the video and keeps the frames that overlap each other enough to reconstruct from, rejecting blurred ones.</p>
-    </div>
-    <div class="stage-body" id="body-ingest"></div>
-  </section>
-
-  <!-- ─────────────────────────── conditioning ─────────────────────────── -->
-  <section class="step" data-step="condition">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Conditioning</h2>
-      <p>Cleans each kept frame: compression blocking, exposure drift, shadows, moving objects, and noisy GPS.</p>
-    </div>
-    <div class="stage-body" id="body-condition"></div>
-  </section>
-
-  <!-- ─────────────────────────── reconstruction ─────────────────────────── -->
-  <section class="step" data-step="recon">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Reconstruction</h2>
-      <p>Solves where the camera was for every frame, then builds the dense surface and paints the photographs onto it.</p>
-    </div>
-    <div class="stage-body" id="body-recon"></div>
-  </section>
-
-  <!-- ─────────────────────────── occlusion handling ─────────────────────────── -->
-  <section class="step" data-step="fusion">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Occlusion handling</h2>
-      <p>Labels every surface by how well it was really seen, fills thin areas from anchored depth, and outlines what was never seen at all.</p>
-    </div>
-    <div class="stage-body" id="body-fusion"></div>
-  </section>
-
-  <!-- ─────────────────────────── georeferencing ─────────────────────────── -->
-  <section class="step" data-step="geo">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Georeferencing</h2>
-      <p>Places the model on the map from the GPS track and resolves what the heights are measured from.</p>
-    </div>
-    <div class="stage-body" id="body-geo"></div>
-  </section>
-
-  <!-- ─────────────────────────── 4. outputs ─────────────────────────── -->
-  <section class="step" data-step="export">
-    <div class="head">
-      <div class="eyebrow"></div>
-      <h2>Outputs — all six formats</h2>
-      <p>Every format below is a real file written by this run and loaded here through its own reader.
-         Rotate, zoom and inspect each one, and switch what the colours mean.</p>
-    </div>
-    <div class="fmtbar" id="fmtbar"></div>
+        <div class="fmtbar" id="fmtbar"></div>
     <div class="outwrap">
       <div>
         <div class="stage3d" id="stage3d">
@@ -272,20 +158,71 @@
 </main>
 
 <footer class="foot" id="foot"></footer>
+<button class="btn fab" id="forecast-open" type="button" hidden>Forecast</button>
 
-<!-- ─────────────────────────── quality report ─────────────────────────── -->
-<div class="scrim" id="scrim"></div>
-<aside class="qa" id="qa" role="dialog" aria-modal="true" aria-label="Quality report">
-  <header>
-    <div style="flex:1;min-width:0">
-      <h3>Quality report</h3>
-      <div class="sub" id="qa-sub"></div>
+<!-- ─────────────────────────── Connect GPU ─────────────────────────── -->
+<div class="sheet" id="gpu-sheet" hidden>
+  <div class="sheet-box narrow" role="dialog" aria-modal="true" aria-labelledby="gpu-title">
+    <header class="sheet-head">
+      <div><h3 id="gpu-title">Connect a GPU</h3><p class="hint">Reconstruction needs a CUDA GPU. Attach one here, on this machine or remotely.</p></div>
+      <button class="btn ghost sm" type="button" data-close>Close ✕</button>
+    </header>
+    <div class="sheet-body">
+      <div class="gpu-status" id="gpu-status"></div>
+
+      <div class="gpu-server">
+        <label for="gpu-server-url">Run server</label>
+        <div class="gpu-row"><input id="gpu-server-url" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8770">
+          <button class="btn sm" type="button" id="gpu-test">Test connection</button></div>
+        <p class="hint">The service that runs the pipeline and streams its progress back to this page. It also reports which GPU it can see.</p>
+      </div>
+
+      <div class="gpu-cols">
+        <section class="gpu-card" aria-labelledby="gpu-local-h">
+          <h4 id="gpu-local-h">This machine</h4>
+          <p class="hint">A CUDA GPU in the computer that runs the server.</p>
+          <label for="gpu-device">Device</label>
+          <select id="gpu-device"><option value="auto">Auto-detect (first CUDA device)</option><option value="0">GPU 0</option><option value="1">GPU 1</option><option value="2">GPU 2</option><option value="3">GPU 3</option></select>
+          <label for="gpu-mem">GPU memory to use (GB)</label>
+          <input id="gpu-mem" type="number" min="4" max="192" step="1" placeholder="Detected automatically">
+          <div class="gpu-found" id="gpu-found">Detected devices appear here once the run server is reachable.</div>
+        </section>
+
+        <section class="gpu-card" aria-labelledby="gpu-remote-h">
+          <h4 id="gpu-remote-h">Remote / cloud</h4>
+          <p class="hint">A GPU box you reach over the network.</p>
+          <div class="seg" role="group" aria-label="Connection type">
+            <button type="button" class="on" data-kind="ssh" aria-pressed="true">SSH</button>
+            <button type="button" data-kind="jupyter" aria-pressed="false">Jupyter server</button>
+          </div>
+          <div id="gpu-ssh">
+            <div class="gpu-row2"><div><label for="ssh-host">Host</label><input id="ssh-host" autocomplete="off" spellcheck="false" placeholder="gpu.example.org"></div>
+              <div class="w-port"><label for="ssh-port">Port</label><input id="ssh-port" type="number" value="22" min="1" max="65535"></div></div>
+            <label for="ssh-user">User</label><input id="ssh-user" autocomplete="off" spellcheck="false" placeholder="ubuntu">
+            <label for="ssh-key">Private key file</label><input id="ssh-key" autocomplete="off" spellcheck="false" placeholder="~/.ssh/id_ed25519">
+            <label for="ssh-dir">Remote working directory</label><input id="ssh-dir" autocomplete="off" spellcheck="false" placeholder="/home/ubuntu/single-pass">
+          </div>
+          <div id="gpu-jupyter" hidden>
+            <label for="jup-url">Server URL</label><input id="jup-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://notebook.example.org/user/name">
+            <label for="jup-token">Token</label><input id="jup-token" type="password" autocomplete="off" placeholder="Held for this session only">
+            <label for="jup-dir">Remote working directory</label><input id="jup-dir" autocomplete="off" spellcheck="false" placeholder="single-pass">
+          </div>
+          <p class="hint safe">The page never sends a private key: give the path of a key file the server can read, or rely on the SSH agent. A Jupyter token is kept in memory for this session and not saved.</p>
+        </section>
+      </div>
+
+      <div class="gpu-actions">
+        <button class="btn" type="button" id="gpu-save">Save target</button>
+        <span class="hint" id="gpu-saved"></span>
+      </div>
+      <p class="gpu-cpu"><b>No GPU, no run.</b> Without a connected GPU the pipeline would fall back to the CPU and take many hours, so it is not started.</p>
     </div>
-    <button class="btn ghost sm" id="qa-close" type="button">Close ✕</button>
-  </header>
-  <div class="tabs" id="qa-tabs"></div>
-  <div class="body" id="qa-body"></div>
-</aside>
+  </div>
+</div>
+
+<!-- ─────────────────────────── Metrics / Forecast (filled by panels.js) ─────────────────────────── -->
+<div class="sheet" id="metrics-sheet" hidden></div>
+<div class="sheet" id="forecast-sheet" hidden></div>
 
 <script type="module" src="app.js"></script>
 </body>
