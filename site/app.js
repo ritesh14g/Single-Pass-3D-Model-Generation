@@ -64,14 +64,15 @@ async function init() {
 
 // ── steps ─────────────────────────────────────────────────────────────────────
 // The wizard is eight pages in the order the video meets them; the landing page ('home') is outside the count.
-// `seconds` reads a stage's measured time from data.json, `budget` names its key in time.stage_budgets_s.
+// `seconds` reads a stage's measured time from data.json, `budget` names its key (or keys, summed) in time.stage_budgets_s.
 const stageSec = (k) => (d) => d.time?.stage_seconds?.[k];
 const STEPS = [
   { id: 'input', title: 'Input' },
   { id: 'check', title: 'Input check', budget: 'preflight', seconds: (d) => d.input_check?.timing_s?.total },
   { id: 'ingest', title: 'Ingest', budget: 'ingest', seconds: stageSec('ingest') },
   { id: 'condition', title: 'Conditioning', budget: 'condition', seconds: stageSec('condition') },
-  { id: 'recon', title: 'Reconstruction', budget: 'track_a_mvs', seconds: stageSec('track_a') },
+  // Reconstruction owns three allowances (src/stages.py budget_keys); the pipeline hands Track B's and the refinement's to Track A when they do not run.
+  { id: 'recon', title: 'Reconstruction', budget: ['track_b', 'refine_ba', 'track_a_mvs'], seconds: stageSec('track_a') },
   { id: 'fusion', title: 'Occlusion handling', budget: 'fusion', seconds: stageSec('fusion') },
   { id: 'geo', title: 'Georeferencing', budget: 'geo', seconds: stageSec('geo') },
   { id: 'export', title: 'Outputs', budget: 'export', seconds: stageSec('export') },
@@ -127,7 +128,8 @@ function renderStageTimes() {
   const d = state.data, budgets = d.time?.stage_budgets_s || {};
   STEPS.forEach((s) => {
     const host = document.querySelector(`[data-time="${s.id}"]`); if (!host || !s.seconds) return;
-    const secs = s.seconds(d), budget = budgets[s.budget];
+    const parts = [].concat(s.budget).map((k) => budgets[k]);
+    const secs = s.seconds(d), budget = parts.every((v) => v != null) ? parts.reduce((a, v) => a + v, 0) : null;
     const over = secs != null && budget != null && secs > budget;
     host.innerHTML = `<div class="tt-head"><span class="tt-k">Measured on this run</span><span class="tt-v">${clock(secs)}</span>` +
       `${budget != null ? `<span class="tt-b">of a ${clock(budget)} budget</span>` : ''}${over ? '<span class="tag fail">Over budget</span>' : ''}</div>` +

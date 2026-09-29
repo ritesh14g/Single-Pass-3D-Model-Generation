@@ -3076,3 +3076,15 @@ Not deployed.
 **Dead ends:** none.
 **Open issues added/closed:** none.
 **Next:** Stage 5 — stage page content: keyword chips, short descriptions, measured KPIs, diagnostics.
+
+### 2026-09-29 — ritesh14g (with Claude) — correction to Stage 4: Reconstruction's budget
+**Found while preparing Stage 5:** Stage 4 compared Reconstruction's time with `track_a_mvs` alone (240 s), which made
+Esri's 242.7 s read "Over budget". But Reconstruction owns three allowances (`src/stages.py`: `budget_keys` =
+`track_b`, `refine_ba`, `track_a_mvs`), and at run time `src/pipeline.py:693-699` hands the unbuilt Track B and
+refinement allowances to Track A, so the run actually had 120 + 180 + 240 = **540 s**. The page now sums the three
+(the tooltip-free label reads "of a 9 min 0 s budget"): Esri 4 min 3 s is within it, DJI 37 min 47 s is over it.
+**Modified:** `site/app.js` (a step's `budget` may be a list of keys, summed). **Test:** the Stage 4 trace now sums the
+same three keys from `data.json`; all 59 checks pass.
+**Not touched, but noted:** `src/qa/report.py:272` still compares `track_a` with `track_a_mvs` only, so the
+pipeline's own HTML report shows Esri Reconstruction as "over". That is a pipeline-side inconsistency; UI-only scope,
+so left as is (candidate for the next iteration's issue list).
