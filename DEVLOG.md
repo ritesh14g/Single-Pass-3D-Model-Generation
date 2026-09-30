@@ -3331,3 +3331,9 @@ run was allotted 540 s.
 ### 2026-09-29 — ritesh14g (with Claude) — run view waits for "View output"
 **Modified:** `site/app.js`. When the last stage finishes, the run view no longer navigates on its own: the heading becomes "Your model is ready", and the "Skip to the model" button becomes a primary, focused **View output →** button. Skip during the run is unchanged. A link to `?view=run` still opens the finished model (existing behaviour).
 **Verified:** S2 (twice) checks the page stays on the run view for 3 s after completion with every stage done and the focused primary button, and that pressing it opens the model; S3, S4, S5 pass. Deployed to `gh-pages`.
+
+### 2026-09-30 — ritesh14g (with Claude) — header rename: AAKAR / NTRO
+**Modified:** `site/index.html`. The header brand block now reads "AAKAR" over "National Technical Research Organisation", replacing "Single-Pass Drone 3D" / "SIH 2026 · PS-17 · NTRO · working prototype". `aria-label` on the wordmark updated to match.
+**Scope:** only the header brand block, matching the screenshot the request pointed at. The browser tab `<title>`, the meta description and the landing-page hero eyebrow still say the old name; left alone since they weren't part of the request.
+**Verified:** loaded in Chrome; `.brand b` = "AAKAR", `.brand span` = "National Technical Research Organisation".
+**Deployed** to `gh-pages`.
