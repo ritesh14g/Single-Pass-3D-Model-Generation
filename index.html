@@ -60,7 +60,6 @@
         <div class="hero-cap">Procedural illustration · nodes → surface → map</div>
       </div>
       <div class="hero-copy">
-        <div class="eyebrow">SIH 2026 · PS-17 · NTRO · working prototype</div>
         <h1>One drone pass in.<br><em>A georeferenced 3D model out.</em></h1>
         <p>Reconstructs terrain, structures and vegetation from a single drone video and its position log.
            Classical structure-from-motion supplies the measured geometry; a feed-forward depth network fills
@@ -76,6 +75,11 @@
           <button class="btn primary" id="hero-run">Create 3D model →</button>
         </div>
       </div>
+    </div>
+    <button class="scrollcue" type="button" id="scroll-to-flights" aria-label="No GPU yet — explore a tested flight below">
+      <span class="scrollcue-text">No GPU yet &mdash; explore a tested flight below</span>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 10l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
     <section class="land-sec flights-sec" aria-labelledby="l-fl">
       <div class="eyebrow" id="l-fl">Tested flights</div>
       <div id="land-flights"></div>
