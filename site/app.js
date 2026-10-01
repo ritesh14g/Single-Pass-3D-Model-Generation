@@ -141,7 +141,10 @@ function syncHero() {
   if (state.view === 'home') { hero ??= createHero($('hero-viz'), $('hero-fallback')); hero.setActive(true); }
   else hero?.setActive(false);
 }
-function wireHome() { $('hero-run').onclick = () => go('input'); }
+function wireHome() {
+  $('hero-run').onclick = () => go('input');
+  $('scroll-to-flights').onclick = () => $('l-fl').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
 
 async function openFlight(key) {
   await loadRun(key);

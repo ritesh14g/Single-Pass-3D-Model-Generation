@@ -3337,3 +3337,9 @@ run was allotted 540 s.
 **Scope:** only the header brand block, matching the screenshot the request pointed at. The browser tab `<title>`, the meta description and the landing-page hero eyebrow still say the old name; left alone since they weren't part of the request.
 **Verified:** loaded in Chrome; `.brand b` = "AAKAR", `.brand span` = "National Technical Research Organisation".
 **Deployed** to `gh-pages`.
+
+### 2026-10-01 — ritesh14g (with Claude) — landing: drop the SIH eyebrow, add a scroll cue to Tested flights
+**Modified:** `site/index.html`, `site/styles.css`, `site/app.js`.
+**What changed:** the "SIH 2026 · PS-17 · NTRO · working prototype" eyebrow above the headline is removed from the hero. In its place, a centred scroll cue sits below the hero (above "Tested flights"): a downward chevron and the line "No GPU yet — explore a tested flight below" (8 words), both breathing between 25% and 75% opacity on a 2.6 s loop, frozen at 50% under `prefers-reduced-motion: reduce`. It is a real button: clicking (or activating by keyboard) smooth-scrolls to the Tested flights heading, nudging a visitor who has no GPU connected toward a flight that already ran instead of the "Create 3D model" dead end.
+**Verified:** loaded in Chrome — the eyebrow is gone, the cue renders with its arrow and text, and a click moves `#l-fl` to the top of the viewport (`scrollY` 0 → 684).
+**Deployed** to `gh-pages`.
