@@ -122,6 +122,8 @@ function show(view) {
   $('gpu-open').hidden = !(view === 'home' || view === 'input');
   $('metrics-open').hidden = view !== 'output';
   $('forecast-open').hidden = view !== 'output';
+  $('scroll-to-flights').hidden = view !== 'home';
+  if (view === 'home') $('scroll-to-flights').classList.remove('past');   // reset so it is on screen again the next time home is shown
   window.scrollTo({ top: 0, behavior: 'auto' });
   viewerLoop(view === 'output');
   if (view === 'output') showFormat(state.format);
@@ -143,7 +145,9 @@ function syncHero() {
 }
 function wireHome() {
   $('hero-run').onclick = () => go('input');
-  $('scroll-to-flights').onclick = () => $('l-fl').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  const cue = $('scroll-to-flights');
+  cue.onclick = () => $('l-fl').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  addEventListener('scroll', () => cue.classList.toggle('past', scrollY > 24), { passive: true });
 }
 
 async function openFlight(key) {
